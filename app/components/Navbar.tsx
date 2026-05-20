@@ -56,12 +56,12 @@ export default function Navbar() {
         </div>
 
         <div className="hidden md:flex items-center gap-3">
-          <a
-            href="#contact"
+          <Link
+            href="/login"
             className="text-sm text-white/60 hover:text-white transition-colors font-medium px-4 py-2"
           >
             Log in
-          </a>
+          </Link>
           <a
             href="#demo"
             className="text-sm font-semibold px-5 py-2.5 rounded-lg bg-gradient-to-r from-violet-600 to-blue-600 text-white hover:from-violet-500 hover:to-blue-500 transition-all duration-200 shadow-lg shadow-violet-500/20 hover:shadow-violet-500/40"
@@ -97,6 +97,13 @@ export default function Navbar() {
                   {link.label}
                 </a>
               ))}
+              <Link
+                href="/login"
+                onClick={() => setMobileOpen(false)}
+                className="text-sm text-white/60 hover:text-white transition-colors font-medium py-1"
+              >
+                Log in
+              </Link>
               <a
                 href="#demo"
                 className="text-sm font-semibold px-5 py-3 rounded-lg bg-gradient-to-r from-violet-600 to-blue-600 text-white text-center mt-2"

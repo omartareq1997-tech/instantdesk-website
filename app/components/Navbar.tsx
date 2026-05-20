@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Menu, X, Zap } from 'lucide-react'
+import { useDemoModal } from '../context/DemoModal'
 
 const navLinks = [
   { label: 'Features', href: '#features' },
@@ -15,6 +16,7 @@ const navLinks = [
 export default function Navbar() {
   const [scrolled, setScrolled] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const { open: openDemo } = useDemoModal()
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 20)
@@ -62,12 +64,12 @@ export default function Navbar() {
           >
             Log in
           </Link>
-          <a
-            href="#demo"
+          <button
+            onClick={() => openDemo('navbar')}
             className="text-sm font-semibold px-5 py-2.5 rounded-lg bg-gradient-to-r from-violet-600 to-blue-600 text-white hover:from-violet-500 hover:to-blue-500 transition-all duration-200 shadow-lg shadow-violet-500/20 hover:shadow-violet-500/40"
           >
             Get Demo
-          </a>
+          </button>
         </div>
 
         <button
@@ -104,12 +106,12 @@ export default function Navbar() {
               >
                 Log in
               </Link>
-              <a
-                href="#demo"
-                className="text-sm font-semibold px-5 py-3 rounded-lg bg-gradient-to-r from-violet-600 to-blue-600 text-white text-center mt-2"
+              <button
+                onClick={() => { openDemo('navbar'); setMobileOpen(false) }}
+                className="text-sm font-semibold px-5 py-3 rounded-lg bg-gradient-to-r from-violet-600 to-blue-600 text-white text-center mt-2 w-full"
               >
                 Get Personalized Demo
-              </a>
+              </button>
             </div>
           </motion.div>
         )}

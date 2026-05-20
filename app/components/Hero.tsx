@@ -3,6 +3,7 @@
 import { motion } from 'framer-motion'
 import { ArrowRight, Play, ChevronDown } from 'lucide-react'
 import { channels } from './ChannelIcons'
+import { useDemoModal } from '../context/DemoModal'
 
 const stats = [
   { value: '10×', label: 'Faster lead response' },
@@ -12,6 +13,7 @@ const stats = [
 ]
 
 export default function Hero() {
+  const { open: openDemo } = useDemoModal()
   return (
     <section className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden pt-20">
       {/* Animated background */}
@@ -123,19 +125,18 @@ export default function Hero() {
           transition={{ duration: 0.6, delay: 0.45 }}
           className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-20"
         >
-          <a
-            href="#demo"
+          <button
+            onClick={() => openDemo('hero')}
             className="group relative flex items-center gap-2.5 px-9 py-4 rounded-xl font-semibold text-base text-white overflow-hidden transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_0_50px_rgba(139,92,246,0.4)]"
             style={{
               background: 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 50%, #2563eb 100%)',
               boxShadow: '0 8px 32px rgba(99,102,241,0.35)',
             }}
           >
-            {/* Shine effect */}
             <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -skew-x-12 translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-700" />
             Get Personalized Demo
             <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-          </a>
+          </button>
           <a
             href="#how-it-works"
             className="group flex items-center gap-2.5 px-9 py-4 rounded-xl glass border border-white/10 text-white/75 font-semibold text-base hover:text-white hover:border-white/25 transition-all duration-300 hover:-translate-y-0.5"

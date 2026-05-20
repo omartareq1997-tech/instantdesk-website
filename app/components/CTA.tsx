@@ -3,8 +3,10 @@
 import { motion } from 'framer-motion'
 import { ArrowRight, Phone, Sparkles } from 'lucide-react'
 import { channels } from './ChannelIcons'
+import { useDemoModal } from '../context/DemoModal'
 
 export default function CTA() {
+  const { open: openDemo } = useDemoModal()
   return (
     <section id="demo" className="relative py-32 overflow-hidden">
       <div className="max-w-6xl mx-auto px-6">
@@ -122,14 +124,14 @@ export default function CTA() {
               transition={{ delay: 0.4 }}
               className="flex flex-col sm:flex-row items-center justify-center gap-4"
             >
-              <a
-                href="mailto:hello@instantdesk.pl"
+              <button
+                onClick={() => openDemo('cta')}
                 className="group relative flex items-center gap-3 px-10 py-5 rounded-xl font-bold text-base text-gray-900 bg-white hover:bg-white/90 transition-all duration-300 shadow-2xl hover:-translate-y-0.5 hover:shadow-white/20 overflow-hidden"
               >
                 <span className="absolute inset-0 bg-gradient-to-r from-transparent via-black/5 to-transparent -skew-x-12 translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-700" />
                 Get Personalized Demo
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-              </a>
+              </button>
               <a
                 href="tel:+48000000000"
                 className="group flex items-center gap-3 px-10 py-5 rounded-xl font-bold text-base text-white/80 hover:text-white transition-all duration-300 hover:-translate-y-0.5"

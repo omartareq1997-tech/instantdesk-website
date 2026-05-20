@@ -54,6 +54,19 @@ export default function RootLayout({
             y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
           })(window, document, "clarity", "script", "wtw4hugh74");
         `}</Script>
+        <Script
+          src="https://www.googletagmanager.com/gtag/js?id=G-FWGK1BYX05"
+          strategy="afterInteractive"
+        />
+        <Script
+          id="google-analytics"
+          strategy="afterInteractive"
+        >{`
+          window.dataLayer = window.dataLayer || [];
+          function gtag(){dataLayer.push(arguments);}
+          gtag('js', new Date());
+          gtag('config', 'G-FWGK1BYX05');
+        `}</Script>
       </body>
     </html>
   );

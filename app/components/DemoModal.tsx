@@ -250,11 +250,12 @@ const EMPTY: FormValues = {
 }
 
 export default function DemoModal({ isOpen, onClose, source }: Props) {
-  const [values,   setValues]   = useState<FormValues>(EMPTY)
-  const [errors,   setErrors]   = useState<FormErrors>({})
-  const [touched,  setTouched]  = useState<Partial<Record<keyof FormValues, boolean>>>({})
-  const [loading,  setLoading]  = useState(false)
-  const [success,  setSuccess]  = useState(false)
+  const [values,      setValues]      = useState<FormValues>(EMPTY)
+  const [errors,      setErrors]      = useState<FormErrors>({})
+  const [touched,     setTouched]     = useState<Partial<Record<keyof FormValues, boolean>>>({})
+  const [loading,     setLoading]     = useState(false)
+  const [success,     setSuccess]     = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const firstRef = useRef<HTMLInputElement>(null)
 
   /* Reset on open */
@@ -265,6 +266,7 @@ export default function DemoModal({ isOpen, onClose, source }: Props) {
       setTouched({})
       setLoading(false)
       setSuccess(false)
+      setSubmitError(null)
       setTimeout(() => firstRef.current?.focus(), 300)
     }
   }, [isOpen])
@@ -318,6 +320,7 @@ export default function DemoModal({ isOpen, onClose, source }: Props) {
     }
 
     setLoading(true)
+    setSubmitError(null)
     try {
       const input: DemoSubmissionInput = {
         fullName:     values.fullName.trim(),
@@ -331,7 +334,10 @@ export default function DemoModal({ isOpen, onClose, source }: Props) {
       await saveSubmission(input)
       setSuccess(true)
     } catch (err) {
-      console.error('Submission error:', err)
+      console.error('[DemoModal] Submission failed:', err)
+      setSubmitError(
+        "Something went wrong sending your request. Your details have been saved — we'll follow up shortly, or email us at hello@instantdesk.pl"
+      )
     } finally {
       setLoading(false)
     }
@@ -554,6 +560,23 @@ export default function DemoModal({ isOpen, onClose, source }: Props) {
                               )}
                             </span>
                           </motion.button>
+
+                          {/* Submit error */}
+                          <AnimatePresence>
+                            {submitError && (
+                              <motion.div
+                                initial={{ opacity: 0, y: -6 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -6 }}
+                                transition={{ duration: 0.25 }}
+                                className="flex items-start gap-3 px-4 py-3 rounded-xl text-xs text-red-300 leading-relaxed"
+                                style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}
+                              >
+                                <span className="w-4 h-4 rounded-full bg-red-500/20 flex items-center justify-center flex-shrink-0 mt-0.5 text-[10px] font-black text-red-400">!</span>
+                                {submitError}
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
 
                         </div>
                       </form>

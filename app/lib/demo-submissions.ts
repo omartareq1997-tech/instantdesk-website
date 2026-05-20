@@ -1,8 +1,11 @@
 /* ─────────────────────────────────────────────────────────────
    Demo submission data layer
-   Currently backed by localStorage.
-   To migrate to Supabase, replace the two localStorage functions
-   below with the Supabase equivalents shown in the comments.
+
+   Primary path  → POST /api/demo-lead → Make.com webhook
+   Fallback path → localStorage (only when the API call fails)
+
+   To add Supabase persistence later, extend the API route
+   (app/api/demo-lead/route.ts) — no changes needed here.
    ──────────────────────────────────────────────────────────── */
 
 export type DemoSubmission = {
@@ -14,53 +17,65 @@ export type DemoSubmission = {
   website: string
   message: string
   submittedAt: string   // ISO-8601
-  source: string        // e.g. 'landing_hero' | 'landing_cta' | 'navbar'
+  source: string
   status: 'new' | 'contacted' | 'converted' | 'closed'
 }
 
 export type DemoSubmissionInput = Omit<DemoSubmission, 'id' | 'submittedAt' | 'status'>
 
-const STORAGE_KEY = 'instantdesk_demo_submissions'
+const STORAGE_KEY = 'instantdesk_demo_submissions_fallback'
 
 /* ── Save ─────────────────────────────────────────────────── */
 
 export async function saveSubmission(input: DemoSubmissionInput): Promise<DemoSubmission> {
   const submission: DemoSubmission = {
     ...input,
-    id: crypto.randomUUID(),
+    id:          crypto.randomUUID(),
     submittedAt: new Date().toISOString(),
-    status: 'new',
+    status:      'new',
   }
 
-  // localStorage (current)
-  if (typeof window !== 'undefined') {
-    const existing = readFromStorage()
-    writeToStorage([...existing, submission])
+  /* Collect browser context to send with the payload */
+  const pageUrl  = typeof window    !== 'undefined' ? window.location.href  : ''
+
+  try {
+    const res = await fetch('/api/demo-lead', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fullName:     input.fullName,
+        businessName: input.businessName,
+        email:        input.email,
+        phone:        input.phone,
+        website:      input.website,
+        message:      input.message,
+        pageUrl,
+      }),
+    })
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error ?? `API error ${res.status}`)
+    }
+
+    /* Webhook delivered — no localStorage needed */
+    return submission
+  } catch (err) {
+    /* ── Fallback: localStorage so the lead is never lost ── */
+    console.warn('[demo-submissions] API failed — saving to localStorage fallback:', err)
+    if (typeof window !== 'undefined') {
+      writeToStorage([...readFromStorage(), submission])
+    }
+    /* Re-throw so the caller can decide how to surface the error */
+    throw err
   }
-
-  // ── Future Supabase integration ──────────────────────────
-  // import { createClient } from '@supabase/supabase-js'
-  // const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
-  // const { error } = await supabase.from('demo_submissions').insert(submission)
-  // if (error) throw error
-  // ────────────────────────────────────────────────────────
-
-  return submission
 }
 
-/* ── Read all ─────────────────────────────────────────────── */
+/* ── Read fallback leads ──────────────────────────────────── */
 
-export function getSubmissions(): DemoSubmission[] {
+export function getFallbackSubmissions(): DemoSubmission[] {
   if (typeof window === 'undefined') return []
-
-  // localStorage (current)
   return readFromStorage()
-
-  // ── Future Supabase integration ──────────────────────────
-  // const { data, error } = await supabase.from('demo_submissions').select('*').order('submitted_at', { ascending: false })
-  // if (error) throw error
-  // return data ?? []
-  // ────────────────────────────────────────────────────────
 }
 
 /* ── Internal helpers ─────────────────────────────────────── */
@@ -74,5 +89,9 @@ function readFromStorage(): DemoSubmission[] {
 }
 
 function writeToStorage(submissions: DemoSubmission[]): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(submissions))
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(submissions))
+  } catch (err) {
+    console.error('[demo-submissions] localStorage write failed:', err)
+  }
 }

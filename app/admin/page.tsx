@@ -1,4 +1,4 @@
-import { createServerClient } from '../lib/supabase-server'
+import { createAdminClient } from '../lib/supabase-server'
 import AdminDashboard, { type Lead, type Status } from './AdminDashboard'
 
 /* ─── DB row shape ───────────────────────────────────────────
@@ -51,7 +51,7 @@ export default async function AdminPage() {
   let fetchError: string | undefined
 
   try {
-    const supabase = createServerClient()
+    const supabase = createAdminClient()
 
     const { data, error } = await supabase
       .from('leads')

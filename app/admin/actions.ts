@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { createServerClient } from '../lib/supabase-server'
+import { createAdminClient } from '../lib/supabase-server'
 
 const VALID_STATUSES = ['new', 'contacted', 'demo_booked', 'won', 'lost'] as const
 type Status = typeof VALID_STATUSES[number]
@@ -17,7 +17,7 @@ export async function updateLeadStatus(id: string, status: Status): Promise<void
   if (!id) throw new Error('Lead id is required')
   if (!VALID_STATUSES.includes(status)) throw new Error(`Invalid status: ${status}`)
 
-  const supabase = createServerClient()
+  const supabase = createAdminClient()
 
   const { error } = await supabase
     .from('leads')

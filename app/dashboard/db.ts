@@ -152,7 +152,8 @@
 import { createServerClient } from '../lib/supabase-server'
 import type {
   DashboardData, Lead, Appointment, ActivityItem,
-  AnalyticsDay, IntegrationRow, AutoState, LeadStatus, ScoreLabel, ApptStatus, ActivityType,
+  AnalyticsDay, IntegrationRow, AnalyticsSummary,
+  AutoState, LeadStatus, ScoreLabel, ApptStatus, ActivityType,
 } from './types'
 
 /* ─── Demo client ID ─────────────────────────────────────────────
@@ -478,6 +479,82 @@ export async function getIntegrationStatus(clientId = DEMO_CLIENT_ID): Promise<I
   }
 }
 
+/* ─── Analytics summary ──────────────────────────────────────────── */
+
+/**
+ * Compute live analytics KPIs from the raw tables:
+ *   conversations count, messages count, avg AI response time,
+ *   demos booked (appointments), and lead conversion rate.
+ * Returns zeros on error — never throws.
+ */
+export async function getAnalyticsSummary(clientId = DEMO_CLIENT_ID): Promise<AnalyticsSummary> {
+  const zero: AnalyticsSummary = {
+    totalConversations: 0, totalMessages: 0,
+    avgResponseMs: 0, demosBooked: 0, conversionRate: 0,
+  }
+  try {
+    const sb = createServerClient()
+
+    const [convRes, msgRes, rtRes, demoRes, totalLeadsRes, wonLeadsRes] = await Promise.all([
+      // count(conversations)
+      sb.from('conversations')
+        .select('*', { count: 'exact', head: true })
+        .eq('client_id', clientId),
+
+      // count(messages)
+      sb.from('messages')
+        .select('*', { count: 'exact', head: true })
+        .eq('client_id', clientId),
+
+      // avg response_time_ms — fetch only the column for AI messages
+      sb.from('messages')
+        .select('response_time_ms')
+        .eq('client_id', clientId)
+        .eq('from_role', 'ai')
+        .not('response_time_ms', 'is', null),
+
+      // count(appointments) where demo_call OR confirmed
+      sb.from('appointments')
+        .select('*', { count: 'exact', head: true })
+        .eq('client_id', clientId)
+        .or('type.eq.demo_call,status.eq.confirmed'),
+
+      // total leads
+      sb.from('leads')
+        .select('*', { count: 'exact', head: true })
+        .eq('client_id', clientId),
+
+      // won leads
+      sb.from('leads')
+        .select('*', { count: 'exact', head: true })
+        .eq('client_id', clientId)
+        .eq('status', 'won'),
+    ])
+
+    if (convRes.error || msgRes.error || demoRes.error || totalLeadsRes.error || wonLeadsRes.error) {
+      return zero
+    }
+
+    const rtRows = (rtRes.data ?? []) as { response_time_ms: number }[]
+    const avgResponseMs = rtRows.length
+      ? Math.round(rtRows.reduce((s, r) => s + r.response_time_ms, 0) / rtRows.length)
+      : 0
+
+    const total = totalLeadsRes.count ?? 0
+    const won   = wonLeadsRes.count   ?? 0
+
+    return {
+      totalConversations: convRes.count ?? 0,
+      totalMessages:      msgRes.count  ?? 0,
+      avgResponseMs,
+      demosBooked:        demoRes.count ?? 0,
+      conversionRate:     total > 0 ? Math.round((won / total) * 100) : 0,
+    }
+  } catch {
+    return zero
+  }
+}
+
 /* ─── Composite fetch ────────────────────────────────────────────── */
 
 /**
@@ -486,12 +563,13 @@ export async function getIntegrationStatus(clientId = DEMO_CLIENT_ID): Promise<I
  * so the dashboard always renders — even when Supabase is not yet set up.
  */
 export async function getDashboardData(clientId = DEMO_CLIENT_ID): Promise<DashboardData> {
-  const [leads, appointments, activity, analytics, integrations] = await Promise.all([
+  const [leads, appointments, activity, analytics, integrations, analyticsSummary] = await Promise.all([
     getClientLeads(clientId),
     getClientAppointments(clientId),
     getClientActivityEvents(clientId),
     getClientAnalytics(clientId),
     getIntegrationStatus(clientId),
+    getAnalyticsSummary(clientId),
   ])
-  return { leads, appointments, activity, analytics, integrations }
+  return { leads, appointments, activity, analytics, integrations, analyticsSummary }
 }

@@ -68,6 +68,15 @@ export interface AnalyticsDay {
   conversionRate: number   // 0-100 (percentage)
 }
 
+/** Computed analytics stats derived from live Supabase tables. */
+export interface AnalyticsSummary {
+  totalConversations: number   // count(conversations)
+  totalMessages:      number   // count(messages)
+  avgResponseMs:      number   // avg(messages.response_time_ms) for ai messages
+  demosBooked:        number   // count(appointments) type='demo_call' OR status='confirmed'
+  conversionRate:     number   // won leads / total leads * 100  (0-100)
+}
+
 /** Raw integration status returned from integrations_status table. */
 export interface IntegrationRow {
   id: string
@@ -82,9 +91,10 @@ export interface IntegrationRow {
 /* ─── Composite data bag passed from page.tsx → ClientDashboard ── */
 
 export interface DashboardData {
-  leads:        Lead[]
-  appointments: Appointment[]
-  activity:     ActivityItem[]
-  analytics:    AnalyticsDay[]
-  integrations: IntegrationRow[]
+  leads:            Lead[]
+  appointments:     Appointment[]
+  activity:         ActivityItem[]
+  analytics:        AnalyticsDay[]
+  integrations:     IntegrationRow[]
+  analyticsSummary: AnalyticsSummary
 }

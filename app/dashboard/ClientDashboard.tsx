@@ -1062,11 +1062,12 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
   // Merge server-fetched data with local mock fallbacks.
   // getDashboardData() in page.tsx already falls back to mock if Supabase is empty,
   // but the double-fallback here keeps the UI intact if initialData is ever undefined.
-  const leads        = initialData?.leads?.length        ? initialData.leads        : LEADS
-  const appointments = initialData?.appointments?.length ? initialData.appointments : APPOINTMENTS
-  const activity     = initialData?.activity?.length     ? initialData.activity     : SEED_ACTIVITY
-  const analytics    = initialData?.analytics?.length    ? initialData.analytics    : undefined
-  const integrations = initialData?.integrations                                   ?? []
+  const leads            = initialData?.leads?.length        ? initialData.leads        : LEADS
+  const appointments     = initialData?.appointments?.length ? initialData.appointments : APPOINTMENTS
+  const activity         = initialData?.activity?.length     ? initialData.activity     : SEED_ACTIVITY
+  const analytics        = initialData?.analytics?.length    ? initialData.analytics    : undefined
+  const integrations     = initialData?.integrations                                   ?? []
+  const analyticsSummary = initialData?.analyticsSummary
 
   const selectedLead = useMemo(() => leads.find(l => l.id === selectedLeadId) ?? null, [leads, selectedLeadId])
   const handleSelectLead = useCallback((id: string) => setSelectedLeadId(id), [])
@@ -1124,7 +1125,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
               initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-8 }}
               transition={{ duration:0.22 }}>
               {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={leads} appointments={appointments} activity={activity} />}
-              {section==='analytics'    && <AnalyticsSection analytics={analytics} />}
+              {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} />}
               {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={leads} />}
               {section==='activity'     && <ActivitySection initialEvents={activity} />}
               {section==='appointments' && <AppointmentsSection appointments={appointments} />}

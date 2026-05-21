@@ -4,14 +4,18 @@ import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { generateToken, COOKIE_NAME } from '../lib/auth'
 
-export async function loginAction(password: string): Promise<{ error?: string }> {
+export async function loginAction(
+  _prev: { error?: string } | undefined,
+  formData: FormData,
+): Promise<{ error?: string }> {
+  const password     = (formData.get('password') as string | null) ?? ''
   const adminPassword = process.env.ADMIN_PASSWORD
 
   if (!adminPassword) {
     return { error: 'Server misconfiguration: ADMIN_PASSWORD is not set.' }
   }
 
-  if (password !== adminPassword) {
+  if (!password || password !== adminPassword) {
     return { error: 'Incorrect password.' }
   }
 
@@ -29,6 +33,6 @@ export async function loginAction(password: string): Promise<{ error?: string }>
 
 export async function logoutAction(): Promise<never> {
   const jar = await cookies()
-  jar.delete({ name: COOKIE_NAME, path: '/' })
+  jar.delete(COOKIE_NAME)
   redirect('/login')
 }

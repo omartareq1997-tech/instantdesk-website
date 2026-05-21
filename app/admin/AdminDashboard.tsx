@@ -466,14 +466,16 @@ export default function AdminDashboard({
             <ArrowLeft className="w-3.5 h-3.5" />
             Back to site
           </Link>
-          <form action="/api/logout" method="post">
-            <button
-              type="submit"
-              className="text-xs text-white/25 hover:text-red-400 transition-colors px-2 py-1 rounded-lg hover:bg-red-500/8"
-            >
-              Log out
-            </button>
-          </form>
+          <button
+            type="button"
+            onClick={async () => {
+              await fetch('/api/logout', { method: 'POST' })
+              window.location.href = '/admin-login'
+            }}
+            className="text-xs text-white/25 hover:text-red-400 transition-colors px-2 py-1 rounded-lg hover:bg-red-500/8"
+          >
+            Log out
+          </button>
           {!fetchError && (
             <div
               className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold"

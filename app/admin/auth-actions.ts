@@ -1,14 +1,11 @@
 'use server'
 
 import { cookies } from 'next/headers'
-import { redirect } from 'next/navigation'
 import { generateToken, COOKIE_NAME } from '../lib/auth'
 
 export async function loginAction(
-  _prev: { error?: string } | undefined,
-  formData: FormData,
-): Promise<{ error?: string }> {
-  const password     = (formData.get('password') as string | null) ?? ''
+  password: string,
+): Promise<{ error?: string; success?: true }> {
   const adminPassword = process.env.ADMIN_PASSWORD
 
   if (!adminPassword) {
@@ -28,11 +25,5 @@ export async function loginAction(
     path:     '/',
   })
 
-  redirect('/admin')
-}
-
-export async function logoutAction(): Promise<never> {
-  const jar = await cookies()
-  jar.delete(COOKIE_NAME)
-  redirect('/admin-login')
+  return { success: true }
 }

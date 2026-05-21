@@ -1,17 +1,36 @@
 'use client'
 
-import { useActionState, useState } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Zap, ArrowLeft, Lock, Eye, EyeOff, ArrowRight, ShieldCheck } from 'lucide-react'
 import { loginAction } from '../admin/auth-actions'
 
 export default function LoginPage() {
-  const [state, action, pending] = useActionState(loginAction, undefined)
-  const [showPw,   setShowPw]   = useState(false)
   const [password, setPassword] = useState('')
+  const [showPw,   setShowPw]   = useState(false)
+  const [loading,  setLoading]  = useState(false)
+  const [error,    setError]    = useState<string | null>(null)
 
-  const hasError = !!state?.error
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!password.trim()) return
+    setLoading(true)
+    setError(null)
+
+    try {
+      const result = await loginAction(password)
+      if (result.success) {
+        window.location.href = '/admin'
+      } else {
+        setError(result.error ?? 'An unexpected error occurred.')
+        setLoading(false)
+      }
+    } catch {
+      setError('An unexpected error occurred. Please try again.')
+      setLoading(false)
+    }
+  }
 
   return (
     <div
@@ -111,8 +130,7 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Form — uses form action so redirect() in the server action works reliably */}
-          <form action={action} className="flex flex-col gap-4">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div>
               <label className="block text-[10px] font-bold text-white/35 uppercase tracking-widest mb-2">
                 Password
@@ -121,30 +139,29 @@ export default function LoginPage() {
                 <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/25 pointer-events-none" />
                 <input
                   type={showPw ? 'text' : 'password'}
-                  name="password"
                   required
                   autoComplete="current-password"
                   autoFocus
                   placeholder="••••••••••••"
                   value={password}
-                  onChange={e => setPassword(e.target.value)}
+                  onChange={e => { setPassword(e.target.value); setError(null) }}
                   className="w-full pl-10 pr-11 py-3 rounded-xl text-sm text-white placeholder-white/20 outline-none transition-all duration-200"
                   style={{
                     background: 'rgba(255,255,255,0.04)',
-                    border: hasError
+                    border: error
                       ? '1px solid rgba(248,113,113,0.5)'
                       : '1px solid rgba(255,255,255,0.08)',
                   }}
                   onFocus={e => {
-                    e.currentTarget.style.border = hasError
+                    e.currentTarget.style.border = error
                       ? '1px solid rgba(248,113,113,0.6)'
                       : '1px solid rgba(139,92,246,0.45)'
-                    e.currentTarget.style.boxShadow = hasError
+                    e.currentTarget.style.boxShadow = error
                       ? '0 0 0 3px rgba(248,113,113,0.1)'
                       : '0 0 0 3px rgba(139,92,246,0.1)'
                   }}
                   onBlur={e => {
-                    e.currentTarget.style.border = hasError
+                    e.currentTarget.style.border = error
                       ? '1px solid rgba(248,113,113,0.5)'
                       : '1px solid rgba(255,255,255,0.08)'
                     e.currentTarget.style.boxShadow = 'none'
@@ -162,7 +179,7 @@ export default function LoginPage() {
 
               {/* Error message */}
               <AnimatePresence>
-                {state?.error && (
+                {error && (
                   <motion.p
                     initial={{ opacity: 0, y: -4, height: 0 }}
                     animate={{ opacity: 1, y: 0, height: 'auto' }}
@@ -171,7 +188,7 @@ export default function LoginPage() {
                     className="text-xs text-red-400 mt-2 flex items-center gap-1.5"
                   >
                     <span className="w-3.5 h-3.5 rounded-full bg-red-500/20 flex items-center justify-center text-[9px] font-black flex-shrink-0">!</span>
-                    {state.error}
+                    {error}
                   </motion.p>
                 )}
               </AnimatePresence>
@@ -179,7 +196,7 @@ export default function LoginPage() {
 
             <motion.button
               type="submit"
-              disabled={pending || !password.trim()}
+              disabled={loading || !password.trim()}
               whileHover={{ scale: 1.015 }}
               whileTap={{ scale: 0.985 }}
               className="relative w-full py-3.5 rounded-xl text-sm font-bold text-white mt-1 overflow-hidden transition-all duration-300 disabled:opacity-50"
@@ -195,7 +212,7 @@ export default function LoginPage() {
                 }}
               />
               <span className="relative flex items-center justify-center gap-2">
-                {pending ? (
+                {loading ? (
                   <>
                     <motion.span
                       className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white"

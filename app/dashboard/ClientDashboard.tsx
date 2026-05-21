@@ -12,7 +12,7 @@ import {
 } from 'lucide-react'
 import LeadPanel from './LeadPanel'
 import AnalyticsSection from './AnalyticsSection'
-import type { DashboardData, IntegrationRow } from './types'
+import type { DashboardData, IntegrationRow, OverviewMetrics } from './types'
 
 /* ─── Types ──────────────────────────────────────────────────── */
 
@@ -156,21 +156,6 @@ const AUTO_COLS: {label:string; key:keyof AutoState; Icon:React.ComponentType<{c
   { label:'Nurture',      key:'nurture',     Icon:RefreshCw     },
   { label:'Smart Assign', key:'smartAssign', Icon:Users         },
   { label:'Auto-call',    key:'autoCall',    Icon:Phone         },
-]
-
-const KPI_DATA: {label:string; value:string|number; sub:string; color:string; trend:'up'|'down'; Icon:React.ComponentType<{className?:string;style?:React.CSSProperties}>}[] = [
-  { label:'New Leads This Week',  value:8,     sub:'vs 6 last week',  color:'#a78bfa', trend:'up', Icon:Users     },
-  { label:'Active Opportunities', value:6,     sub:'in pipeline',     color:'#60a5fa', trend:'up', Icon:Target    },
-  { label:'Appointments Booked',  value:4,     sub:'this week',       color:'#34d399', trend:'up', Icon:Calendar  },
-  { label:'Emails Sent',          value:34,    sub:'via automation',  color:'#fbbf24', trend:'up', Icon:Mail      },
-  { label:'Conversion Rate',      value:'17%', sub:'+3% vs last wk', color:'#fb923c', trend:'up', Icon:BarChart2 },
-]
-
-const PERF_DATA: {label:string; value:string; sub:string; color:string; Icon:React.ComponentType<{className?:string;style?:React.CSSProperties}>}[] = [
-  { label:'Conversion Lift',  value:'+34%',   sub:'vs manual follow-up', color:'#34d399', Icon:TrendingUp  },
-  { label:'Agent Time Saved', value:'18 hrs', sub:'per week average',    color:'#60a5fa', Icon:Timer       },
-  { label:'Monthly Deals',    value:'8',      sub:'closed this month',   color:'#a78bfa', Icon:CheckCircle },
-  { label:'Est. Revenue',     value:'£47.2k', sub:'this month pipeline', color:'#fbbf24', Icon:DollarSign  },
 ]
 
 const NAV_ITEMS: {id:Section; label:string; Icon:React.ComponentType<{className?:string}>; badge?:number}[] = [
@@ -443,23 +428,118 @@ function Sidebar({ active, onNav, open, onClose }: { active:Section; onNav:(s:Se
 
 /* ─── Overview ───────────────────────────────────────────────── */
 
-function OverviewSection({ onSelectLead, leads, appointments, activity }: { onSelectLead:(id:string)=>void; leads:Lead[]; appointments:Appointment[]; activity:ActivityItem[] }) {
-  const upcoming22 = appointments.filter(a => a.upcoming && a.date==='2026-05-22').sort((a,b)=>a.time.localeCompare(b.time))
+function OverviewSection({
+  onSelectLead, leads, appointments, activity, overviewMetrics,
+}: {
+  onSelectLead:(id:string)=>void
+  leads:Lead[]
+  appointments:Appointment[]
+  activity:ActivityItem[]
+  overviewMetrics?: OverviewMetrics
+}) {
+  const m = overviewMetrics
+
+  // ── Dynamic "Next Up": find the soonest upcoming date ──────────
+  const todayISO      = new Date().toISOString().split('T')[0]
+  const upcomingSorted = appointments
+    .filter(a => a.upcoming && a.date >= todayISO)
+    .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`))
+  const nextDate     = upcomingSorted[0]?.date ?? null
+  const soonestAppts = nextDate ? upcomingSorted.filter(a => a.date === nextDate) : []
+  const laterAppts   = nextDate ? upcomingSorted.filter(a => a.date !== nextDate) : []
+  const nextDateLabel = nextDate
+    ? new Date(nextDate + 'T12:00:00Z').toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' })
+    : null
+
+  // ── KPI cards ──────────────────────────────────────────────────
+  const kpiCards: { label:string; value:string|number; sub:string; color:string; trend:'up'|'down'; Icon:React.ComponentType<{className?:string;style?:React.CSSProperties}> }[] = [
+    {
+      label:'New Leads This Week',
+      value: m?.newLeadsThisWeek ?? 0,
+      sub:`${m?.activeOpportunities ?? 0} active in pipeline`,
+      color:'#a78bfa', trend:'up', Icon:Users,
+    },
+    {
+      label:'Active Opportunities',
+      value: m?.activeOpportunities ?? 0,
+      sub:'in pipeline',
+      color:'#60a5fa', trend:'up', Icon:Target,
+    },
+    {
+      label:'Appointments Booked',
+      value: m?.appointmentsThisWeek ?? 0,
+      sub:'this week',
+      color:'#34d399', trend:'up', Icon:Calendar,
+    },
+    {
+      label:'Emails Sent',
+      value: m?.emailsSentThisWeek ?? 0,
+      sub:'via automation',
+      color:'#fbbf24', trend:'up', Icon:Mail,
+    },
+    {
+      label:'Conversion Rate',
+      value: `${m?.conversionRate ?? 0}%`,
+      sub: (m?.conversionLiftPct ?? 0) > 0
+        ? `+${m!.conversionLiftPct}pts vs last wk`
+        : 'won / total leads',
+      color:'#fb923c',
+      trend: (m?.conversionRate ?? 0) > 0 ? 'up' : 'down',
+      Icon:BarChart2,
+    },
+  ]
+
+  // ── Performance cards ──────────────────────────────────────────
+  const revenueStr = m && m.estimatedRevenue > 0
+    ? m.estimatedRevenue >= 10000
+      ? `£${(m.estimatedRevenue / 1000).toFixed(1)}k`
+      : `£${m.estimatedRevenue.toLocaleString()}`
+    : '—'
+
+  const perfCards: { label:string; value:string|number; sub:string; color:string; Icon:React.ComponentType<{className?:string;style?:React.CSSProperties}> }[] = [
+    {
+      label:'Conversion Lift',
+      value: (m?.conversionLiftPct ?? 0) > 0 ? `+${m!.conversionLiftPct}%` : '—',
+      sub:'vs prior week',
+      color:'#34d399', Icon:TrendingUp,
+    },
+    {
+      label:'Agent Time Saved',
+      value: m ? `${m.agentTimeSavedHrs} hrs` : '—',
+      sub:'this week (AI replies)',
+      color:'#60a5fa', Icon:Timer,
+    },
+    {
+      label:'Monthly Deals',
+      value: m?.monthlyDeals ?? 0,
+      sub:'closed this month',
+      color:'#a78bfa', Icon:CheckCircle,
+    },
+    {
+      label:'Est. Revenue',
+      value: revenueStr,
+      sub:'this month pipeline',
+      color:'#fbbf24', Icon:DollarSign,
+    },
+  ]
 
   return (
     <div className="flex flex-col gap-6">
       {/* 5 KPI cards */}
       <div className="grid grid-cols-2 xl:grid-cols-5 gap-4">
-        {KPI_DATA.map((k,i) => (
+        {kpiCards.map((k, i) => (
           <motion.div key={k.label} initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.06 }}>
-            <motion.div whileHover={{ y:-2, boxShadow:`0 8px 24px ${k.color}18` }} className="rounded-2xl p-5 cursor-default transition-all"
+            <motion.div whileHover={{ y:-2, boxShadow:`0 8px 24px ${k.color}18` }}
+              className="rounded-2xl p-5 cursor-default transition-all"
               style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}>
               <div className="flex items-center justify-between mb-3">
                 <div className="w-8 h-8 rounded-xl flex items-center justify-center"
                   style={{ background:`${k.color}18`, border:`1px solid ${k.color}28` }}>
                   <DataIcon icon={k.Icon} className="w-4 h-4" style={{ color:k.color }} />
                 </div>
-                {k.trend==='up' ? <TrendingUp className="w-3.5 h-3.5 text-emerald-400" /> : <TrendingDown className="w-3.5 h-3.5 text-red-400" />}
+                {k.trend==='up'
+                  ? <TrendingUp  className="w-3.5 h-3.5 text-emerald-400" />
+                  : <TrendingDown className="w-3.5 h-3.5 text-red-400" />}
               </div>
               <div className="text-2xl font-black text-white tracking-tight">{k.value}</div>
               <div className="text-[10px] font-semibold text-white/35 uppercase tracking-wide mt-1 leading-tight">{k.label}</div>
@@ -471,7 +551,7 @@ function OverviewSection({ onSelectLead, leads, appointments, activity }: { onSe
 
       {/* 4 Performance cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {PERF_DATA.map((p,i) => (
+        {perfCards.map((p, i) => (
           <motion.div key={p.label} initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.30+i*0.06 }}>
             <Card className="p-5 flex items-start gap-4">
               <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
@@ -490,74 +570,103 @@ function OverviewSection({ onSelectLead, leads, appointments, activity }: { onSe
 
       {/* Activity + Appointments */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+        {/* Recent Activity */}
         <motion.div className="lg:col-span-3" initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.50 }}>
           <Card>
-            <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+            <div className="flex items-center justify-between px-5 py-4"
+              style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
               <h2 className="text-sm font-bold text-white">Recent Activity</h2>
               <div className="flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-lg"
                 style={{ background:'rgba(52,211,153,0.08)', border:'1px solid rgba(52,211,153,0.2)', color:'#34d399' }}>
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />Live
               </div>
             </div>
-            <div className="divide-y divide-white/[0.04]">
-              {activity.slice(0,5).map((item,i) => {
-                const cfg = ACTIVITY_CFG[item.type]
-                return (
-                  <motion.div key={item.id} initial={{ opacity:0, x:-8 }} animate={{ opacity:1, x:0 }} transition={{ delay:0.55+i*0.04 }}
-                    className="flex items-start gap-3 px-5 py-3.5">
-                    {item.live && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0 mt-1.5" />}
-                    <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"
-                      style={{ background:cfg.bg, border:`1px solid ${cfg.color}25` }}>
-                      <DataIcon icon={cfg.Icon} className="w-3.5 h-3.5" style={{ color:cfg.color }} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-white/80 truncate">{item.text}</div>
-                      <div className="text-xs text-white/30 mt-0.5">{item.sub}</div>
-                    </div>
-                    <div className="text-xs text-white/25 whitespace-nowrap flex-shrink-0">{item.time}</div>
-                  </motion.div>
-                )
-              })}
-            </div>
+            {activity.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 gap-2">
+                <Activity className="w-8 h-8 text-white/10" />
+                <p className="text-sm text-white/25 font-medium">No recent activity</p>
+                <p className="text-xs text-white/15">Events appear here as they happen</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-white/[0.04]">
+                {activity.slice(0, 5).map((item, i) => {
+                  const cfg = ACTIVITY_CFG[item.type]
+                  return (
+                    <motion.div key={item.id}
+                      initial={{ opacity:0, x:-8 }} animate={{ opacity:1, x:0 }} transition={{ delay:0.55+i*0.04 }}
+                      className="flex items-start gap-3 px-5 py-3.5">
+                      {item.live && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0 mt-1.5" />}
+                      <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"
+                        style={{ background:cfg.bg, border:`1px solid ${cfg.color}25` }}>
+                        <DataIcon icon={cfg.Icon} className="w-3.5 h-3.5" style={{ color:cfg.color }} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-white/80 truncate">{item.text}</div>
+                        <div className="text-xs text-white/30 mt-0.5">{item.sub}</div>
+                      </div>
+                      <div className="text-xs text-white/25 whitespace-nowrap flex-shrink-0">{item.time}</div>
+                    </motion.div>
+                  )
+                })}
+              </div>
+            )}
           </Card>
         </motion.div>
 
+        {/* Next Up */}
         <motion.div className="lg:col-span-2" initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.55 }}>
           <Card className="h-full flex flex-col">
             <div className="px-5 py-4" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
-              <h2 className="text-sm font-bold text-white">Next Up — Fri 22 May</h2>
-              <p className="text-xs text-white/30 mt-0.5">{upcoming22.length} appointments</p>
+              <h2 className="text-sm font-bold text-white">
+                {nextDateLabel ? `Next Up — ${nextDateLabel}` : 'Next Up'}
+              </h2>
+              <p className="text-xs text-white/30 mt-0.5">
+                {soonestAppts.length > 0
+                  ? `${soonestAppts.length} appointment${soonestAppts.length > 1 ? 's' : ''}`
+                  : 'No upcoming appointments'}
+              </p>
             </div>
             <div className="p-4 flex flex-col gap-3 flex-1">
-              {upcoming22.map(appt => {
-                const sc = APPT_CFG[appt.status]
-                return (
-                  <div key={appt.id} className="flex items-center gap-3 px-4 py-3 rounded-xl"
-                    style={{ background:`${sc.color}08`, border:`1px solid ${sc.color}20` }}>
-                    <div className="w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
-                      style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
-                      {initials(appt.name)}
+              {soonestAppts.length === 0 ? (
+                <div className="flex flex-col items-center justify-center flex-1 py-8 gap-2">
+                  <Calendar className="w-7 h-7 text-white/10" />
+                  <p className="text-sm text-white/25 font-medium">No upcoming bookings</p>
+                </div>
+              ) : (
+                <>
+                  {soonestAppts.map(appt => {
+                    const sc = APPT_CFG[appt.status]
+                    return (
+                      <div key={appt.id} className="flex items-center gap-3 px-4 py-3 rounded-xl"
+                        style={{ background:`${sc.color}08`, border:`1px solid ${sc.color}20` }}>
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
+                          style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
+                          {initials(appt.name)}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-semibold text-white/80 truncate">{appt.name}</div>
+                          <div className="text-[10px] text-white/35">{appt.type}</div>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <div className="text-xs font-bold text-white/60">{appt.time}</div>
+                          <div className="text-[10px] mt-0.5" style={{ color:sc.color }}>{sc.label}</div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {laterAppts.length > 0 && (
+                    <div style={{ borderTop:'1px solid rgba(255,255,255,0.05)', marginTop:4, paddingTop:8 }}>
+                      {laterAppts.map(appt => (
+                        <div key={appt.id} className="flex items-center gap-2 py-1.5">
+                          <Clock className="w-3 h-3 text-white/20 flex-shrink-0" />
+                          <span className="text-xs text-white/35 truncate flex-1">{appt.name} · {appt.type}</span>
+                          <span className="text-[10px] text-white/20 whitespace-nowrap">{fmtApptDate(appt.date)}</span>
+                        </div>
+                      ))}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-semibold text-white/80 truncate">{appt.name}</div>
-                      <div className="text-[10px] text-white/35">{appt.type}</div>
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <div className="text-xs font-bold text-white/60">{appt.time}</div>
-                      <div className="text-[10px] mt-0.5" style={{ color:sc.color }}>{sc.label}</div>
-                    </div>
-                  </div>
-                )
-              })}
-              <div style={{ borderTop:'1px solid rgba(255,255,255,0.05)', marginTop:4, paddingTop:8 }}>
-                {appointments.filter(a=>a.upcoming&&a.date!=='2026-05-22').map(appt=>(
-                  <div key={appt.id} className="flex items-center gap-2 py-1.5">
-                    <Clock className="w-3 h-3 text-white/20 flex-shrink-0" />
-                    <span className="text-xs text-white/35 truncate flex-1">{appt.name} · {appt.type}</span>
-                    <span className="text-[10px] text-white/20 whitespace-nowrap">{fmtApptDate(appt.date)}</span>
-                  </div>
-                ))}
-              </div>
+                  )}
+                </>
+              )}
             </div>
           </Card>
         </motion.div>
@@ -566,29 +675,37 @@ function OverviewSection({ onSelectLead, leads, appointments, activity }: { onSe
       {/* Recent leads (clickable) */}
       <motion.div initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.65 }}>
         <Card>
-          <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+          <div className="flex items-center justify-between px-5 py-4"
+            style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
             <h2 className="text-sm font-bold text-white">Recent Leads</h2>
             <span className="text-xs text-white/30">Click to view details</span>
           </div>
-          <div className="divide-y divide-white/[0.04]">
-            {leads.slice(0,5).map(lead => (
-              <motion.div key={lead.id} whileHover={{ background:'rgba(139,92,246,0.05)' }}
-                className="flex items-center gap-4 px-5 py-3.5 cursor-pointer transition-colors"
-                onClick={() => onSelectLead(lead.id)}>
-                <div className="w-8 h-8 rounded-xl flex items-center justify-center text-[11px] font-black text-white flex-shrink-0"
-                  style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
-                  {initials(lead.name)}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-white/80 truncate">{lead.name}</div>
-                  <div className="text-xs text-white/30 truncate">{lead.company}</div>
-                </div>
-                <ScoreBadge score={lead.score} label={lead.scoreLabel} />
-                <StatusBadge status={lead.status} />
-                <ChevronRight className="w-4 h-4 text-white/20 flex-shrink-0" />
-              </motion.div>
-            ))}
-          </div>
+          {leads.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-10 gap-2">
+              <Users className="w-7 h-7 text-white/10" />
+              <p className="text-sm text-white/25 font-medium">No leads yet</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-white/[0.04]">
+              {leads.slice(0, 5).map(lead => (
+                <motion.div key={lead.id} whileHover={{ background:'rgba(139,92,246,0.05)' }}
+                  className="flex items-center gap-4 px-5 py-3.5 cursor-pointer transition-colors"
+                  onClick={() => onSelectLead(lead.id)}>
+                  <div className="w-8 h-8 rounded-xl flex items-center justify-center text-[11px] font-black text-white flex-shrink-0"
+                    style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
+                    {initials(lead.name)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-white/80 truncate">{lead.name}</div>
+                    <div className="text-xs text-white/30 truncate">{lead.company}</div>
+                  </div>
+                  <ScoreBadge score={lead.score} label={lead.scoreLabel} />
+                  <StatusBadge status={lead.status} />
+                  <ChevronRight className="w-4 h-4 text-white/20 flex-shrink-0" />
+                </motion.div>
+              ))}
+            </div>
+          )}
         </Card>
       </motion.div>
     </div>
@@ -867,7 +984,7 @@ function AppointmentsSection({ appointments }: { appointments: Appointment[] }) 
 
 /* ─── Automation ─────────────────────────────────────────────── */
 
-function AutomationSection({ leads, integrations = [] }: { leads: Lead[]; integrations?: IntegrationRow[] }) {
+function AutomationSection({ leads, integrations = [], overviewMetrics }: { leads: Lead[]; integrations?: IntegrationRow[]; overviewMetrics?: OverviewMetrics }) {
   // Merge static display config with live stats from integrations_status table
   const enriched = AUTOMATIONS.map(a => {
     const row = integrations.find(r => r.integrationType === a.id)
@@ -883,10 +1000,21 @@ function AutomationSection({ leads, integrations = [] }: { leads: Lead[]; integr
     return { ...a, status: (row.status as typeof a.status) ?? a.status, lastActivity: lastAct, stat1Value: stats.s1, stat2Value: stats.s2 }
   })
 
+  const m = overviewMetrics
+  const revenueStr = m && m.estimatedRevenue > 0
+    ? m.estimatedRevenue >= 10000 ? `£${(m.estimatedRevenue / 1000).toFixed(1)}k` : `£${m.estimatedRevenue.toLocaleString()}`
+    : '—'
+  const perfCards: { label:string; value:string|number; sub:string; color:string; Icon:React.ComponentType<{className?:string;style?:React.CSSProperties}> }[] = [
+    { label:'Conversion Lift',  value: (m?.conversionLiftPct ?? 0) > 0 ? `+${m!.conversionLiftPct}%` : '—', sub:'vs prior week',      color:'#34d399', Icon:TrendingUp  },
+    { label:'Agent Time Saved', value: m ? `${m.agentTimeSavedHrs} hrs` : '—',                              sub:'this week (AI)',     color:'#60a5fa', Icon:Timer       },
+    { label:'Monthly Deals',    value: m?.monthlyDeals ?? 0,                                                 sub:'closed this month', color:'#a78bfa', Icon:CheckCircle },
+    { label:'Est. Revenue',     value: revenueStr,                                                           sub:'this month',        color:'#fbbf24', Icon:DollarSign  },
+  ]
+
   return (
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {PERF_DATA.map((p,i) => (
+        {perfCards.map((p,i) => (
           <motion.div key={p.label} initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.06 }}>
             <Card className="p-5 flex items-start gap-4">
               <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
@@ -1068,6 +1196,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
   const analytics        = initialData?.analytics?.length    ? initialData.analytics    : undefined
   const integrations     = initialData?.integrations                                   ?? []
   const analyticsSummary = initialData?.analyticsSummary
+  const overviewMetrics  = initialData?.overviewMetrics
 
   const selectedLead = useMemo(() => leads.find(l => l.id === selectedLeadId) ?? null, [leads, selectedLeadId])
   const handleSelectLead = useCallback((id: string) => setSelectedLeadId(id), [])
@@ -1124,12 +1253,12 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
             <motion.div key={section}
               initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-8 }}
               transition={{ duration:0.22 }}>
-              {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={leads} appointments={appointments} activity={activity} />}
+              {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={leads} appointments={appointments} activity={activity} overviewMetrics={overviewMetrics} />}
               {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} />}
               {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={leads} />}
               {section==='activity'     && <ActivitySection initialEvents={activity} />}
               {section==='appointments' && <AppointmentsSection appointments={appointments} />}
-              {section==='automation'   && <AutomationSection leads={leads} integrations={integrations} />}
+              {section==='automation'   && <AutomationSection leads={leads} integrations={integrations} overviewMetrics={overviewMetrics} />}
               {section==='settings'     && <SettingsSection />}
             </motion.div>
           </AnimatePresence>

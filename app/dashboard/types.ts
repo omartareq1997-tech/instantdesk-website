@@ -68,6 +68,19 @@ export interface AnalyticsDay {
   conversionRate: number   // 0-100 (percentage)
 }
 
+/** Computed overview KPIs derived from live Supabase tables. */
+export interface OverviewMetrics {
+  newLeadsThisWeek:      number   // leads created since this Monday
+  activeOpportunities:   number   // leads with status new | contacted | demo_booked
+  appointmentsThisWeek:  number   // appointments scheduled this Mon–Sun
+  emailsSentThisWeek:    number   // activity_events type='email' since this Monday
+  conversionRate:        number   // won / total leads * 100  (0–100)
+  conversionLiftPct:     number   // pct-point delta vs previous week avg (analytics_daily)
+  agentTimeSavedHrs:     number   // (messages_count / 2 * 3 min) / 60 for current week
+  monthlyDeals:          number   // leads won this calendar month
+  estimatedRevenue:      number   // monthlyDeals * £5 000 baseline
+}
+
 /** Computed analytics stats derived from live Supabase tables. */
 export interface AnalyticsSummary {
   totalConversations: number   // count(conversations)
@@ -97,4 +110,5 @@ export interface DashboardData {
   analytics:        AnalyticsDay[]
   integrations:     IntegrationRow[]
   analyticsSummary: AnalyticsSummary
+  overviewMetrics:  OverviewMetrics
 }

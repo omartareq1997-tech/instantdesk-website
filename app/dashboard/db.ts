@@ -152,7 +152,7 @@
 import { createServerClient } from '../lib/supabase-server'
 import type {
   DashboardData, Lead, Appointment, ActivityItem,
-  AnalyticsDay, IntegrationRow, AnalyticsSummary,
+  AnalyticsDay, IntegrationRow, AnalyticsSummary, OverviewMetrics,
   AutoState, LeadStatus, ScoreLabel, ApptStatus, ActivityType,
 } from './types'
 
@@ -555,6 +555,124 @@ export async function getAnalyticsSummary(clientId = DEMO_CLIENT_ID): Promise<An
   }
 }
 
+/* ─── Overview metrics ───────────────────────────────────────────── */
+
+/**
+ * Compute live KPIs for the Overview tab.
+ * Nine queries run in parallel; returns zeros on any error.
+ */
+export async function getOverviewMetrics(clientId = DEMO_CLIENT_ID): Promise<OverviewMetrics> {
+  const zero: OverviewMetrics = {
+    newLeadsThisWeek: 0, activeOpportunities: 0, appointmentsThisWeek: 0,
+    emailsSentThisWeek: 0, conversionRate: 0, conversionLiftPct: 0,
+    agentTimeSavedHrs: 0, monthlyDeals: 0, estimatedRevenue: 0,
+  }
+  try {
+    const sb  = createServerClient()
+    const now = new Date()
+
+    // Monday of the current week (UTC midnight)
+    const dow      = now.getUTCDay()                      // 0=Sun … 6=Sat
+    const daysBack = dow === 0 ? 6 : dow - 1
+    const thisMonday = new Date(Date.UTC(
+      now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysBack,
+    ))
+    const thisMondayISO  = thisMonday.toISOString()
+    const thisMondayDate = thisMondayISO.split('T')[0]
+
+    // Sunday of the current week
+    const thisSunday = new Date(thisMonday)
+    thisSunday.setUTCDate(thisMonday.getUTCDate() + 6)
+    thisSunday.setUTCHours(23, 59, 59, 999)
+    const thisSundayISO = thisSunday.toISOString()
+
+    // Monday of the previous week
+    const prevMonday = new Date(thisMonday)
+    prevMonday.setUTCDate(thisMonday.getUTCDate() - 7)
+    const prevMondayDate = prevMonday.toISOString().split('T')[0]
+
+    // Start of the current calendar month
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString()
+
+    type AnalyticsSlice = { messages_count?: number; conversion_rate?: number | null }
+
+    const [
+      newLeadsRes, activeOppRes, apptWeekRes, emailsWeekRes,
+      totalLeadsRes, wonLeadsRes, wonMonthRes,
+      thisWeekAnalytics, prevWeekAnalytics,
+    ] = await Promise.all([
+      // new leads since Monday
+      sb.from('leads').select('*', { count:'exact', head:true })
+        .eq('client_id', clientId).gte('created_at', thisMondayISO),
+
+      // active pipeline (not closed)
+      sb.from('leads').select('*', { count:'exact', head:true })
+        .eq('client_id', clientId).in('status', ['new','contacted','demo_booked']),
+
+      // appointments scheduled this week
+      sb.from('appointments').select('*', { count:'exact', head:true })
+        .eq('client_id', clientId)
+        .gte('scheduled_at', thisMondayISO)
+        .lte('scheduled_at', thisSundayISO),
+
+      // emails sent via automation this week
+      sb.from('activity_events').select('*', { count:'exact', head:true })
+        .eq('client_id', clientId).eq('type', 'email').gte('created_at', thisMondayISO),
+
+      // total leads ever
+      sb.from('leads').select('*', { count:'exact', head:true })
+        .eq('client_id', clientId),
+
+      // won leads ever
+      sb.from('leads').select('*', { count:'exact', head:true })
+        .eq('client_id', clientId).eq('status', 'won'),
+
+      // won leads this month
+      sb.from('leads').select('*', { count:'exact', head:true })
+        .eq('client_id', clientId).eq('status', 'won').gte('updated_at', monthStart),
+
+      // this week's analytics_daily rows (messages_count + conversion_rate)
+      sb.from('analytics_daily').select('messages_count,conversion_rate')
+        .eq('client_id', clientId).gte('date', thisMondayDate),
+
+      // previous week's analytics_daily rows (conversion_rate only)
+      sb.from('analytics_daily').select('conversion_rate')
+        .eq('client_id', clientId).gte('date', prevMondayDate).lt('date', thisMondayDate),
+    ])
+
+    const thisRows = (thisWeekAnalytics.data ?? []) as AnalyticsSlice[]
+    const prevRows = (prevWeekAnalytics.data ?? []) as AnalyticsSlice[]
+
+    const thisWeekMsgs    = thisRows.reduce((s, r) => s + (r.messages_count ?? 0), 0)
+    const thisWeekConvAvg = thisRows.length
+      ? thisRows.reduce((s, r) => s + (r.conversion_rate ?? 0), 0) / thisRows.length : 0
+    const prevWeekConvAvg = prevRows.length
+      ? prevRows.reduce((s, r) => s + (r.conversion_rate ?? 0), 0) / prevRows.length : 0
+
+    const total = totalLeadsRes.count ?? 0
+    const won   = wonLeadsRes.count   ?? 0
+
+    const monthlyDeals     = wonMonthRes.count ?? 0
+    const agentTimeSavedHrs = Math.round((thisWeekMsgs / 2 * 3) / 60 * 10) / 10
+    const conversionLiftPct = prevWeekConvAvg > 0
+      ? Math.round(thisWeekConvAvg - prevWeekConvAvg) : 0
+
+    return {
+      newLeadsThisWeek:     newLeadsRes.count    ?? 0,
+      activeOpportunities:  activeOppRes.count   ?? 0,
+      appointmentsThisWeek: apptWeekRes.count    ?? 0,
+      emailsSentThisWeek:   emailsWeekRes.count  ?? 0,
+      conversionRate:       total > 0 ? Math.round((won / total) * 100) : 0,
+      conversionLiftPct,
+      agentTimeSavedHrs,
+      monthlyDeals,
+      estimatedRevenue:     monthlyDeals * 5000,
+    }
+  } catch {
+    return zero
+  }
+}
+
 /* ─── Composite fetch ────────────────────────────────────────────── */
 
 /**
@@ -563,13 +681,14 @@ export async function getAnalyticsSummary(clientId = DEMO_CLIENT_ID): Promise<An
  * so the dashboard always renders — even when Supabase is not yet set up.
  */
 export async function getDashboardData(clientId = DEMO_CLIENT_ID): Promise<DashboardData> {
-  const [leads, appointments, activity, analytics, integrations, analyticsSummary] = await Promise.all([
+  const [leads, appointments, activity, analytics, integrations, analyticsSummary, overviewMetrics] = await Promise.all([
     getClientLeads(clientId),
     getClientAppointments(clientId),
     getClientActivityEvents(clientId),
     getClientAnalytics(clientId),
     getIntegrationStatus(clientId),
     getAnalyticsSummary(clientId),
+    getOverviewMetrics(clientId),
   ])
-  return { leads, appointments, activity, analytics, integrations, analyticsSummary }
+  return { leads, appointments, activity, analytics, integrations, analyticsSummary, overviewMetrics }
 }

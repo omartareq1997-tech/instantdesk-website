@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { usePathname } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Bot, X, Send, Sparkles, Minimize2 } from 'lucide-react'
 import {
@@ -114,6 +115,7 @@ function Bubble({ msg }: { msg: Msg }) {
 /* ─── Main widget ────────────────────────────────────────── */
 
 export default function ChatWidget() {
+  const pathname = usePathname()
   const [isOpen,    setIsOpen]    = useState(false)
   const [messages,  setMessages]  = useState<Msg[]>([GREETING])
   const [isTyping,  setIsTyping]  = useState(false)
@@ -129,6 +131,9 @@ export default function ChatWidget() {
 
   /* Stable ID generator — avoids impure Date.now() in render context */
   const nextId = () => String(++msgIdRef.current)
+
+  /* Hide on admin pages */
+  if (pathname?.startsWith('/admin')) return null
 
   /* Scroll to bottom on new messages */
   useEffect(() => {

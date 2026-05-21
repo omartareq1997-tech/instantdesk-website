@@ -259,6 +259,17 @@ export default function LoginPage() {
           {' & '}
           <span className="text-white/35 hover:text-white/60 cursor-pointer transition-colors">Privacy Policy</span>
         </p>
+
+        {/* Admin shortcut */}
+        <div className="flex items-center justify-center mt-4">
+          <Link
+            href="/admin"
+            className="flex items-center gap-1.5 text-xs text-white/20 hover:text-violet-400 transition-colors"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-violet-500/50" />
+            Admin Dashboard →
+          </Link>
+        </div>
       </motion.div>
     </div>
   )

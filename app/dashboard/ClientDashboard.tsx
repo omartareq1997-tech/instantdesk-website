@@ -12,13 +12,14 @@ import {
 } from 'lucide-react'
 import LeadPanel from './LeadPanel'
 import AnalyticsSection from './AnalyticsSection'
+import type { DashboardData, IntegrationRow } from './types'
 
 /* ─── Types ──────────────────────────────────────────────────── */
 
 type Section      = 'overview' | 'analytics' | 'pipeline' | 'activity' | 'appointments' | 'automation' | 'settings'
 type LeadStatus   = 'new' | 'contacted' | 'demo_booked' | 'won' | 'lost'
 type ScoreLabel   = 'hot' | 'warm' | 'cold'
-type ApptStatus   = 'confirmed' | 'pending' | 'completed'
+type ApptStatus   = 'confirmed' | 'pending' | 'completed' | 'cancelled'
 type ActivityType = 'sms' | 'appointment' | 'assignment' | 'email' | 'call'
 type NotifType    = 'lead' | 'booking' | 'ai' | 'alert'
 
@@ -122,9 +123,10 @@ const SCORE_CFG: Record<ScoreLabel, { label:string; color:string; bg:string; bor
 }
 
 const APPT_CFG: Record<ApptStatus, { label:string; color:string; bg:string }> = {
-  confirmed: { label:'Confirmed', color:'#34d399', bg:'rgba(52,211,153,0.10)'  },
-  pending:   { label:'Pending',   color:'#fbbf24', bg:'rgba(251,191,36,0.10)'  },
-  completed: { label:'Completed', color:'#60a5fa', bg:'rgba(96,165,250,0.10)'  },
+  confirmed:  { label:'Confirmed',  color:'#34d399', bg:'rgba(52,211,153,0.10)'  },
+  pending:    { label:'Pending',    color:'#fbbf24', bg:'rgba(251,191,36,0.10)'  },
+  completed:  { label:'Completed',  color:'#60a5fa', bg:'rgba(96,165,250,0.10)'  },
+  cancelled:  { label:'Cancelled',  color:'#f87171', bg:'rgba(248,113,113,0.10)' },
 }
 
 const ACTIVITY_CFG: Record<ActivityType, { color:string; bg:string; Icon: React.ComponentType<{className?:string;style?:React.CSSProperties}> }> = {
@@ -197,6 +199,16 @@ function initials(name:string) { return name.split(' ').map(n=>n[0]).join('').sl
 function agentInitials(n:string) { return n.trim().split(/[\s.]+/).filter(Boolean).map(p=>p[0]).join('').toUpperCase().slice(0,2) }
 function fmtDate(iso:string) { return new Date(iso).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) }
 function fmtApptDate(d:string) { return new Date(d).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) }
+function relativeTime(iso: string | null): string {
+  if (!iso) return 'recently'
+  const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
+  if (m < 1)  return 'Just now'
+  if (m < 60) return `${m} min ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h} hour${h > 1 ? 's' : ''} ago`
+  const d = Math.floor(h / 24)
+  return `${d} day${d > 1 ? 's' : ''} ago`
+}
 
 /* ─── Shared components ──────────────────────────────────────── */
 
@@ -431,8 +443,8 @@ function Sidebar({ active, onNav, open, onClose }: { active:Section; onNav:(s:Se
 
 /* ─── Overview ───────────────────────────────────────────────── */
 
-function OverviewSection({ onSelectLead }: { onSelectLead:(id:string)=>void }) {
-  const upcoming22 = APPOINTMENTS.filter(a => a.upcoming && a.date==='2026-05-22').sort((a,b)=>a.time.localeCompare(b.time))
+function OverviewSection({ onSelectLead, leads, appointments, activity }: { onSelectLead:(id:string)=>void; leads:Lead[]; appointments:Appointment[]; activity:ActivityItem[] }) {
+  const upcoming22 = appointments.filter(a => a.upcoming && a.date==='2026-05-22').sort((a,b)=>a.time.localeCompare(b.time))
 
   return (
     <div className="flex flex-col gap-6">
@@ -488,7 +500,7 @@ function OverviewSection({ onSelectLead }: { onSelectLead:(id:string)=>void }) {
               </div>
             </div>
             <div className="divide-y divide-white/[0.04]">
-              {SEED_ACTIVITY.slice(0,5).map((item,i) => {
+              {activity.slice(0,5).map((item,i) => {
                 const cfg = ACTIVITY_CFG[item.type]
                 return (
                   <motion.div key={item.id} initial={{ opacity:0, x:-8 }} animate={{ opacity:1, x:0 }} transition={{ delay:0.55+i*0.04 }}
@@ -538,7 +550,7 @@ function OverviewSection({ onSelectLead }: { onSelectLead:(id:string)=>void }) {
                 )
               })}
               <div style={{ borderTop:'1px solid rgba(255,255,255,0.05)', marginTop:4, paddingTop:8 }}>
-                {APPOINTMENTS.filter(a=>a.upcoming&&a.date!=='2026-05-22').map(appt=>(
+                {appointments.filter(a=>a.upcoming&&a.date!=='2026-05-22').map(appt=>(
                   <div key={appt.id} className="flex items-center gap-2 py-1.5">
                     <Clock className="w-3 h-3 text-white/20 flex-shrink-0" />
                     <span className="text-xs text-white/35 truncate flex-1">{appt.name} · {appt.type}</span>
@@ -559,7 +571,7 @@ function OverviewSection({ onSelectLead }: { onSelectLead:(id:string)=>void }) {
             <span className="text-xs text-white/30">Click to view details</span>
           </div>
           <div className="divide-y divide-white/[0.04]">
-            {LEADS.slice(0,5).map(lead => (
+            {leads.slice(0,5).map(lead => (
               <motion.div key={lead.id} whileHover={{ background:'rgba(139,92,246,0.05)' }}
                 className="flex items-center gap-4 px-5 py-3.5 cursor-pointer transition-colors"
                 onClick={() => onSelectLead(lead.id)}>
@@ -585,18 +597,18 @@ function OverviewSection({ onSelectLead }: { onSelectLead:(id:string)=>void }) {
 
 /* ─── Pipeline ───────────────────────────────────────────────── */
 
-function PipelineSection({ onSelectLead }: { onSelectLead:(id:string)=>void }) {
+function PipelineSection({ onSelectLead, leads }: { onSelectLead:(id:string)=>void; leads:Lead[] }) {
   const [search, setSearch]           = useState('')
   const [scoreFilter, setScoreFilter] = useState<ScoreLabel|'all'>('all')
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
-    return LEADS.filter(l => {
+    return leads.filter(l => {
       if (scoreFilter!=='all' && l.scoreLabel!==scoreFilter) return false
       if (!q) return true
       return l.name.toLowerCase().includes(q) || l.company.toLowerCase().includes(q) || l.interest.toLowerCase().includes(q)
     }).sort((a,b) => b.score-a.score)
-  }, [search, scoreFilter])
+  }, [leads, search, scoreFilter])
 
   return (
     <Card>
@@ -687,10 +699,10 @@ function PipelineSection({ onSelectLead }: { onSelectLead:(id:string)=>void }) {
       </div>
 
       <div className="flex items-center justify-between px-5 py-3" style={{ borderTop:'1px solid rgba(255,255,255,0.05)' }}>
-        <span className="text-xs text-white/20">Showing {filtered.length} of {LEADS.length} · click a row to view details</span>
+        <span className="text-xs text-white/20">Showing {filtered.length} of {leads.length} · click a row to view details</span>
         <div className="flex gap-4 text-[10px]">
           {(['hot','warm','cold'] as ScoreLabel[]).map(s=>(
-            <span key={s} style={{ color:SCORE_CFG[s].color }}>{LEADS.filter(l=>l.scoreLabel===s).length} {SCORE_CFG[s].label}</span>
+            <span key={s} style={{ color:SCORE_CFG[s].color }}>{leads.filter(l=>l.scoreLabel===s).length} {SCORE_CFG[s].label}</span>
           ))}
         </div>
       </div>
@@ -700,8 +712,8 @@ function PipelineSection({ onSelectLead }: { onSelectLead:(id:string)=>void }) {
 
 /* ─── Real-time Activity Feed ────────────────────────────────── */
 
-function ActivitySection() {
-  const [feed, setFeed] = useState<ActivityItem[]>(SEED_ACTIVITY)
+function ActivitySection({ initialEvents = SEED_ACTIVITY }: { initialEvents?: ActivityItem[] }) {
+  const [feed, setFeed] = useState<ActivityItem[]>(initialEvents)
 
   useEffect(() => {
     let poolIdx = 0
@@ -765,7 +777,7 @@ function ActivitySection() {
 
 /* ─── Appointments ───────────────────────────────────────────── */
 
-function AppointmentsSection() {
+function AppointmentsSection({ appointments }: { appointments: Appointment[] }) {
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
@@ -778,7 +790,7 @@ function AppointmentsSection() {
 
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {WEEK.map(day => {
-          const dayAppts = APPOINTMENTS.filter(a=>a.date===day.iso)
+          const dayAppts = appointments.filter(a=>a.date===day.iso)
           return (
             <Card key={day.label} className={(day as {today?:boolean}).today?'ring-1 ring-violet-500/25':''}>
               <div className="flex items-center justify-between px-3 py-2.5"
@@ -823,7 +835,7 @@ function AppointmentsSection() {
           <span className="text-xs text-white/30">Beyond this week</span>
         </div>
         <div className="divide-y divide-white/[0.04]">
-          {APPOINTMENTS.filter(a=>!WEEK.some(d=>d.iso===a.date)).map((appt,i) => {
+          {appointments.filter(a=>!WEEK.some(d=>d.iso===a.date)).map((appt,i) => {
             const sc = APPT_CFG[appt.status]
             return (
               <motion.div key={appt.id} initial={{ opacity:0, y:6 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.05 }}
@@ -855,7 +867,22 @@ function AppointmentsSection() {
 
 /* ─── Automation ─────────────────────────────────────────────── */
 
-function AutomationSection() {
+function AutomationSection({ leads, integrations = [] }: { leads: Lead[]; integrations?: IntegrationRow[] }) {
+  // Merge static display config with live stats from integrations_status table
+  const enriched = AUTOMATIONS.map(a => {
+    const row = integrations.find(r => r.integrationType === a.id)
+    if (!row) return a
+    const lastAct = relativeTime(row.lastActivityAt)
+    const statsByType: Record<string, { s1: string; s2: string }> = {
+      whatsapp: { s1: String(row.messagesWeek), s2: String(row.leadsCaptured) },
+      webchat:  { s1: String(row.messagesWeek), s2: String(row.leadsCaptured) },
+      email:    { s1: String(row.messagesWeek), s2: String(row.leadsCaptured) },
+      crm:      { s1: String(row.leadsCaptured), s2: lastAct                  },
+    }
+    const stats = statsByType[a.id] ?? { s1: a.stat1Value, s2: a.stat2Value }
+    return { ...a, status: (row.status as typeof a.status) ?? a.status, lastActivity: lastAct, stat1Value: stats.s1, stat2Value: stats.s2 }
+  })
+
   return (
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -877,7 +904,7 @@ function AutomationSection() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {AUTOMATIONS.map((a,i) => (
+        {enriched.map((a,i) => (
           <motion.div key={a.id} initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.07 }}>
             <motion.div whileHover={{ y:-2 }} className="rounded-2xl p-6 flex flex-col gap-4"
               style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}>
@@ -938,7 +965,7 @@ function AutomationSection() {
               ))}
             </tr></thead>
             <tbody className="divide-y divide-white/[0.04]">
-              {LEADS.map((lead,i)=>(
+              {leads.map((lead,i)=>(
                 <motion.tr key={lead.id} initial={{ opacity:0, y:4 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.03 }}
                   style={{ background:'transparent' }}
                   onMouseEnter={e=>(e.currentTarget.style.background='rgba(255,255,255,0.02)')}
@@ -1026,13 +1053,22 @@ function SettingsSection() {
 
 /* ─── Main ───────────────────────────────────────────────────── */
 
-export default function ClientDashboard() {
+export default function ClientDashboard({ initialData }: { initialData?: DashboardData }) {
   const [section,       setSection]       = useState<Section>('overview')
   const [sidebarOpen,   setSidebarOpen]   = useState(false)
   const [selectedLeadId,setSelectedLeadId]= useState<string | null>(null)
   const [notifs,        setNotifs]        = useState<Notification[]>(SEED_NOTIFS)
 
-  const selectedLead = useMemo(() => LEADS.find(l => l.id === selectedLeadId) ?? null, [selectedLeadId])
+  // Merge server-fetched data with local mock fallbacks.
+  // getDashboardData() in page.tsx already falls back to mock if Supabase is empty,
+  // but the double-fallback here keeps the UI intact if initialData is ever undefined.
+  const leads        = initialData?.leads?.length        ? initialData.leads        : LEADS
+  const appointments = initialData?.appointments?.length ? initialData.appointments : APPOINTMENTS
+  const activity     = initialData?.activity?.length     ? initialData.activity     : SEED_ACTIVITY
+  const analytics    = initialData?.analytics?.length    ? initialData.analytics    : undefined
+  const integrations = initialData?.integrations                                   ?? []
+
+  const selectedLead = useMemo(() => leads.find(l => l.id === selectedLeadId) ?? null, [leads, selectedLeadId])
   const handleSelectLead = useCallback((id: string) => setSelectedLeadId(id), [])
   const meta = SECTION_META[section]
 
@@ -1087,12 +1123,12 @@ export default function ClientDashboard() {
             <motion.div key={section}
               initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-8 }}
               transition={{ duration:0.22 }}>
-              {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} />}
-              {section==='analytics'    && <AnalyticsSection />}
-              {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} />}
-              {section==='activity'     && <ActivitySection />}
-              {section==='appointments' && <AppointmentsSection />}
-              {section==='automation'   && <AutomationSection />}
+              {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={leads} appointments={appointments} activity={activity} />}
+              {section==='analytics'    && <AnalyticsSection analytics={analytics} />}
+              {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={leads} />}
+              {section==='activity'     && <ActivitySection initialEvents={activity} />}
+              {section==='appointments' && <AppointmentsSection appointments={appointments} />}
+              {section==='automation'   && <AutomationSection leads={leads} integrations={integrations} />}
               {section==='settings'     && <SettingsSection />}
             </motion.div>
           </AnimatePresence>

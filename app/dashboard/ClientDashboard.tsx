@@ -4,105 +4,93 @@ import { useState, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Zap, LayoutDashboard, Users, MessageSquare, Calendar,
-  Settings, LogOut, TrendingUp, TrendingDown,
-  Mail, Phone, Globe, CheckCircle, AlertCircle,
-  Clock, Search, X, BarChart2, MessageCircle,
-  Database, Activity, RefreshCw, ArrowUpRight,
-  Bell, Shield, Link2, ChevronRight,
+  Settings, LogOut, TrendingUp, TrendingDown, Mail, Phone,
+  CheckCircle, AlertCircle, Clock, Search, X, BarChart2,
+  MessageCircle, Database, Activity, RefreshCw,
+  Bell, Shield, Link2, Download, ChevronRight,
+  Target, DollarSign, Timer,
 } from 'lucide-react'
 
-/* ── Types ───────────────────────────────────────────────────── */
+/* ─── Types ──────────────────────────────────────────────────── */
 
-type Section = 'overview' | 'leads' | 'chat' | 'appointments' | 'automation' | 'settings'
-type LeadStatus = 'new' | 'contacted' | 'demo_booked' | 'won' | 'lost'
-type ApptStatus = 'confirmed' | 'pending' | 'completed'
-type Channel    = 'WhatsApp' | 'Website' | 'Email'
+type Section     = 'overview' | 'pipeline' | 'activity' | 'appointments' | 'automation' | 'settings'
+type LeadStatus  = 'new' | 'contacted' | 'demo_booked' | 'won' | 'lost'
+type ScoreLabel  = 'hot' | 'warm' | 'cold'
+type ApptStatus  = 'confirmed' | 'pending' | 'completed'
+type ActivityType = 'sms' | 'appointment' | 'assignment' | 'email' | 'call'
+
+interface AutoState {
+  aiSms:       'sent' | 'scheduled' | 'off'
+  emailSeq:    'active' | 'paused' | 'not_started'
+  nurture:     'active' | 'not_started'
+  smartAssign: 'assigned' | 'unassigned'
+  autoCall:    'scheduled' | 'completed' | 'off'
+}
 
 interface Lead {
-  id: string; name: string; company: string; email: string
-  phone: string; source: string; status: LeadStatus; date: string
-}
-interface Chat {
-  id: string; name: string; company: string; channel: Channel
-  lastMessage: string; time: string; unread: number
-}
-interface Appointment {
-  id: string; name: string; company: string; type: string
-  date: string; time: string; status: ApptStatus; upcoming: boolean
-}
-interface Automation {
-  id: string; label: string; description: string
-  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
-  status: 'active' | 'connected' | 'paused'
-  stat1Label: string; stat1Value: string
-  stat2Label: string; stat2Value: string
-  lastActivity: string; color: string
+  id: string; name: string; company: string
+  source: string; interest: string; assignedAgent: string
+  score: number; scoreLabel: ScoreLabel; status: LeadStatus
+  date: string; auto: AutoState
 }
 
-/* ── Mock Data ───────────────────────────────────────────────── */
+interface ActivityItem {
+  id: string; type: ActivityType
+  text: string; sub: string; time: string
+}
+
+interface Appointment {
+  id: string; name: string; company: string
+  type: string; date: string; time: string
+  status: ApptStatus; upcoming: boolean
+}
+
+/* ─── Mock Data ──────────────────────────────────────────────── */
 
 const LEADS: Lead[] = [
-  { id:'1',  name:'Sarah Mitchell',   company:'Orbit Digital',        email:'sarah.m@orbitdigital.io',    phone:'+44 7700 900123', source:'Website Chat', status:'demo_booked', date:'2026-05-21T09:15:00Z' },
-  { id:'2',  name:'James Okafor',     company:'Okafor & Co',          email:'james@okafor.co.uk',          phone:'+44 7911 123456', source:'WhatsApp',    status:'new',         date:'2026-05-21T08:42:00Z' },
-  { id:'3',  name:'Priya Sharma',     company:'GrowFast Ltd',         email:'priya.s@growfast.com',         phone:'+44 7800 456789', source:'Email',       status:'contacted',   date:'2026-05-20T14:30:00Z' },
-  { id:'4',  name:'Daniel Lee',       company:'Lee Consulting',       email:'daniel@leeconsult.com',        phone:'+44 7922 654321', source:'Website Chat', status:'won',         date:'2026-05-19T11:00:00Z' },
-  { id:'5',  name:'Amina Hassan',     company:'Hassan Group',         email:'amina@hassangroup.co',         phone:'+44 7833 789012', source:'WhatsApp',    status:'contacted',   date:'2026-05-18T16:20:00Z' },
-  { id:'6',  name:'Tom Reynolds',     company:'Reynolds Tech',        email:'tom@reynoldstech.io',          phone:'+44 7744 234567', source:'Website Chat', status:'new',         date:'2026-05-17T10:45:00Z' },
-  { id:'7',  name:'Chen Wei',         company:'Wei Innovations',      email:'chen@weiinnovations.com',      phone:'+44 7955 345678', source:'WhatsApp',    status:'demo_booked', date:'2026-05-16T09:30:00Z' },
-  { id:'8',  name:'Fatima Al-Rashid', company:'Al-Rashid Partners',  email:'fatima@alrashid.ae',           phone:'+971 50 123 4567', source:'Email',      status:'won',         date:'2026-05-15T13:00:00Z' },
-  { id:'9',  name:'Marcus Brown',     company:'Brown & Associates',   email:'marcus@brownassoc.co.uk',      phone:'+44 7866 456789', source:'Website Chat', status:'lost',        date:'2026-05-14T15:30:00Z' },
-  { id:'10', name:'Nina Kowalski',    company:'Kowalski Design',      email:'nina@kowalskidesign.pl',       phone:'+48 601 234 567', source:'WhatsApp',    status:'contacted',   date:'2026-05-13T11:15:00Z' },
+  { id:'1',  name:'Sarah Mitchell',   company:'Orbit Digital',       source:'Website Chat', interest:'AI Receptionist',    assignedAgent:'Priya S.',  score:92, scoreLabel:'hot',  status:'demo_booked', date:'2026-05-21T09:15:00Z', auto:{ aiSms:'sent',      emailSeq:'active',      nurture:'not_started', smartAssign:'assigned',   autoCall:'off'       }},
+  { id:'2',  name:'James Okafor',     company:'Okafor & Co',         source:'WhatsApp',     interest:'WhatsApp Automation', assignedAgent:'James M.',  score:78, scoreLabel:'hot',  status:'new',         date:'2026-05-21T08:42:00Z', auto:{ aiSms:'sent',      emailSeq:'not_started', nurture:'not_started', smartAssign:'assigned',   autoCall:'scheduled' }},
+  { id:'3',  name:'Priya Sharma',     company:'GrowFast Ltd',        source:'Email',        interest:'Full Suite',          assignedAgent:'Priya S.',  score:61, scoreLabel:'warm', status:'contacted',   date:'2026-05-20T14:30:00Z', auto:{ aiSms:'scheduled', emailSeq:'active',      nurture:'active',      smartAssign:'assigned',   autoCall:'off'       }},
+  { id:'4',  name:'Daniel Lee',       company:'Lee Consulting',      source:'Website Chat', interest:'Lead Capture',        assignedAgent:'Daniel C.', score:55, scoreLabel:'warm', status:'won',         date:'2026-05-19T11:00:00Z', auto:{ aiSms:'off',       emailSeq:'paused',      nurture:'active',      smartAssign:'assigned',   autoCall:'completed' }},
+  { id:'5',  name:'Amina Hassan',     company:'Hassan Group',        source:'WhatsApp',     interest:'AI Receptionist',    assignedAgent:'Priya S.',  score:48, scoreLabel:'warm', status:'contacted',   date:'2026-05-18T16:20:00Z', auto:{ aiSms:'sent',      emailSeq:'active',      nurture:'not_started', smartAssign:'assigned',   autoCall:'off'       }},
+  { id:'6',  name:'Tom Reynolds',     company:'Reynolds Tech',       source:'Website Chat', interest:'WhatsApp Automation', assignedAgent:'James M.',  score:35, scoreLabel:'cold', status:'new',         date:'2026-05-17T10:45:00Z', auto:{ aiSms:'scheduled', emailSeq:'not_started', nurture:'not_started', smartAssign:'unassigned', autoCall:'off'       }},
+  { id:'7',  name:'Chen Wei',         company:'Wei Innovations',     source:'WhatsApp',     interest:'Full Suite',          assignedAgent:'Daniel C.', score:83, scoreLabel:'hot',  status:'demo_booked', date:'2026-05-16T09:30:00Z', auto:{ aiSms:'sent',      emailSeq:'active',      nurture:'not_started', smartAssign:'assigned',   autoCall:'scheduled' }},
+  { id:'8',  name:'Fatima Al-Rashid', company:'Al-Rashid Partners',  source:'Email',        interest:'Enterprise Pack',     assignedAgent:'Sarah K.',  score:90, scoreLabel:'hot',  status:'won',         date:'2026-05-15T13:00:00Z', auto:{ aiSms:'off',       emailSeq:'paused',      nurture:'active',      smartAssign:'assigned',   autoCall:'completed' }},
+  { id:'9',  name:'Marcus Brown',     company:'Brown & Associates',  source:'Website Chat', interest:'Lead Capture',        assignedAgent:'Sarah K.',  score:22, scoreLabel:'cold', status:'lost',        date:'2026-05-14T15:30:00Z', auto:{ aiSms:'off',       emailSeq:'paused',      nurture:'not_started', smartAssign:'assigned',   autoCall:'off'       }},
+  { id:'10', name:'Nina Kowalski',    company:'Kowalski Design',     source:'WhatsApp',     interest:'WhatsApp Automation', assignedAgent:'James M.',  score:44, scoreLabel:'warm', status:'contacted',   date:'2026-05-13T11:15:00Z', auto:{ aiSms:'sent',      emailSeq:'active',      nurture:'not_started', smartAssign:'assigned',   autoCall:'off'       }},
 ]
 
-const CHATS: Chat[] = [
-  { id:'1', name:'Sarah Mitchell',   company:'Orbit Digital',   channel:'WhatsApp', lastMessage:"Perfect, I'll join the call at 3pm tomorrow",             time:'09:15',     unread:0 },
-  { id:'2', name:'James Okafor',     company:'Okafor & Co',     channel:'WhatsApp', lastMessage:"Hi, I'm interested in your AI receptionist service",        time:'08:42',     unread:1 },
-  { id:'3', name:'Tom Reynolds',     company:'Reynolds Tech',   channel:'Website',  lastMessage:"Does this integrate with our existing booking system?",      time:'Yesterday', unread:0 },
-  { id:'4', name:'Chen Wei',         company:'Wei Innovations', channel:'WhatsApp', lastMessage:"When exactly is the demo scheduled?",                        time:'Mon',       unread:0 },
-  { id:'5', name:'Amina Hassan',     company:'Hassan Group',    channel:'Email',    lastMessage:"Please send more details about enterprise pricing",           time:'Mon',       unread:0 },
+const ACTIVITY: ActivityItem[] = [
+  { id:'1',  type:'sms',         text:'AI SMS sent to James Okafor',                sub:'WhatsApp · auto-triggered on sign-up',        time:'2 min ago'   },
+  { id:'2',  type:'appointment', text:'Demo call booked — Sarah Mitchell',          sub:'Thu 22 May · 3:00 PM · confirmed',            time:'10 min ago'  },
+  { id:'3',  type:'assignment',  text:'Lead assigned to Priya S.',                  sub:'Chen Wei · smart assignment by score',        time:'18 min ago'  },
+  { id:'4',  type:'email',       text:'Email sequence triggered — Tom Reynolds',    sub:'Follow-up sequence day 1 sent',               time:'32 min ago'  },
+  { id:'5',  type:'sms',         text:'Follow-up SMS sent to Nina Kowalski',        sub:'WhatsApp · day 3 drip sequence',              time:'1 hour ago'  },
+  { id:'6',  type:'appointment', text:'Discovery call booked — Priya Sharma',       sub:'Fri 23 May · 2:00 PM · pending confirmation', time:'2 hours ago' },
+  { id:'7',  type:'assignment',  text:'Smart assignment — Amina Hassan → Priya S.', sub:'Based on availability score and territory',   time:'3 hours ago' },
+  { id:'8',  type:'email',       text:'Nurture sequence started — Marcus Brown',    sub:'30-day drip campaign initiated',              time:'5 hours ago' },
+  { id:'9',  type:'call',        text:'Auto-call completed — Daniel Lee',           sub:'Duration: 4 min 32 sec · outcome logged',    time:'Yesterday'   },
+  { id:'10', type:'email',       text:'Welcome email sent — James Okafor',          sub:'Instant auto-response triggered',             time:'Yesterday'   },
 ]
 
 const APPOINTMENTS: Appointment[] = [
-  { id:'1', name:'Sarah Mitchell',   company:'Orbit Digital',      type:'Demo Call',       date:'2026-05-22', time:'15:00', status:'confirmed', upcoming:true  },
-  { id:'2', name:'Chen Wei',         company:'Wei Innovations',    type:'Demo Call',       date:'2026-05-23', time:'10:00', status:'confirmed', upcoming:true  },
-  { id:'3', name:'Priya Sharma',     company:'GrowFast Ltd',       type:'Discovery Call',  date:'2026-05-24', time:'14:00', status:'pending',   upcoming:true  },
-  { id:'4', name:'Tom Reynolds',     company:'Reynolds Tech',      type:'Discovery Call',  date:'2026-05-28', time:'16:00', status:'pending',   upcoming:true  },
-  { id:'5', name:'Daniel Lee',       company:'Lee Consulting',     type:'Onboarding',      date:'2026-05-15', time:'11:00', status:'completed', upcoming:false },
-  { id:'6', name:'Fatima Al-Rashid', company:'Al-Rashid Partners', type:'Onboarding',      date:'2026-05-10', time:'09:00', status:'completed', upcoming:false },
+  { id:'1', name:'Fatima Al-Rashid', company:'Al-Rashid Partners', type:'Onboarding',      date:'2026-05-18', time:'09:00', status:'completed', upcoming:false },
+  { id:'2', name:'Daniel Lee',       company:'Lee Consulting',     type:'Onboarding',      date:'2026-05-19', time:'11:00', status:'completed', upcoming:false },
+  { id:'3', name:'Chen Wei',         company:'Wei Innovations',    type:'Demo Call',       date:'2026-05-22', time:'10:00', status:'confirmed', upcoming:true  },
+  { id:'4', name:'Sarah Mitchell',   company:'Orbit Digital',      type:'Demo Call',       date:'2026-05-22', time:'15:00', status:'confirmed', upcoming:true  },
+  { id:'5', name:'Priya Sharma',     company:'GrowFast Ltd',       type:'Discovery Call',  date:'2026-05-23', time:'14:00', status:'pending',   upcoming:true  },
+  { id:'6', name:'Tom Reynolds',     company:'Reynolds Tech',      type:'Discovery Call',  date:'2026-05-28', time:'16:00', status:'pending',   upcoming:true  },
 ]
 
-const AUTOMATIONS: Automation[] = [
-  {
-    id:'whatsapp', label:'WhatsApp Bot', color:'#34d399', icon: MessageCircle,
-    description:'Auto-replies and lead capture via WhatsApp Business API',
-    status:'active', lastActivity:'2 min ago',
-    stat1Label:'Messages this week', stat1Value:'127',
-    stat2Label:'Leads captured',     stat2Value:'8',
-  },
-  {
-    id:'webchat', label:'Website Chat Widget', color:'#60a5fa', icon: MessageSquare,
-    description:'Embedded live chat on your website for instant visitor engagement',
-    status:'active', lastActivity:'8 min ago',
-    stat1Label:'Chats this week', stat1Value:'89',
-    stat2Label:'Leads captured',  stat2Value:'5',
-  },
-  {
-    id:'email', label:'Email Follow-up', color:'#fbbf24', icon: Mail,
-    description:'Automated follow-up sequences for leads that haven\'t responded',
-    status:'active', lastActivity:'1 hour ago',
-    stat1Label:'Emails sent', stat1Value:'34',
-    stat2Label:'Open rate',   stat2Value:'68%',
-  },
-  {
-    id:'crm', label:'Google Sheets / CRM', color:'#a78bfa', icon: Database,
-    description:'All leads and conversations synced automatically to your spreadsheet',
-    status:'connected', lastActivity:'5 min ago',
-    stat1Label:'Records synced', stat1Value:'47',
-    stat2Label:'Last sync',      stat2Value:'5 min ago',
-  },
+const WEEK: { label: string; date: string; iso: string; today?: true }[] = [
+  { label:'Mon', date:'18 May', iso:'2026-05-18' },
+  { label:'Tue', date:'19 May', iso:'2026-05-19' },
+  { label:'Wed', date:'20 May', iso:'2026-05-20' },
+  { label:'Thu', date:'21 May', iso:'2026-05-21', today:true },
+  { label:'Fri', date:'22 May', iso:'2026-05-22' },
 ]
 
-/* ── Constants ───────────────────────────────────────────────── */
+/* ─── Config ─────────────────────────────────────────────────── */
 
 const STATUS_CFG: Record<LeadStatus, { label: string; color: string; bg: string; border: string }> = {
   new:         { label:'New',         color:'#a78bfa', bg:'rgba(167,139,250,0.10)', border:'rgba(167,139,250,0.25)' },
@@ -112,42 +100,68 @@ const STATUS_CFG: Record<LeadStatus, { label: string; color: string; bg: string;
   lost:        { label:'Lost',        color:'#f87171', bg:'rgba(248,113,113,0.10)', border:'rgba(248,113,113,0.25)' },
 }
 
+const SCORE_CFG: Record<ScoreLabel, { label: string; color: string; bg: string; border: string }> = {
+  hot:  { label:'Hot',  color:'#f87171', bg:'rgba(248,113,113,0.12)', border:'rgba(248,113,113,0.30)' },
+  warm: { label:'Warm', color:'#fb923c', bg:'rgba(251,146,60,0.12)',  border:'rgba(251,146,60,0.30)'  },
+  cold: { label:'Cold', color:'#60a5fa', bg:'rgba(96,165,250,0.12)',  border:'rgba(96,165,250,0.30)'  },
+}
+
 const APPT_CFG: Record<ApptStatus, { label: string; color: string; bg: string }> = {
   confirmed: { label:'Confirmed', color:'#34d399', bg:'rgba(52,211,153,0.10)'  },
   pending:   { label:'Pending',   color:'#fbbf24', bg:'rgba(251,191,36,0.10)'  },
   completed: { label:'Completed', color:'#60a5fa', bg:'rgba(96,165,250,0.10)'  },
 }
 
-const CHANNEL_CFG: Record<Channel, { color: string; bg: string }> = {
-  WhatsApp: { color:'#34d399', bg:'rgba(52,211,153,0.10)'   },
-  Website:  { color:'#60a5fa', bg:'rgba(96,165,250,0.10)'   },
-  Email:    { color:'#fbbf24', bg:'rgba(251,191,36,0.10)'   },
+const ACTIVITY_CFG: Record<ActivityType, { color: string; bg: string; Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }> }> = {
+  sms:         { color:'#34d399', bg:'rgba(52,211,153,0.12)',  Icon: MessageCircle },
+  appointment: { color:'#60a5fa', bg:'rgba(96,165,250,0.12)',  Icon: Calendar      },
+  assignment:  { color:'#a78bfa', bg:'rgba(167,139,250,0.12)', Icon: Users         },
+  email:       { color:'#fbbf24', bg:'rgba(251,191,36,0.12)',  Icon: Mail          },
+  call:        { color:'#fb923c', bg:'rgba(251,146,60,0.12)',  Icon: Phone         },
 }
 
-const NAV_ITEMS: { id: Section; label: string; icon: React.ComponentType<{ className?: string }>; badge?: number }[] = [
-  { id:'overview',     label:'Overview',      icon:LayoutDashboard },
-  { id:'leads',        label:'Leads',         icon:Users,          badge:10 },
-  { id:'chat',         label:'Chat History',  icon:MessageSquare,  badge:1  },
-  { id:'appointments', label:'Appointments',  icon:Calendar        },
-  { id:'automation',   label:'Automation',    icon:Zap             },
-  { id:'settings',     label:'Settings',      icon:Settings        },
+const AUTO_COLOR: Record<string, string> = {
+  active:'#34d399', sent:'#34d399', completed:'#34d399', assigned:'#34d399',
+  scheduled:'#fbbf24',
+  not_started:'rgba(255,255,255,0.18)', paused:'rgba(255,255,255,0.18)',
+  off:'rgba(255,255,255,0.12)', unassigned:'rgba(255,255,255,0.15)',
+}
+
+const NAV_ITEMS: { id: Section; label: string; Icon: React.ComponentType<{ className?: string }>; badge?: number }[] = [
+  { id:'overview',     label:'Overview',       Icon:LayoutDashboard             },
+  { id:'pipeline',     label:'Lead Pipeline',  Icon:Users,       badge:10       },
+  { id:'activity',     label:'Activity Feed',  Icon:Activity                    },
+  { id:'appointments', label:'Appointments',   Icon:Calendar,    badge:4        },
+  { id:'automation',   label:'Automation',     Icon:Zap                         },
+  { id:'settings',     label:'Settings',       Icon:Settings                    },
 ]
 
-/* ── Helpers ─────────────────────────────────────────────────── */
-
-function initials(name: string) {
-  return name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
+const SECTION_META: Record<Section, { title: string; sub: string }> = {
+  overview:     { title:'Overview',       sub:'Performance snapshot and live activity'         },
+  pipeline:     { title:'Lead Pipeline',  sub:'All leads with scores and follow-up automation' },
+  activity:     { title:'Activity Feed',  sub:'Automated events across all channels'           },
+  appointments: { title:'Appointments',   sub:'Weekly schedule and upcoming bookings'          },
+  automation:   { title:'Automation',     sub:'Follow-up status per lead and performance'      },
+  settings:     { title:'Settings',       sub:'Account and portal configuration'               },
 }
 
-function fmtDate(iso: string) {
-  return new Date(iso).toLocaleDateString('en-GB', { day:'numeric', month:'short' })
-}
+/* ─── Helpers ────────────────────────────────────────────────── */
 
-function fmtApptDate(d: string) {
-  return new Date(d).toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' })
-}
+function initials(name: string) { return name.split(' ').map(n => n[0]).join('').slice(0,2).toUpperCase() }
+function agentInitials(n: string) { return n.trim().split(/[\s.]+/).filter(Boolean).map(p => p[0]).join('').toUpperCase().slice(0,2) }
+function fmtDate(iso: string) { return new Date(iso).toLocaleDateString('en-GB', { day:'numeric', month:'short' }) }
+function fmtApptDate(d: string) { return new Date(d).toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' }) }
 
-/* ── Shared Components ───────────────────────────────────────── */
+/* ─── Shared Components ──────────────────────────────────────── */
+
+function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div className={`rounded-2xl ${className}`}
+      style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}>
+      {children}
+    </div>
+  )
+}
 
 function StatusBadge({ status }: { status: LeadStatus }) {
   const c = STATUS_CFG[status]
@@ -160,23 +174,80 @@ function StatusBadge({ status }: { status: LeadStatus }) {
   )
 }
 
-function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+function ScoreBadge({ score, label }: { score: number; label: ScoreLabel }) {
+  const c = SCORE_CFG[label]
   return (
-    <div className={`rounded-2xl ${className}`}
-      style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}>
-      {children}
+    <div className="flex items-center gap-2">
+      <span className="text-sm font-black" style={{ color:c.color }}>{score}</span>
+      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide"
+        style={{ color:c.color, background:c.bg, border:`1px solid ${c.border}` }}>
+        {c.label}
+      </span>
     </div>
   )
 }
 
-/* ── Sidebar ─────────────────────────────────────────────────── */
+function ExportButton() {
+  const [s, setS] = useState<'idle'|'loading'|'done'>('idle')
+  const go = () => {
+    if (s !== 'idle') return
+    setS('loading')
+    setTimeout(() => { setS('done'); setTimeout(() => setS('idle'), 2000) }, 1400)
+  }
+  return (
+    <button onClick={go} className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all"
+      style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.25)', color:'#c4b5fd' }}>
+      {s === 'loading' ? (
+        <><motion.span className="w-3.5 h-3.5 rounded-full border-2 border-violet-400/30 border-t-violet-400"
+          animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity, ease:'linear' }} />Generating…</>
+      ) : s === 'done' ? (
+        <><CheckCircle className="w-3.5 h-3.5 text-emerald-400" /><span className="text-emerald-400">Exported!</span></>
+      ) : (
+        <><Download className="w-3.5 h-3.5" />Export Report</>
+      )}
+    </button>
+  )
+}
+
+/* Icon rendered from a data-object safely (capitalized prop destructure) */
+function DataIcon({ icon: Icon, className, style }: {
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
+  className?: string; style?: React.CSSProperties
+}) {
+  return <Icon className={className} style={style} />
+}
+
+function AutoDots({ auto }: { auto: AutoState }) {
+  const cols: { label: string; Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>; status: string }[] = [
+    { label:'AI SMS',       Icon:MessageCircle, status:auto.aiSms       },
+    { label:'Email Seq',    Icon:Mail,          status:auto.emailSeq    },
+    { label:'Nurture',      Icon:RefreshCw,     status:auto.nurture     },
+    { label:'Assignment',   Icon:Users,         status:auto.smartAssign },
+    { label:'Auto-call',    Icon:Phone,         status:auto.autoCall    },
+  ]
+  return (
+    <div className="flex items-center gap-1">
+      {cols.map(c => {
+        const color = AUTO_COLOR[c.status] || 'rgba(255,255,255,0.15)'
+        return (
+          <div key={c.label} title={`${c.label}: ${c.status.replace(/_/g,' ')}`}
+            className="w-6 h-6 rounded-md flex items-center justify-center"
+            style={{ background:`${color}18`, border:`1px solid ${color}35` }}>
+            <DataIcon icon={c.Icon} className="w-3 h-3" style={{ color }} />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/* ─── Sidebar ────────────────────────────────────────────────── */
 
 function Sidebar({ active, onNav }: { active: Section; onNav: (s: Section) => void }) {
   return (
     <aside className="w-[260px] flex-shrink-0 flex flex-col h-screen sticky top-0"
       style={{ background:'rgba(5,5,20,0.98)', borderRight:'1px solid rgba(255,255,255,0.06)' }}>
 
-      {/* Logo */}
       <div className="flex items-center gap-3 px-6 py-5" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
         <div className="w-8 h-8 rounded-lg flex items-center justify-center"
           style={{ background:'linear-gradient(135deg,#7c3aed,#2563eb)', boxShadow:'0 0 16px rgba(124,58,237,0.4)' }}>
@@ -188,7 +259,6 @@ function Sidebar({ active, onNav }: { active: Section; onNav: (s: Section) => vo
         </div>
       </div>
 
-      {/* Nav */}
       <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto">
         {NAV_ITEMS.map(item => {
           const isActive = active === item.id
@@ -198,23 +268,17 @@ function Sidebar({ active, onNav }: { active: Section; onNav: (s: Section) => vo
                 <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full"
                   style={{ background:'linear-gradient(180deg,#7c3aed,#2563eb)' }} />
               )}
-              <button
-                onClick={() => onNav(item.id)}
+              <button onClick={() => onNav(item.id)}
                 className="flex items-center gap-3 w-full pl-4 pr-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150"
-                style={isActive
-                  ? { background:'rgba(139,92,246,0.10)', color:'#c4b5fd' }
-                  : { color:'rgba(255,255,255,0.40)' }}
-              >
-                <item.icon className="w-4 h-4 flex-shrink-0" />
+                style={isActive ? { background:'rgba(139,92,246,0.10)', color:'#c4b5fd' } : { color:'rgba(255,255,255,0.40)' }}>
+                <item.Icon className="w-4 h-4 flex-shrink-0" />
                 <span className="flex-1 text-left">{item.label}</span>
                 {item.badge !== undefined && (
                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
                     style={{
                       background: isActive ? 'rgba(167,139,250,0.2)' : 'rgba(255,255,255,0.08)',
-                      color:      isActive ? '#c4b5fd'                 : 'rgba(255,255,255,0.35)',
-                    }}>
-                    {item.badge}
-                  </span>
+                      color:      isActive ? '#c4b5fd'                : 'rgba(255,255,255,0.35)',
+                    }}>{item.badge}</span>
                 )}
               </button>
             </div>
@@ -222,129 +286,164 @@ function Sidebar({ active, onNav }: { active: Section; onNav: (s: Section) => vo
         })}
       </nav>
 
-      {/* User + logout */}
       <div className="px-3 pb-5 pt-4" style={{ borderTop:'1px solid rgba(255,255,255,0.06)' }}>
-        <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1"
-          style={{ background:'rgba(255,255,255,0.03)' }}>
+        <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1" style={{ background:'rgba(255,255,255,0.03)' }}>
           <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-black text-white flex-shrink-0"
-            style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.6),rgba(37,99,235,0.5))' }}>
-            AT
-          </div>
+            style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.6),rgba(37,99,235,0.5))' }}>AT</div>
           <div className="min-w-0">
             <div className="text-xs font-semibold text-white/80 truncate">Alex Thompson</div>
             <div className="text-[10px] text-white/30 truncate">TechFlow Solutions</div>
           </div>
         </div>
-        <button
-          onClick={() => { window.location.href = '/client-login' }}
-          className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs text-white/35 hover:text-red-400 hover:bg-red-500/8 transition-all w-full"
-        >
-          <LogOut className="w-3.5 h-3.5" />
-          Log out
+        <button onClick={() => { window.location.href = '/client-login' }}
+          className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs text-white/35 hover:text-red-400 hover:bg-red-500/8 transition-all w-full">
+          <LogOut className="w-3.5 h-3.5" />Log out
         </button>
       </div>
     </aside>
   )
 }
 
-/* ── Overview Section ────────────────────────────────────────── */
+/* ─── Overview Section ───────────────────────────────────────── */
+
+const KPI_DATA: {
+  label: string; value: string | number; sub: string; color: string; trend: 'up' | 'down'
+  Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
+}[] = [
+  { label:'New Leads This Week',  value:8,     sub:'vs 6 last week',  color:'#a78bfa', trend:'up',   Icon:Users      },
+  { label:'Active Opportunities', value:6,     sub:'in pipeline',     color:'#60a5fa', trend:'up',   Icon:Target     },
+  { label:'Appointments Booked',  value:4,     sub:'this week',       color:'#34d399', trend:'up',   Icon:Calendar   },
+  { label:'Emails Sent',          value:34,    sub:'via automation',  color:'#fbbf24', trend:'up',   Icon:Mail       },
+  { label:'Conversion Rate',      value:'17%', sub:'+3% vs last wk', color:'#fb923c', trend:'up',   Icon:BarChart2  },
+]
+
+const PERF_DATA: {
+  label: string; value: string; sub: string; color: string
+  Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
+}[] = [
+  { label:'Conversion Lift',  value:'+34%',   sub:'vs manual follow-up',   color:'#34d399', Icon:TrendingUp  },
+  { label:'Agent Time Saved', value:'18 hrs', sub:'per week average',       color:'#60a5fa', Icon:Timer       },
+  { label:'Monthly Deals',    value:'8',      sub:'closed this month',      color:'#a78bfa', Icon:CheckCircle },
+  { label:'Est. Revenue',     value:'£47.2k', sub:'this month pipeline',    color:'#fbbf24', Icon:DollarSign  },
+]
 
 function OverviewSection() {
-  const kpis = [
-    { label:'Total Leads',      value:47,    sub:'+8 this week',     color:'#a78bfa', icon:Users,         trend:'up'   as const },
-    { label:'Booked Demos',     value:12,    sub:'4 upcoming',       color:'#60a5fa', icon:Calendar,      trend:'up'   as const },
-    { label:'Response Rate',    value:'94%', sub:'avg 4 min reply',  color:'#34d399', icon:Activity,      trend:'up'   as const },
-    { label:'Missed Messages',  value:3,     sub:'needs attention',  color:'#f87171', icon:AlertCircle,   trend:'down' as const },
-  ]
-
-  const recentLeads = LEADS.slice(0, 5)
+  const upcoming22 = APPOINTMENTS.filter(a => a.upcoming && a.date === '2026-05-22')
+    .sort((a,b) => a.time.localeCompare(b.time))
 
   return (
     <div className="flex flex-col gap-6">
-      {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {kpis.map((k, i) => (
-          <motion.div
-            key={k.label}
-            initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }}
-            transition={{ delay: i * 0.06, duration: 0.4 }}
-          >
-            <Card className="p-5 flex flex-col gap-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-semibold text-white/35 uppercase tracking-widest">{k.label}</span>
+      {/* 5 KPI cards */}
+      <div className="grid grid-cols-2 xl:grid-cols-5 gap-4">
+        {KPI_DATA.map((k, i) => (
+          <motion.div key={k.label} initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.06 }}>
+            <Card className="p-5">
+              <div className="flex items-center justify-between mb-3">
                 <div className="w-8 h-8 rounded-xl flex items-center justify-center"
-                  style={{ background:`${k.color}18`, border:`1px solid ${k.color}30` }}>
-                  <k.icon className="w-4 h-4" style={{ color:k.color }} />
+                  style={{ background:`${k.color}18`, border:`1px solid ${k.color}28` }}>
+                  <DataIcon icon={k.Icon} className="w-4 h-4" style={{ color:k.color }} />
                 </div>
+                {k.trend === 'up'
+                  ? <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+                  : <TrendingDown className="w-3.5 h-3.5 text-red-400" />}
+              </div>
+              <div className="text-2xl font-black text-white tracking-tight">{k.value}</div>
+              <div className="text-[10px] font-semibold text-white/35 uppercase tracking-wide mt-1 leading-tight">{k.label}</div>
+              <div className="text-[10px] text-white/20 mt-0.5">{k.sub}</div>
+            </Card>
+          </motion.div>
+        ))}
+      </div>
+
+      {/* 4 Performance cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {PERF_DATA.map((p, i) => (
+          <motion.div key={p.label} initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.30+i*0.06 }}>
+            <Card className="p-5 flex items-start gap-4">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                style={{ background:`${p.color}15`, border:`1px solid ${p.color}28` }}>
+                <DataIcon icon={p.Icon} className="w-5 h-5" style={{ color:p.color }} />
               </div>
               <div>
-                <div className="text-3xl font-black text-white tracking-tight">{k.value}</div>
-                <div className="flex items-center gap-1 mt-1">
-                  {k.trend === 'up'
-                    ? <TrendingUp className="w-3 h-3 text-emerald-400" />
-                    : <TrendingDown className="w-3 h-3 text-red-400" />}
-                  <span className="text-xs text-white/30">{k.sub}</span>
-                </div>
+                <div className="text-xl font-black text-white">{p.value}</div>
+                <div className="text-xs font-semibold text-white/60 mt-0.5">{p.label}</div>
+                <div className="text-[10px] text-white/25 mt-0.5">{p.sub}</div>
               </div>
             </Card>
           </motion.div>
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Recent Leads */}
-        <motion.div
-          className="lg:col-span-2"
-          initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.25 }}
-        >
+      {/* Activity feed + upcoming */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+        <motion.div className="lg:col-span-3" initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.50 }}>
           <Card>
-            <div className="flex items-center justify-between px-5 py-4"
-              style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
-              <h2 className="text-sm font-bold text-white">Recent Leads</h2>
-              <span className="text-xs text-white/30">{recentLeads.length} of {LEADS.length}</span>
+            <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+              <h2 className="text-sm font-bold text-white">Recent Activity</h2>
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-lg"
+                style={{ background:'rgba(52,211,153,0.08)', border:'1px solid rgba(52,211,153,0.2)', color:'#34d399' }}>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />Live
+              </div>
             </div>
             <div className="divide-y divide-white/[0.04]">
-              {recentLeads.map(lead => (
-                <div key={lead.id} className="flex items-center gap-4 px-5 py-3.5">
-                  <div className="w-8 h-8 rounded-xl flex items-center justify-center text-[11px] font-black text-white flex-shrink-0"
-                    style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
-                    {initials(lead.name)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-white/80 truncate">{lead.name}</div>
-                    <div className="text-xs text-white/30 truncate">{lead.company}</div>
-                  </div>
-                  <StatusBadge status={lead.status} />
-                  <span className="text-xs text-white/25 whitespace-nowrap hidden sm:block">{fmtDate(lead.date)}</span>
-                </div>
-              ))}
+              {ACTIVITY.slice(0,5).map((item, i) => {
+                const cfg = ACTIVITY_CFG[item.type]
+                return (
+                  <motion.div key={item.id}
+                    initial={{ opacity:0, x:-8 }} animate={{ opacity:1, x:0 }} transition={{ delay:0.55+i*0.04 }}
+                    className="flex items-start gap-3 px-5 py-3.5">
+                    <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"
+                      style={{ background:cfg.bg, border:`1px solid ${cfg.color}25` }}>
+                      <DataIcon icon={cfg.Icon} className="w-3.5 h-3.5" style={{ color:cfg.color }} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-white/80 truncate">{item.text}</div>
+                      <div className="text-xs text-white/30 mt-0.5">{item.sub}</div>
+                    </div>
+                    <div className="text-xs text-white/25 whitespace-nowrap flex-shrink-0">{item.time}</div>
+                  </motion.div>
+                )
+              })}
             </div>
           </Card>
         </motion.div>
 
-        {/* Automation Health */}
-        <motion.div initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.30 }}>
-          <Card className="h-full">
+        <motion.div className="lg:col-span-2" initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.55 }}>
+          <Card className="h-full flex flex-col">
             <div className="px-5 py-4" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
-              <h2 className="text-sm font-bold text-white">Automation Health</h2>
+              <h2 className="text-sm font-bold text-white">Next Up — Fri 22 May</h2>
+              <p className="text-xs text-white/30 mt-0.5">{upcoming22.length} appointments confirmed</p>
             </div>
-            <div className="p-5 flex flex-col gap-3">
-              {AUTOMATIONS.map(a => (
-                <div key={a.id} className="flex items-center gap-3">
-                  <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{ background:`${a.color}18`, border:`1px solid ${a.color}25` }}>
-                    <a.icon className="w-3.5 h-3.5" style={{ color:a.color }} />
+            <div className="p-4 flex flex-col gap-3 flex-1">
+              {upcoming22.map(appt => {
+                const sc = APPT_CFG[appt.status]
+                return (
+                  <div key={appt.id} className="flex items-center gap-3 px-4 py-3 rounded-xl"
+                    style={{ background:`${sc.color}08`, border:`1px solid ${sc.color}20` }}>
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
+                      style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
+                      {initials(appt.name)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-semibold text-white/80 truncate">{appt.name}</div>
+                      <div className="text-[10px] text-white/35">{appt.type}</div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <div className="text-xs font-bold text-white/60">{appt.time}</div>
+                      <div className="text-[10px] mt-0.5" style={{ color:sc.color }}>{sc.label}</div>
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-semibold text-white/70 truncate">{a.label}</div>
-                    <div className="text-[10px] text-white/30">{a.lastActivity}</div>
+                )
+              })}
+              <div style={{ borderTop:'1px solid rgba(255,255,255,0.05)', marginTop:'4px', paddingTop:'8px' }}>
+                {APPOINTMENTS.filter(a => a.upcoming && a.date !== '2026-05-22').map(appt => (
+                  <div key={appt.id} className="flex items-center gap-2 py-1.5">
+                    <Clock className="w-3 h-3 text-white/20 flex-shrink-0" />
+                    <span className="text-xs text-white/35 truncate flex-1">{appt.name} · {appt.type}</span>
+                    <span className="text-[10px] text-white/20 whitespace-nowrap">{fmtApptDate(appt.date)}</span>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background:a.color }} />
-                    <span className="text-[10px] font-semibold capitalize" style={{ color:a.color }}>{a.status}</span>
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           </Card>
         </motion.div>
@@ -353,40 +452,63 @@ function OverviewSection() {
   )
 }
 
-/* ── Leads Section ───────────────────────────────────────────── */
+/* ─── Pipeline Section ───────────────────────────────────────── */
 
-function LeadsSection() {
-  const [search,       setSearch]       = useState('')
-  const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all'>('all')
+function PipelineSection() {
+  const [search,      setSearch]      = useState('')
+  const [scoreFilter, setScoreFilter] = useState<ScoreLabel | 'all'>('all')
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
-    return LEADS.filter(l => {
-      if (statusFilter !== 'all' && l.status !== statusFilter) return false
-      if (!q) return true
-      return l.name.toLowerCase().includes(q) ||
-             l.company.toLowerCase().includes(q) ||
-             l.email.toLowerCase().includes(q)
-    }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-  }, [search, statusFilter])
-
-  const counts = useMemo(() => {
-    const c: Record<string, number> = { all: LEADS.length }
-    for (const l of LEADS) c[l.status] = (c[l.status] ?? 0) + 1
-    return c
-  }, [])
+    return LEADS
+      .filter(l => {
+        if (scoreFilter !== 'all' && l.scoreLabel !== scoreFilter) return false
+        if (!q) return true
+        return (
+          l.name.toLowerCase().includes(q) ||
+          l.company.toLowerCase().includes(q) ||
+          l.interest.toLowerCase().includes(q) ||
+          l.assignedAgent.toLowerCase().includes(q)
+        )
+      })
+      .sort((a,b) => b.score - a.score)
+  }, [search, scoreFilter])
 
   return (
     <Card>
-      {/* Controls */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 px-5 py-4"
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3 px-5 py-4 flex-wrap"
         style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
-        <div className="relative flex-1 w-full sm:max-w-xs">
+        <h2 className="text-sm font-bold text-white">
+          Lead Pipeline <span className="font-normal text-white/30">({filtered.length})</span>
+        </h2>
+        <div className="flex items-center gap-2 flex-wrap">
+          {(['all','hot','warm','cold'] as const).map(s => {
+            const isA = scoreFilter === s
+            const c   = s === 'all' ? null : SCORE_CFG[s]
+            return (
+              <button key={s} onClick={() => setScoreFilter(s)}
+                className="px-3 py-1.5 rounded-lg text-[11px] font-semibold capitalize transition-all"
+                style={isA ? {
+                  background: c ? c.bg : 'rgba(255,255,255,0.08)',
+                  border: `1px solid ${c ? c.border : 'rgba(255,255,255,0.2)'}`,
+                  color: c ? c.color : '#fff',
+                } : { background:'transparent', border:'1px solid transparent', color:'rgba(255,255,255,0.35)' }}>
+                {s === 'all' ? 'All Scores' : s}
+              </button>
+            )
+          })}
+          <ExportButton />
+        </div>
+      </div>
+
+      {/* Search */}
+      <div className="px-5 py-3" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+        <div className="relative max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/25 pointer-events-none" />
-          <input
-            type="text" placeholder="Search leads…" value={search}
+          <input type="text" placeholder="Search name, company, interest, agent…" value={search}
             onChange={e => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2.5 rounded-xl text-sm text-white placeholder-white/20 outline-none transition-all"
+            className="w-full pl-9 pr-9 py-2 rounded-xl text-sm text-white placeholder-white/20 outline-none transition-all"
             style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)' }}
             onFocus={e => { e.currentTarget.style.border = '1px solid rgba(139,92,246,0.4)' }}
             onBlur={e =>  { e.currentTarget.style.border = '1px solid rgba(255,255,255,0.08)' }}
@@ -397,139 +519,116 @@ function LeadsSection() {
             </button>
           )}
         </div>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {(['all', 'new', 'contacted', 'demo_booked', 'won', 'lost'] as const).map(s => {
-            const isActive = statusFilter === s
-            const cfg = s === 'all' ? null : STATUS_CFG[s]
-            return (
-              <button key={s} onClick={() => setStatusFilter(s)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
-                style={isActive ? {
-                  background: cfg ? cfg.bg : 'rgba(255,255,255,0.08)',
-                  border: `1px solid ${cfg ? cfg.border : 'rgba(255,255,255,0.2)'}`,
-                  color: cfg ? cfg.color : '#fff',
-                } : {
-                  background: 'transparent', border: '1px solid transparent', color: 'rgba(255,255,255,0.35)',
-                }}>
-                {s === 'all' ? 'All' : cfg!.label}
-                <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full"
-                  style={{
-                    background: isActive && cfg ? cfg.border : 'rgba(255,255,255,0.08)',
-                    color:      isActive && cfg ? cfg.color  : 'rgba(255,255,255,0.35)',
-                  }}>
-                  {counts[s] ?? 0}
-                </span>
-              </button>
-            )
-          })}
-        </div>
-        <span className="text-xs text-white/20 ml-auto hidden sm:block">{filtered.length} lead{filtered.length !== 1 ? 's' : ''}</span>
       </div>
 
       {/* Table */}
       <div className="overflow-x-auto">
-        <table className="w-full" style={{ minWidth:'720px' }}>
+        <table className="w-full" style={{ minWidth:'1040px' }}>
           <thead>
             <tr style={{ borderBottom:'1px solid rgba(255,255,255,0.05)' }}>
-              {['Lead', 'Email', 'Phone', 'Source', 'Submitted', 'Status'].map(col => (
-                <th key={col} className="text-left px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-white/25">
-                  {col}
-                </th>
+              {['Lead / Company','Source','Interest / Service','Assigned Agent','Score','Status','Follow-up'].map(col => (
+                <th key={col} className="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-white/25">{col}</th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-white/[0.04]">
             <AnimatePresence initial={false}>
               {filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-5 py-16 text-center">
-                    <p className="text-sm text-white/25">No leads match your filters</p>
-                    <button onClick={() => { setSearch(''); setStatusFilter('all') }} className="text-xs text-violet-400 hover:text-violet-300 mt-2">
-                      Clear filters
-                    </button>
-                  </td>
-                </tr>
+                <tr><td colSpan={7} className="px-5 py-16 text-center">
+                  <p className="text-sm text-white/25">No leads match your filters</p>
+                  <button onClick={() => { setSearch(''); setScoreFilter('all') }}
+                    className="text-xs text-violet-400 hover:text-violet-300 mt-2">Clear filters</button>
+                </td></tr>
               ) : filtered.map((lead, i) => (
                 <motion.tr key={lead.id}
                   initial={{ opacity:0, y:6 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0 }}
-                  transition={{ delay: i * 0.02 }}
-                  className="transition-colors duration-100 cursor-default"
+                  transition={{ delay:i*0.025 }}
                   style={{ background:'transparent' }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.02)')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                  <td className="px-5 py-3.5">
+                  <td className="px-4 py-3.5">
                     <div className="flex items-center gap-3">
                       <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
                         style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
                         {initials(lead.name)}
                       </div>
                       <div>
-                        <div className="text-sm font-semibold text-white/80">{lead.name}</div>
+                        <div className="text-sm font-semibold text-white/80 whitespace-nowrap">{lead.name}</div>
                         <div className="text-xs text-white/30 truncate max-w-[120px]">{lead.company}</div>
                       </div>
                     </div>
                   </td>
-                  <td className="px-5 py-3.5 text-sm text-white/50 truncate max-w-[180px]">{lead.email}</td>
-                  <td className="px-5 py-3.5 text-sm text-white/50 whitespace-nowrap">{lead.phone}</td>
-                  <td className="px-5 py-3.5">
-                    <span className="text-xs text-white/50 bg-white/5 px-2 py-1 rounded-lg">{lead.source}</span>
+                  <td className="px-4 py-3.5">
+                    <span className="text-xs text-white/50 bg-white/5 px-2 py-1 rounded-lg whitespace-nowrap">{lead.source}</span>
                   </td>
-                  <td className="px-5 py-3.5 text-xs text-white/35 whitespace-nowrap">{fmtDate(lead.date)}</td>
-                  <td className="px-5 py-3.5"><StatusBadge status={lead.status} /></td>
+                  <td className="px-4 py-3.5 text-xs text-white/55 whitespace-nowrap">{lead.interest}</td>
+                  <td className="px-4 py-3.5">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-black text-white flex-shrink-0"
+                        style={{ background:'linear-gradient(135deg,rgba(99,102,241,0.5),rgba(37,99,235,0.5))' }}>
+                        {agentInitials(lead.assignedAgent)}
+                      </div>
+                      <span className="text-xs text-white/55 whitespace-nowrap">{lead.assignedAgent}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3.5"><ScoreBadge score={lead.score} label={lead.scoreLabel} /></td>
+                  <td className="px-4 py-3.5"><StatusBadge status={lead.status} /></td>
+                  <td className="px-4 py-3.5"><AutoDots auto={lead.auto} /></td>
                 </motion.tr>
               ))}
             </AnimatePresence>
           </tbody>
         </table>
       </div>
+
+      <div className="flex items-center justify-between px-5 py-3" style={{ borderTop:'1px solid rgba(255,255,255,0.05)' }}>
+        <span className="text-xs text-white/20">Showing {filtered.length} of {LEADS.length} · sorted by score</span>
+        <div className="flex gap-4 text-[10px]">
+          {(['hot','warm','cold'] as ScoreLabel[]).map(s => (
+            <span key={s} style={{ color:SCORE_CFG[s].color }}>
+              {LEADS.filter(l => l.scoreLabel === s).length} {SCORE_CFG[s].label}
+            </span>
+          ))}
+        </div>
+      </div>
     </Card>
   )
 }
 
-/* ── Chat Section ────────────────────────────────────────────── */
+/* ─── Activity Section ───────────────────────────────────────── */
 
-function ChatSection() {
+function ActivitySection() {
   return (
     <Card>
-      <div className="px-5 py-4" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
-        <h2 className="text-sm font-bold text-white">Recent Conversations</h2>
-        <p className="text-xs text-white/30 mt-0.5">{CHATS.length} conversations · {CHATS.reduce((n, c) => n + c.unread, 0)} unread</p>
+      <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+        <div>
+          <h2 className="text-sm font-bold text-white">Automated Activity Feed</h2>
+          <p className="text-xs text-white/30 mt-0.5">{ACTIVITY.length} events · last 24 hours</p>
+        </div>
+        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold"
+          style={{ background:'rgba(52,211,153,0.08)', border:'1px solid rgba(52,211,153,0.2)', color:'#34d399' }}>
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />Live
+        </div>
       </div>
       <div className="divide-y divide-white/[0.04]">
-        {CHATS.map((chat, i) => {
-          const ch = CHANNEL_CFG[chat.channel]
+        {ACTIVITY.map((item, i) => {
+          const cfg = ACTIVITY_CFG[item.type]
           return (
-            <motion.div key={chat.id}
-              initial={{ opacity:0, x:-8 }} animate={{ opacity:1, x:0 }} transition={{ delay: i * 0.05 }}
-              className="flex items-center gap-4 px-5 py-4 transition-colors duration-150 cursor-pointer"
+            <motion.div key={item.id}
+              initial={{ opacity:0, x:-12 }} animate={{ opacity:1, x:0 }} transition={{ delay:i*0.04 }}
+              className="flex items-start gap-4 px-5 py-4 transition-colors duration-100"
               style={{ background:'transparent' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.02)')}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.015)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-              <div className="relative flex-shrink-0">
-                <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-black text-white"
-                  style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
-                  {initials(chat.name)}
-                </div>
-                {chat.unread > 0 && (
-                  <div className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-violet-500 flex items-center justify-center text-[9px] font-black text-white">
-                    {chat.unread}
-                  </div>
-                )}
+              <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
+                style={{ background:cfg.bg, border:`1px solid ${cfg.color}25` }}>
+                <DataIcon icon={cfg.Icon} className="w-4 h-4" style={{ color:cfg.color }} />
               </div>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className="text-sm font-semibold text-white/80">{chat.name}</span>
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
-                    style={{ color:ch.color, background:ch.bg }}>
-                    {chat.channel}
-                  </span>
-                </div>
-                <p className="text-xs text-white/35 truncate">{chat.lastMessage}</p>
+                <div className="text-sm font-semibold text-white/80">{item.text}</div>
+                <div className="text-xs text-white/35 mt-0.5">{item.sub}</div>
               </div>
-              <div className="flex-shrink-0 text-right">
-                <div className="text-xs text-white/25">{chat.time}</div>
-                <ChevronRight className="w-4 h-4 text-white/15 mt-1 ml-auto" />
-              </div>
+              <div className="text-xs text-white/25 whitespace-nowrap flex-shrink-0 pt-0.5">{item.time}</div>
             </motion.div>
           )
         })}
@@ -538,143 +637,229 @@ function ChatSection() {
   )
 }
 
-/* ── Appointments Section ────────────────────────────────────── */
+/* ─── Appointments Section ───────────────────────────────────── */
 
 function AppointmentsSection() {
-  const [tab, setTab] = useState<'upcoming' | 'past'>('upcoming')
-  const shown = APPOINTMENTS.filter(a => a.upcoming === (tab === 'upcoming'))
-
   return (
-    <Card>
-      {/* Tabs */}
-      <div className="flex items-center gap-1 px-5 py-4" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
-        {(['upcoming', 'past'] as const).map(t => (
-          <button key={t} onClick={() => setTab(t)}
-            className="px-4 py-2 rounded-lg text-sm font-semibold capitalize transition-all"
-            style={tab === t
-              ? { background:'rgba(139,92,246,0.12)', color:'#c4b5fd', border:'1px solid rgba(139,92,246,0.25)' }
-              : { background:'transparent', color:'rgba(255,255,255,0.35)', border:'1px solid transparent' }}>
-            {t} ({APPOINTMENTS.filter(a => a.upcoming === (t === 'upcoming')).length})
-          </button>
-        ))}
+    <div className="flex flex-col gap-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-bold text-white">Weekly Schedule</h2>
+          <p className="text-xs text-white/30 mt-0.5">Week of 18–24 May 2026</p>
+        </div>
+        <ExportButton />
       </div>
 
-      {/* Table */}
-      <div className="overflow-x-auto">
-        <table className="w-full" style={{ minWidth:'560px' }}>
-          <thead>
-            <tr style={{ borderBottom:'1px solid rgba(255,255,255,0.05)' }}>
-              {['Client', 'Type', 'Date', 'Time', 'Status'].map(col => (
-                <th key={col} className="text-left px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-white/25">{col}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-white/[0.04]">
-            <AnimatePresence initial={false} mode="wait">
-              {shown.map((appt, i) => {
-                const sc = APPT_CFG[appt.status]
-                return (
-                  <motion.tr key={appt.id}
-                    initial={{ opacity:0, y:6 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0 }}
-                    transition={{ delay: i * 0.04 }}
-                    className="cursor-default"
-                    style={{ background:'transparent' }}
-                    onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.02)')}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                    <td className="px-5 py-3.5">
-                      <div className="text-sm font-semibold text-white/80">{appt.name}</div>
-                      <div className="text-xs text-white/30">{appt.company}</div>
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <span className="text-xs text-white/50 bg-white/5 px-2 py-1 rounded-lg">{appt.type}</span>
-                    </td>
-                    <td className="px-5 py-3.5 text-sm text-white/50 whitespace-nowrap">{fmtApptDate(appt.date)}</td>
-                    <td className="px-5 py-3.5">
-                      <span className="flex items-center gap-1.5 text-sm text-white/50">
-                        <Clock className="w-3.5 h-3.5 text-white/25" />
-                        {appt.time}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold"
-                        style={{ color:sc.color, background:sc.bg }}>
-                        <span className="w-1.5 h-1.5 rounded-full" style={{ background:sc.color }} />
-                        {sc.label}
-                      </span>
-                    </td>
-                  </motion.tr>
-                )
-              })}
-            </AnimatePresence>
-          </tbody>
-        </table>
-      </div>
-    </Card>
-  )
-}
-
-/* ── Automation Section ──────────────────────────────────────── */
-
-function AutomationSection() {
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {AUTOMATIONS.map((a, i) => (
-        <motion.div key={a.id}
-          initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay: i * 0.07 }}>
-          <Card className="p-6 flex flex-col gap-4">
-            {/* Header */}
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-                  style={{ background:`${a.color}18`, border:`1px solid ${a.color}30` }}>
-                  <a.icon className="w-5 h-5" style={{ color:a.color }} />
-                </div>
+      {/* Mon–Fri columns */}
+      <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+        {WEEK.map(day => {
+          const dayAppts = APPOINTMENTS.filter(a => a.date === day.iso)
+          return (
+            <Card key={day.label} className={day.today ? 'ring-1 ring-violet-500/25' : ''}>
+              <div className="flex items-center justify-between px-4 py-3"
+                style={{ borderBottom: dayAppts.length ? '1px solid rgba(255,255,255,0.06)' : 'none', background: day.today ? 'rgba(139,92,246,0.06)' : 'transparent' }}>
                 <div>
-                  <div className="text-sm font-bold text-white">{a.label}</div>
-                  <div className="flex items-center gap-1.5 mt-0.5">
-                    <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background:a.color }} />
-                    <span className="text-[10px] font-semibold capitalize" style={{ color:a.color }}>{a.status}</span>
-                  </div>
+                  <div className="text-xs font-black text-white/60">{day.label}</div>
+                  <div className="text-[10px] text-white/25">{day.date}</div>
                 </div>
+                {day.today && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+                    style={{ background:'rgba(139,92,246,0.2)', color:'#c4b5fd', border:'1px solid rgba(139,92,246,0.3)' }}>
+                    TODAY
+                  </span>
+                )}
               </div>
-              <div className="text-[10px] text-white/25 whitespace-nowrap pt-1">{a.lastActivity}</div>
-            </div>
-
-            <p className="text-xs text-white/40 leading-relaxed">{a.description}</p>
-
-            {/* Stats */}
-            <div className="grid grid-cols-2 gap-3">
-              {[
-                { label:a.stat1Label, value:a.stat1Value },
-                { label:a.stat2Label, value:a.stat2Value },
-              ].map(s => (
-                <div key={s.label} className="rounded-xl px-4 py-3"
-                  style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.06)' }}>
-                  <div className="text-xl font-black text-white">{s.value}</div>
-                  <div className="text-[10px] text-white/30 mt-0.5">{s.label}</div>
+              {dayAppts.length > 0 ? (
+                <div className="p-3 flex flex-col gap-2">
+                  {dayAppts.map(appt => {
+                    const sc = APPT_CFG[appt.status]
+                    return (
+                      <div key={appt.id} className="rounded-xl p-3"
+                        style={{ background:`${sc.color}08`, border:`1px solid ${sc.color}20` }}>
+                        <div className="text-[11px] font-bold text-white/80 leading-snug">{appt.name}</div>
+                        <div className="text-[10px] text-white/40 mt-0.5">{appt.type}</div>
+                        <div className="flex items-center justify-between mt-2">
+                          <div className="flex items-center gap-1 text-[10px] text-white/35">
+                            <Clock className="w-3 h-3" />{appt.time}
+                          </div>
+                          <span className="text-[9px] font-bold" style={{ color:sc.color }}>{sc.label}</span>
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
-              ))}
-            </div>
-          </Card>
-        </motion.div>
-      ))}
+              ) : (
+                <div className="px-4 py-6 text-center">
+                  <div className="text-[10px] text-white/15">Free</div>
+                </div>
+              )}
+            </Card>
+          )
+        })}
+      </div>
+
+      {/* Beyond this week */}
+      <Card>
+        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+          <h2 className="text-sm font-bold text-white">Upcoming</h2>
+          <span className="text-xs text-white/30">Beyond this week</span>
+        </div>
+        <div className="divide-y divide-white/[0.04]">
+          {APPOINTMENTS.filter(a => !WEEK.some(d => d.iso === a.date)).map((appt, i) => {
+            const sc = APPT_CFG[appt.status]
+            return (
+              <motion.div key={appt.id}
+                initial={{ opacity:0, y:6 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.05 }}
+                className="flex items-center gap-4 px-5 py-3.5">
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
+                  style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.4),rgba(37,99,235,0.3))' }}>
+                  {initials(appt.name)}
+                </div>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold text-white/80">{appt.name}</div>
+                  <div className="text-xs text-white/30">{appt.type} · {appt.company}</div>
+                </div>
+                <div className="text-right mr-2">
+                  <div className="text-xs text-white/50">{fmtApptDate(appt.date)}</div>
+                  <div className="text-[10px] text-white/30">{appt.time}</div>
+                </div>
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full"
+                  style={{ color:sc.color, background:sc.bg }}>
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background:sc.color }} />
+                  {sc.label}
+                </span>
+              </motion.div>
+            )
+          })}
+        </div>
+      </Card>
     </div>
   )
 }
 
-/* ── Settings Section ────────────────────────────────────────── */
+/* ─── Automation Section ─────────────────────────────────────── */
+
+const AUTO_COLS: { label: string; key: keyof AutoState; Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }> }[] = [
+  { label:'AI SMS',        key:'aiSms',       Icon:MessageCircle },
+  { label:'Email Seq',     key:'emailSeq',    Icon:Mail          },
+  { label:'Nurture',       key:'nurture',     Icon:RefreshCw     },
+  { label:'Smart Assign',  key:'smartAssign', Icon:Users         },
+  { label:'Auto-call',     key:'autoCall',    Icon:Phone         },
+]
+
+function AutomationSection() {
+  return (
+    <div className="flex flex-col gap-6">
+      {/* Performance */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {PERF_DATA.map((p, i) => (
+          <motion.div key={p.label} initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.06 }}>
+            <Card className="p-5 flex items-start gap-4">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                style={{ background:`${p.color}15`, border:`1px solid ${p.color}28` }}>
+                <DataIcon icon={p.Icon} className="w-5 h-5" style={{ color:p.color }} />
+              </div>
+              <div>
+                <div className="text-xl font-black text-white">{p.value}</div>
+                <div className="text-xs font-semibold text-white/60 mt-0.5">{p.label}</div>
+                <div className="text-[10px] text-white/25 mt-0.5">{p.sub}</div>
+              </div>
+            </Card>
+          </motion.div>
+        ))}
+      </div>
+
+      {/* Per-lead automation table */}
+      <Card>
+        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+          <h2 className="text-sm font-bold text-white">Follow-up Automation per Lead</h2>
+          <div className="hidden sm:flex items-center gap-4 text-[10px]">
+            {[['#34d399','Active / Sent'],['#fbbf24','Scheduled'],['rgba(255,255,255,0.25)','Off']].map(([c,l]) => (
+              <span key={l as string} className="flex items-center gap-1.5" style={{ color:'rgba(255,255,255,0.35)' }}>
+                <span className="w-2 h-2 rounded-full inline-block" style={{ background:c as string }} />{l}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full" style={{ minWidth:'740px' }}>
+            <thead>
+              <tr style={{ borderBottom:'1px solid rgba(255,255,255,0.05)' }}>
+                <th className="text-left px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-white/25">Lead</th>
+                <th className="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-white/25">Score</th>
+                {AUTO_COLS.map(col => (
+                  <th key={col.key} className="px-4 py-3 text-center">
+                    <div className="flex flex-col items-center gap-1">
+                      <DataIcon icon={col.Icon} className="w-3.5 h-3.5 text-white/25" />
+                      <span className="text-[9px] font-bold uppercase tracking-wide text-white/25 whitespace-nowrap">{col.label}</span>
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/[0.04]">
+              {LEADS.map((lead, i) => (
+                <motion.tr key={lead.id}
+                  initial={{ opacity:0, y:4 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.03 }}
+                  style={{ background:'transparent' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.02)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  <td className="px-5 py-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-6 h-6 rounded-md flex items-center justify-center text-[9px] font-black text-white flex-shrink-0"
+                        style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
+                        {initials(lead.name)}
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold text-white/80 whitespace-nowrap">{lead.name}</div>
+                        <div className="text-[10px] text-white/30 truncate max-w-[100px]">{lead.company}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3"><ScoreBadge score={lead.score} label={lead.scoreLabel} /></td>
+                  {AUTO_COLS.map(col => {
+                    const status = lead.auto[col.key]
+                    const color  = AUTO_COLOR[status] || 'rgba(255,255,255,0.15)'
+                    return (
+                      <td key={col.key} className="px-4 py-3">
+                        <div className="flex justify-center">
+                          <div className="w-7 h-7 rounded-lg flex items-center justify-center"
+                            title={`${col.label}: ${status.replace(/_/g,' ')}`}
+                            style={{ background:`${color}20`, border:`1px solid ${color}40` }}>
+                            <DataIcon icon={col.Icon} className="w-3.5 h-3.5" style={{ color }} />
+                          </div>
+                        </div>
+                      </td>
+                    )
+                  })}
+                </motion.tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+/* ─── Settings Section ───────────────────────────────────────── */
+
+const SETTING_PANELS: {
+  label: string; sub: string
+  Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
+}[] = [
+  { Icon:Shield,    label:'Company Profile',           sub:'Business name, logo, contact details'  },
+  { Icon:Bell,      label:'Notification Preferences',  sub:'Email alerts, SMS, push notifications' },
+  { Icon:Link2,     label:'Integrations',              sub:'Connect CRM, calendar, and more'       },
+  { Icon:BarChart2, label:'Analytics & Reporting',     sub:'Automated weekly performance reports'  },
+]
 
 function SettingsSection() {
-  const panels = [
-    { icon:Shield,     label:'Company Profile',           sub:'Business name, logo, contact details' },
-    { icon:Bell,       label:'Notification Preferences',  sub:'Email alerts, SMS, push notifications' },
-    { icon:Link2,      label:'Integrations',              sub:'Connect CRM, calendar, and more'       },
-    { icon:BarChart2,  label:'Analytics & Reporting',     sub:'Automated weekly performance reports'  },
-  ]
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3 px-1">
-        <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.2)' }}>
+        <div className="w-8 h-8 rounded-xl flex items-center justify-center"
+          style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.2)' }}>
           <Settings className="w-4 h-4 text-violet-400" />
         </div>
         <div>
@@ -683,19 +868,18 @@ function SettingsSection() {
         </div>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {panels.map((p, i) => (
-          <motion.div key={p.label}
-            initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} transition={{ delay: i * 0.06 }}>
-            <Card className="p-5 flex items-start gap-4 opacity-60 cursor-not-allowed">
+        {SETTING_PANELS.map((p, i) => (
+          <motion.div key={p.label} initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.06 }}>
+            <Card className="p-5 flex items-start gap-4 opacity-55 cursor-not-allowed">
               <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
                 style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)' }}>
-                <p.icon className="w-4 h-4 text-white/40" />
+                <DataIcon icon={p.Icon} className="w-4 h-4 text-white/40" />
               </div>
               <div className="flex-1">
                 <div className="text-sm font-semibold text-white/60">{p.label}</div>
                 <div className="text-xs text-white/25 mt-0.5">{p.sub}</div>
               </div>
-              <span className="text-[10px] font-bold px-2 py-1 rounded-full mt-0.5"
+              <span className="text-[10px] font-bold px-2 py-1 rounded-full mt-0.5 flex-shrink-0"
                 style={{ background:'rgba(139,92,246,0.12)', color:'#a78bfa', border:'1px solid rgba(139,92,246,0.2)' }}>
                 Soon
               </span>
@@ -707,18 +891,7 @@ function SettingsSection() {
   )
 }
 
-/* ── Section meta ────────────────────────────────────────────── */
-
-const SECTION_META: Record<Section, { title: string; sub: string }> = {
-  overview:     { title:'Overview',      sub:'Your business at a glance'                   },
-  leads:        { title:'Leads',         sub:'All captured leads and their status'          },
-  chat:         { title:'Chat History',  sub:'Recent conversations across all channels'     },
-  appointments: { title:'Appointments',  sub:'Scheduled calls, demos, and onboardings'      },
-  automation:   { title:'Automation',    sub:'Live status of your AI-powered workflows'     },
-  settings:     { title:'Settings',      sub:'Account and portal configuration'             },
-}
-
-/* ── Main ────────────────────────────────────────────────────── */
+/* ─── Main ───────────────────────────────────────────────────── */
 
 export default function ClientDashboard() {
   const [section, setSection] = useState<Section>('overview')
@@ -743,10 +916,8 @@ export default function ClientDashboard() {
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                 All systems live
               </div>
-              <button
-                onClick={() => { window.location.href = '/client-login' }}
-                className="flex items-center gap-1.5 text-xs text-white/25 hover:text-red-400 transition-colors px-3 py-1.5 rounded-lg hover:bg-red-500/8"
-              >
+              <button onClick={() => { window.location.href = '/client-login' }}
+                className="flex items-center gap-1.5 text-xs text-white/25 hover:text-red-400 transition-colors px-3 py-1.5 rounded-lg hover:bg-red-500/8">
                 <LogOut className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Log out</span>
               </button>
@@ -759,10 +930,10 @@ export default function ClientDashboard() {
           <AnimatePresence mode="wait">
             <motion.div key={section}
               initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-8 }}
-              transition={{ duration:0.25 }}>
+              transition={{ duration:0.22 }}>
               {section === 'overview'     && <OverviewSection />}
-              {section === 'leads'        && <LeadsSection />}
-              {section === 'chat'         && <ChatSection />}
+              {section === 'pipeline'     && <PipelineSection />}
+              {section === 'activity'     && <ActivitySection />}
               {section === 'appointments' && <AppointmentsSection />}
               {section === 'automation'   && <AutomationSection />}
               {section === 'settings'     && <SettingsSection />}

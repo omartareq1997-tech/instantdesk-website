@@ -1,11 +1,13 @@
 import Navbar from "./components/Navbar";
 import Hero from "./components/Hero";
 import TrustedBy from "./components/TrustedBy";
+import BrandSlider from "./components/BrandSlider";
 import OmnichannelSection from "./components/OmnichannelSection";
 import Features from "./components/Features";
 import DemoShowcase from "./components/DemoShowcase";
 import DashboardPreview from "./components/DashboardPreview";
 import HowItWorks from "./components/HowItWorks";
+import WebsiteIntegration from "./components/WebsiteIntegration";
 import Pricing from "./components/Pricing";
 import Testimonials from "./components/Testimonials";
 import CTA from "./components/CTA";
@@ -17,11 +19,13 @@ export default function Home() {
       <Navbar />
       <Hero />
       <TrustedBy />
+      <BrandSlider />
       <OmnichannelSection />
       <Features />
       <DemoShowcase />
       <DashboardPreview />
       <HowItWorks />
+      <WebsiteIntegration />
       <Pricing />
       <Testimonials />
       <CTA />

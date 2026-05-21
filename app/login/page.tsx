@@ -1,21 +1,33 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { motion } from 'framer-motion'
-import { Zap, ArrowLeft, Mail, Lock, Eye, EyeOff, ArrowRight, Calendar } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Zap, ArrowLeft, Lock, Eye, EyeOff, ArrowRight, ShieldCheck } from 'lucide-react'
+import { loginAction } from '../admin/auth-actions'
 
 export default function LoginPage() {
-  const [email, setEmail]       = useState('')
+  const router = useRouter()
   const [password, setPassword] = useState('')
-  const [showPw, setShowPw]     = useState(false)
-  const [loading, setLoading]   = useState(false)
+  const [showPw,   setShowPw]   = useState(false)
+  const [loading,  setLoading]  = useState(false)
+  const [error,    setError]    = useState<string | null>(null)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!password.trim()) return
     setLoading(true)
-    /* No backend yet — visual feedback only */
-    setTimeout(() => setLoading(false), 1800)
+    setError(null)
+
+    const result = await loginAction(password)
+
+    if (result.error) {
+      setError(result.error)
+      setLoading(false)
+    } else {
+      router.push('/admin')
+    }
   }
 
   return (
@@ -66,7 +78,7 @@ export default function LoginPage() {
         initial={{ opacity: 0, y: 28, scale: 0.97 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
-        className="w-full max-w-md"
+        className="w-full max-w-sm"
       >
         {/* Logo */}
         <div className="flex items-center justify-center gap-2.5 mb-10">
@@ -77,7 +89,7 @@ export default function LoginPage() {
               boxShadow: '0 0 24px rgba(124,58,237,0.5)',
             }}
           >
-            <Zap className="w-4.5 h-4.5 text-white" style={{ width: '18px', height: '18px' }} />
+            <Zap className="w-[18px] h-[18px] text-white" />
           </div>
           <span className="text-xl font-bold tracking-tight text-white">
             Instant<span
@@ -103,78 +115,54 @@ export default function LoginPage() {
           }}
         >
           {/* Heading */}
-          <div className="mb-8">
-            <h1 className="text-2xl font-black text-white mb-1.5 tracking-tight">
-              Welcome back
-            </h1>
-            <p className="text-sm text-white/40">
-              Sign in to your InstantDesk dashboard
-            </p>
+          <div className="flex items-center gap-3 mb-8">
+            <div
+              className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+              style={{ background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.2)' }}
+            >
+              <ShieldCheck className="w-5 h-5 text-violet-400" />
+            </div>
+            <div>
+              <h1 className="text-xl font-black text-white tracking-tight">Admin Access</h1>
+              <p className="text-xs text-white/35 mt-0.5">Enter your admin password to continue</p>
+            </div>
           </div>
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-
-            {/* Email */}
             <div>
-              <label className="block text-xs font-semibold text-white/40 uppercase tracking-widest mb-2">
-                Email address
-              </label>
-              <div className="relative">
-                <Mail
-                  className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/25 pointer-events-none"
-                />
-                <input
-                  type="email"
-                  required
-                  autoComplete="email"
-                  placeholder="you@company.com"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 rounded-xl text-sm text-white placeholder-white/20 outline-none transition-all duration-200"
-                  style={{
-                    background: 'rgba(255,255,255,0.04)',
-                    border: '1px solid rgba(255,255,255,0.08)',
-                  }}
-                  onFocus={e => {
-                    e.currentTarget.style.border = '1px solid rgba(139,92,246,0.45)'
-                    e.currentTarget.style.boxShadow = '0 0 0 3px rgba(139,92,246,0.1)'
-                  }}
-                  onBlur={e => {
-                    e.currentTarget.style.border = '1px solid rgba(255,255,255,0.08)'
-                    e.currentTarget.style.boxShadow = 'none'
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* Password */}
-            <div>
-              <label className="block text-xs font-semibold text-white/40 uppercase tracking-widest mb-2">
+              <label className="block text-[10px] font-bold text-white/35 uppercase tracking-widest mb-2">
                 Password
               </label>
               <div className="relative">
-                <Lock
-                  className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/25 pointer-events-none"
-                />
+                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/25 pointer-events-none" />
                 <input
                   type={showPw ? 'text' : 'password'}
                   required
                   autoComplete="current-password"
+                  autoFocus
                   placeholder="••••••••••••"
                   value={password}
-                  onChange={e => setPassword(e.target.value)}
+                  onChange={e => { setPassword(e.target.value); setError(null) }}
                   className="w-full pl-10 pr-11 py-3 rounded-xl text-sm text-white placeholder-white/20 outline-none transition-all duration-200"
                   style={{
                     background: 'rgba(255,255,255,0.04)',
-                    border: '1px solid rgba(255,255,255,0.08)',
+                    border: error
+                      ? '1px solid rgba(248,113,113,0.5)'
+                      : '1px solid rgba(255,255,255,0.08)',
                   }}
                   onFocus={e => {
-                    e.currentTarget.style.border = '1px solid rgba(139,92,246,0.45)'
-                    e.currentTarget.style.boxShadow = '0 0 0 3px rgba(139,92,246,0.1)'
+                    e.currentTarget.style.border = error
+                      ? '1px solid rgba(248,113,113,0.6)'
+                      : '1px solid rgba(139,92,246,0.45)'
+                    e.currentTarget.style.boxShadow = error
+                      ? '0 0 0 3px rgba(248,113,113,0.1)'
+                      : '0 0 0 3px rgba(139,92,246,0.1)'
                   }}
                   onBlur={e => {
-                    e.currentTarget.style.border = '1px solid rgba(255,255,255,0.08)'
+                    e.currentTarget.style.border = error
+                      ? '1px solid rgba(248,113,113,0.5)'
+                      : '1px solid rgba(255,255,255,0.08)'
                     e.currentTarget.style.boxShadow = 'none'
                   }}
                 />
@@ -184,26 +172,38 @@ export default function LoginPage() {
                   className="absolute right-3.5 top-1/2 -translate-y-1/2 text-white/25 hover:text-white/60 transition-colors"
                   aria-label={showPw ? 'Hide password' : 'Show password'}
                 >
-                  {showPw
-                    ? <EyeOff className="w-4 h-4" />
-                    : <Eye className="w-4 h-4" />}
+                  {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
+
+              {/* Error message */}
+              <AnimatePresence>
+                {error && (
+                  <motion.p
+                    initial={{ opacity: 0, y: -4, height: 0 }}
+                    animate={{ opacity: 1, y: 0, height: 'auto' }}
+                    exit={{ opacity: 0, y: -4, height: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="text-xs text-red-400 mt-2 flex items-center gap-1.5"
+                  >
+                    <span className="w-3.5 h-3.5 rounded-full bg-red-500/20 flex items-center justify-center text-[9px] font-black flex-shrink-0">!</span>
+                    {error}
+                  </motion.p>
+                )}
+              </AnimatePresence>
             </div>
 
-            {/* Submit */}
             <motion.button
               type="submit"
-              disabled={loading}
+              disabled={loading || !password.trim()}
               whileHover={{ scale: 1.015 }}
               whileTap={{ scale: 0.985 }}
-              className="relative w-full py-3.5 rounded-xl text-sm font-bold text-white mt-2 overflow-hidden transition-all duration-300 disabled:opacity-70"
+              className="relative w-full py-3.5 rounded-xl text-sm font-bold text-white mt-1 overflow-hidden transition-all duration-300 disabled:opacity-50"
               style={{
                 background: 'linear-gradient(135deg,#7c3aed 0%,#4f46e5 50%,#2563eb 100%)',
                 boxShadow: '0 8px 24px rgba(99,102,241,0.35)',
               }}
             >
-              {/* Shine sweep */}
               <span
                 className="absolute inset-0 pointer-events-none"
                 style={{
@@ -218,58 +218,22 @@ export default function LoginPage() {
                       animate={{ rotate: 360 }}
                       transition={{ duration: 0.7, repeat: Infinity, ease: 'linear' }}
                     />
-                    Signing in…
+                    Verifying…
                   </>
                 ) : (
                   <>
-                    Continue
+                    Enter Dashboard
                     <ArrowRight className="w-4 h-4" />
                   </>
                 )}
               </span>
             </motion.button>
           </form>
-
-          {/* Divider */}
-          <div className="flex items-center gap-3 my-6">
-            <div className="flex-1 h-px bg-white/[0.06]" />
-            <span className="text-[11px] text-white/20 font-medium">or</span>
-            <div className="flex-1 h-px bg-white/[0.06]" />
-          </div>
-
-          {/* Book demo instead */}
-          <a
-            href="#demo"
-            onClick={e => { e.preventDefault(); window.location.href = '/#demo' }}
-            className="flex items-center justify-center gap-2 w-full py-3.5 rounded-xl text-sm font-semibold text-white/60 hover:text-white transition-all duration-200 group"
-            style={{
-              background: 'rgba(255,255,255,0.03)',
-              border: '1px solid rgba(255,255,255,0.07)',
-            }}
-          >
-            <Calendar className="w-4 h-4 group-hover:text-violet-400 transition-colors" />
-            Book a demo instead
-          </a>
         </div>
 
-        {/* Footer note */}
-        <p className="text-center text-xs text-white/20 mt-6 leading-relaxed">
-          By signing in you agree to our{' '}
-          <span className="text-white/35 hover:text-white/60 cursor-pointer transition-colors">Terms</span>
-          {' & '}
-          <span className="text-white/35 hover:text-white/60 cursor-pointer transition-colors">Privacy Policy</span>
+        <p className="text-center text-xs text-white/15 mt-6">
+          InstantDesk · Admin access only
         </p>
-
-        {/* Admin shortcut */}
-        <div className="flex items-center justify-center mt-4">
-          <Link
-            href="/admin"
-            className="flex items-center gap-1.5 text-xs text-white/20 hover:text-violet-400 transition-colors"
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-violet-500/50" />
-            Admin Dashboard →
-          </Link>
-        </div>
       </motion.div>
     </div>
   )

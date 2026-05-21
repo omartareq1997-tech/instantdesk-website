@@ -1,3 +1,6 @@
+import { cookies } from 'next/headers'
+import { redirect } from 'next/navigation'
+import { verifyToken, COOKIE_NAME } from '../lib/auth'
 import { createAdminClient } from '../lib/supabase-server'
 import AdminDashboard, { type Lead, type Status } from './AdminDashboard'
 
@@ -47,6 +50,11 @@ function mapRow(row: LeadRow): Lead {
 export const dynamic = 'force-dynamic'   // always fetch fresh data
 
 export default async function AdminPage() {
+  /* ── Auth guard ────────────────────────────────────────── */
+  const jar     = await cookies()
+  const session = jar.get(COOKIE_NAME)?.value
+  if (!verifyToken(session)) redirect('/login')
+
   let leads: Lead[]     = []
   let fetchError: string | undefined
 

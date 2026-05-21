@@ -10,6 +10,7 @@ import {
   BarChart2, ChevronDown, Loader2, RefreshCw,
 } from 'lucide-react'
 import { updateLeadStatus } from './actions'
+import { logoutAction } from './auth-actions'
 
 /* ─── Types ─────────────────────────────────────────────── */
 
@@ -466,6 +467,14 @@ export default function AdminDashboard({
             <ArrowLeft className="w-3.5 h-3.5" />
             Back to site
           </Link>
+          <form action={logoutAction}>
+            <button
+              type="submit"
+              className="text-xs text-white/25 hover:text-red-400 transition-colors px-2 py-1 rounded-lg hover:bg-red-500/8"
+            >
+              Log out
+            </button>
+          </form>
           {!fetchError && (
             <div
               className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold"

@@ -59,7 +59,7 @@ export default function Navbar() {
 
         <div className="hidden md:flex items-center gap-3">
           <Link
-            href="/login"
+            href="/client-login"
             className="text-sm text-white/60 hover:text-white transition-colors font-medium px-4 py-2"
           >
             Log in
@@ -100,7 +100,7 @@ export default function Navbar() {
                 </a>
               ))}
               <Link
-                href="/login"
+                href="/client-login"
                 onClick={() => setMobileOpen(false)}
                 className="text-sm text-white/60 hover:text-white transition-colors font-medium py-1"
               >

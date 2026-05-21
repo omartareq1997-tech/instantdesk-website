@@ -34,5 +34,5 @@ export async function loginAction(
 export async function logoutAction(): Promise<never> {
   const jar = await cookies()
   jar.delete(COOKIE_NAME)
-  redirect('/login')
+  redirect('/admin-login')
 }

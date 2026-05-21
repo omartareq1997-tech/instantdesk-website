@@ -1,13 +1,5 @@
-import { cookies } from 'next/headers'
-import { redirect } from 'next/navigation'
-import { verifyToken, COOKIE_NAME } from '../lib/auth'
 import { createAdminClient } from '../lib/supabase-server'
 import AdminDashboard, { type Lead, type Status } from './AdminDashboard'
-
-/* ─── DB row shape ───────────────────────────────────────────
-   Supabase returns snake_case column names.
-   Map to the camelCase Lead type used by the UI.
-   ────────────────────────────────────────────────────────── */
 
 type LeadRow = {
   id: string
@@ -41,20 +33,9 @@ function mapRow(row: LeadRow): Lead {
   }
 }
 
-/* ─── Page ───────────────────────────────────────────────────
-   Server Component — runs on every request, never ships to
-   the browser. The AdminDashboard Client Component receives
-   the already-fetched leads as a serialisable prop.
-   ────────────────────────────────────────────────────────── */
-
-export const dynamic = 'force-dynamic'   // always fetch fresh data
+export const dynamic = 'force-dynamic'
 
 export default async function AdminPage() {
-  /* ── Auth guard ────────────────────────────────────────── */
-  const jar     = await cookies()
-  const session = jar.get(COOKIE_NAME)?.value
-  if (!verifyToken(session)) redirect('/login')
-
   let leads: Lead[]     = []
   let fetchError: string | undefined
 

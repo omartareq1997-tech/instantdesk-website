@@ -1,27 +1,20 @@
-import { createHash } from 'crypto'
-
-/* ── Token helpers ───────────────────────────────────────────
-   Server-only. Uses Node.js crypto — never import this in a
-   'use client' file (the build will fail naturally because
-   'crypto' is not available in browser bundles).
-   ────────────────────────────────────────────────────────── */
-
 const SALT = 'instantdesk-admin-v1'
 export const COOKIE_NAME = 'admin_session'
 
-/** Deterministic token derived from the current ADMIN_PASSWORD. */
-export function generateToken(password: string): string {
-  return createHash('sha256')
-    .update(SALT + password)
-    .digest('hex')
+/** Deterministic SHA-256 token derived from the current ADMIN_PASSWORD.
+ *  Uses Web Crypto so it works in both Node.js (server actions) and Edge (middleware).
+ */
+export async function generateToken(password: string): Promise<string> {
+  const data = new TextEncoder().encode(SALT + password)
+  const hash = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(hash))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
 }
 
-/**
- * Returns true if the cookie value matches the expected token
- * for the current ADMIN_PASSWORD env var.
- */
-export function verifyToken(token: string | undefined): boolean {
+/** Returns true if the cookie value matches the expected token for ADMIN_PASSWORD. */
+export async function verifyToken(token: string | undefined): Promise<boolean> {
   const password = process.env.ADMIN_PASSWORD
   if (!password || !token) return false
-  return token === generateToken(password)
+  return token === await generateToken(password)
 }

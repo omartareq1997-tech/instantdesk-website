@@ -1,14 +1,12 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Zap, ArrowLeft, Lock, Eye, EyeOff, ArrowRight, ShieldCheck } from 'lucide-react'
 import { loginAction } from '../admin/auth-actions'
 
 export default function LoginPage() {
-  const router = useRouter()
   const [password, setPassword] = useState('')
   const [showPw,   setShowPw]   = useState(false)
   const [loading,  setLoading]  = useState(false)
@@ -22,11 +20,10 @@ export default function LoginPage() {
 
     const result = await loginAction(password)
 
-    if (result.error) {
+    // loginAction calls redirect('/admin') on success — only reaches here on error
+    if (result?.error) {
       setError(result.error)
       setLoading(false)
-    } else {
-      router.push('/admin')
     }
   }
 

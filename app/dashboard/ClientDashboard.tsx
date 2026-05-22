@@ -781,7 +781,7 @@ function FilterPanel({
         animate={{ opacity:1, scale:1,    y: 0  }}
         exit={{   opacity:0, scale:0.96, y:-6  }}
         transition={{ duration:0.15 }}
-        className="absolute right-0 top-full mt-2 z-50 w-80 rounded-2xl"
+        className="absolute right-0 top-full mt-2 z-50 w-[min(320px,calc(100vw-2rem))] rounded-2xl"
         style={{
           background:'rgba(10,10,30,0.98)', border:'1px solid rgba(139,92,246,0.22)',
           boxShadow:'0 24px 60px rgba(0,0,0,0.7)', backdropFilter:'blur(24px)',
@@ -981,8 +981,66 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>() }
         </div>
       </div>
 
-      {/* Table */}
-      <div className="overflow-x-auto">
+      {/* ── Mobile card list (hidden sm+) ──────────────────── */}
+      <div className="sm:hidden">
+        {leads.length === 0 ? (
+          <div className="px-5 py-16 text-center flex flex-col items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl flex items-center justify-center"
+              style={{ background:'rgba(139,92,246,0.08)', border:'1px solid rgba(139,92,246,0.15)' }}>
+              <Users className="w-5 h-5 text-violet-400/40" />
+            </div>
+            <p className="text-sm font-semibold text-white/30">No leads yet</p>
+            <p className="text-xs text-white/20 max-w-[240px] leading-relaxed">
+              New captured leads will appear here automatically.
+            </p>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="px-5 py-10 text-center">
+            <p className="text-sm text-white/25">No leads match your filters</p>
+            <button onClick={clearAll} className="text-xs text-violet-400 mt-2 block mx-auto">
+              Clear all filters
+            </button>
+          </div>
+        ) : (
+          <AnimatePresence initial={false}>
+            {filtered.map((lead, i) => {
+              const isNew = newLeadIds.has(lead.id)
+              return (
+                <motion.div key={lead.id}
+                  initial={{ opacity:0, y:-8 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0 }}
+                  transition={{ delay: isNew ? 0 : i * 0.02 }}
+                  onClick={() => onSelectLead(lead.id)}
+                  className="flex items-center gap-3 px-4 py-3.5 cursor-pointer border-b border-white/[0.04]"
+                  style={{ background: isNew ? 'rgba(52,211,153,0.04)' : 'transparent' }}>
+                  <div className="relative flex-shrink-0">
+                    <div className="w-9 h-9 rounded-xl flex items-center justify-center text-[11px] font-black text-white"
+                      style={{ background: isNew ? 'linear-gradient(135deg,rgba(52,211,153,0.6),rgba(16,185,129,0.5))' : 'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
+                      {initials(lead.name)}
+                    </div>
+                    {isNew && (
+                      <motion.span initial={{ scale:0 }} animate={{ scale:1 }}
+                        className="absolute -top-1.5 -right-1.5 text-[7px] font-black px-1 py-0.5 rounded-full"
+                        style={{ background:'#34d399', color:'#fff' }}>NEW</motion.span>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-white/85 truncate">{lead.name}</div>
+                    <div className="text-xs text-white/35 truncate">{lead.company || lead.source}</div>
+                  </div>
+                  <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                    <ScoreBadge score={lead.score} label={lead.scoreLabel} />
+                    <StatusBadge status={lead.status} />
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-white/20 flex-shrink-0" />
+                </motion.div>
+              )
+            })}
+          </AnimatePresence>
+        )}
+      </div>
+
+      {/* ── Desktop table (hidden on mobile) ───────────────── */}
+      <div className="hidden sm:block overflow-x-auto">
         <table className="w-full" style={{ minWidth:1040 }}>
           <thead>
             <tr style={{ borderBottom:'1px solid rgba(255,255,255,0.05)' }}>
@@ -1097,7 +1155,7 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>() }
             </AnimatePresence>
           </tbody>
         </table>
-      </div>
+      </div>{/* end hidden sm:block */}
 
       {/* Footer */}
       <div className="flex items-center justify-between px-5 py-3"
@@ -1486,8 +1544,9 @@ function AppointmentsSection({
           </div>
         </div>
 
-        {/* ── 7-day grid ─────────────────────────────────────── */}
-        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+        {/* ── 7-day grid — horizontal scroll on mobile ─────── */}
+        <div className="overflow-x-auto -mx-4 sm:mx-0 pb-1 sm:pb-0">
+        <div className="grid grid-cols-7 gap-2 px-4 sm:px-0" style={{ minWidth: 420 }}>
           {viewDays.map(day => {
             const dayAppts = appointments.filter(a => a.date === day.iso)
             return (
@@ -1536,7 +1595,8 @@ function AppointmentsSection({
               </Card>
             )
           })}
-        </div>
+        </div>{/* end inner grid */}
+        </div>{/* end overflow-x-auto */}
 
         {/* ── Upcoming list ───────────────────────────────────── */}
         <Card>
@@ -1689,7 +1749,29 @@ function AutomationSection({ leads, integrations = [], overviewMetrics }: { lead
             ))}
           </div>
         </div>
-        <div className="overflow-x-auto">
+        {/* Mobile: name + score + auto dots (hidden sm+) */}
+        <div className="sm:hidden divide-y divide-white/[0.04]">
+          {leads.length === 0 ? (
+            <div className="px-5 py-10 text-center">
+              <p className="text-sm text-white/25">No leads yet</p>
+            </div>
+          ) : leads.map(lead => (
+            <div key={lead.id} className="flex items-center gap-3 px-4 py-3">
+              <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
+                style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
+                {initials(lead.name)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-semibold text-white/80 truncate">{lead.name}</div>
+                <div className="mt-1"><ScoreBadge score={lead.score} label={lead.scoreLabel} /></div>
+              </div>
+              <AutoDots auto={lead.auto} />
+            </div>
+          ))}
+        </div>
+
+        {/* Desktop table (hidden on mobile) */}
+        <div className="hidden sm:block overflow-x-auto">
           <table className="w-full" style={{ minWidth:700 }}>
             <thead><tr style={{ borderBottom:'1px solid rgba(255,255,255,0.05)' }}>
               <th className="text-left px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-white/25">Lead</th>
@@ -1740,7 +1822,7 @@ function AutomationSection({ leads, integrations = [], overviewMetrics }: { lead
               ))}
             </tbody>
           </table>
-        </div>
+        </div>{/* end hidden sm:block */}
       </Card>
     </div>
   )
@@ -1941,7 +2023,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
     <div className="flex h-screen overflow-hidden" style={{ background:'#050510' }}>
       <Sidebar active={section} onNav={handleNav} open={sidebarOpen} onClose={() => setSidebarOpen(false)} badges={navBadges} />
 
-      <div className="flex-1 overflow-y-auto min-w-0">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
         {/* Sticky header */}
         <div className="sticky top-0 z-20 px-4 sm:px-8 py-4"
           style={{ background:'rgba(5,5,16,0.95)', backdropFilter:'blur(20px)', borderBottom:'1px solid rgba(255,255,255,0.06)' }}>

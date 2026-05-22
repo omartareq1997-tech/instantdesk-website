@@ -495,7 +495,7 @@ export default function LeadPanel({
         }}
       >
         {/* ── Header ───────────────────────────────────────────── */}
-        <div className="flex items-start gap-4 px-6 py-5 sticky top-0 z-10"
+        <div className="flex items-start gap-4 px-4 sm:px-6 py-4 sm:py-5 sticky top-0 z-10"
           style={{ background:'rgba(7,7,25,0.97)', borderBottom:'1px solid rgba(255,255,255,0.07)' }}>
           <div className="w-11 h-11 rounded-xl flex items-center justify-center text-sm font-black text-white flex-shrink-0"
             style={{ background:'linear-gradient(135deg,#7c3aed,#2563eb)' }}>
@@ -513,7 +513,7 @@ export default function LeadPanel({
           </button>
         </div>
 
-        <div className="px-6 py-5 flex flex-col gap-5">
+        <div className="px-4 sm:px-6 py-5 flex flex-col gap-5">
 
           {/* ── Contact info ─────────────────────────────────── */}
           {(lead.phone || lead.email) && (

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useEffect, useCallback, type Dispatch, type SetStateAction } from 'react'
+import { useState, useMemo, useEffect, useLayoutEffect, useCallback, type Dispatch, type SetStateAction } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Zap, LayoutDashboard, Users, Calendar, Settings, LogOut,
@@ -54,30 +54,6 @@ const LEADS: Lead[] = [
   { id:'9',  name:'Marcus Brown',     company:'Brown & Associates', source:'Website Chat', interest:'Lead Capture',        assignedAgent:'Sarah K.',  score:22, scoreLabel:'cold', status:'lost',        date:'2026-05-14T15:30:00Z', auto:{ aiSms:'off',       emailSeq:'paused',      nurture:'not_started', smartAssign:'assigned',   autoCall:'off'       }},
   { id:'10', name:'Nina Kowalski',    company:'Kowalski Design',    source:'WhatsApp',     interest:'WhatsApp Automation', assignedAgent:'James M.',  score:44, scoreLabel:'warm', status:'contacted',   date:'2026-05-13T11:15:00Z', auto:{ aiSms:'sent',      emailSeq:'active',      nurture:'not_started', smartAssign:'assigned',   autoCall:'off'       }},
 ]
-
-const SEED_ACTIVITY: ActivityItem[] = [
-  { id:'1',  type:'sms',         text:'AI replied to James Okafor in 3s',         sub:'WhatsApp · auto-triggered',         time:'2 min ago',   live:true  },
-  { id:'2',  type:'appointment', text:'Demo booked — Sarah Mitchell',             sub:'Thu 22 May · 3:00 PM',             time:'10 min ago'             },
-  { id:'3',  type:'assignment',  text:'Lead assigned to Priya S.',               sub:'Chen Wei · smart assignment',       time:'18 min ago'             },
-  { id:'4',  type:'email',       text:'Email sequence triggered — Tom Reynolds', sub:'Follow-up sequence day 1',          time:'32 min ago'             },
-  { id:'5',  type:'sms',         text:'AI recovered missed call — Nina Kowalski', sub:'WhatsApp reply sent in 8s',        time:'1 hour ago'             },
-  { id:'6',  type:'appointment', text:'Discovery call confirmed — Priya Sharma',  sub:'Fri 23 May · 2:00 PM',             time:'2 hours ago'            },
-  { id:'7',  type:'assignment',  text:'Smart assignment — Amina Hassan → Priya S.', sub:'Availability + territory score', time:'3 hours ago'            },
-  { id:'8',  type:'email',       text:'Nurture sequence started — Marcus Brown', sub:'30-day drip campaign',             time:'5 hours ago'            },
-  { id:'9',  type:'call',        text:'Auto-call completed — Daniel Lee',          sub:'Duration: 4 min 32 sec',           time:'Yesterday'              },
-  { id:'10', type:'email',       text:'Welcome email sent — James Okafor',         sub:'Instant auto-response',            time:'Yesterday'              },
-]
-
-const LIVE_POOL: Omit<ActivityItem, 'id' | 'time' | 'live'>[] = [
-  { type:'sms',         text:'AI replied to Anna K. in 12s',              sub:'WhatsApp · out-of-hours response'    },
-  { type:'appointment', text:'Demo booked — Liam Carter',                 sub:'Tomorrow · 11:00 AM · confirmed'     },
-  { type:'sms',         text:'Missed call recovered — Oliver Smith',       sub:'AI called back in 28s'               },
-  { type:'email',       text:'WhatsApp follow-up sent — Eva Müller',       sub:'Day 2 sequence triggered'            },
-  { type:'call',        text:'Auto-call connected — Raj Patel',            sub:'Qualified: budget + timeline set'    },
-  { type:'assignment',  text:'Hot lead routed to Sarah K.',                sub:'Score 89 · Website Chat'             },
-  { type:'sms',         text:'AI replied to Mia Chen in 5s',              sub:'Instagram DM · high intent detected' },
-]
-
 
 const SEED_NOTIFS: Notification[] = [
   { id:'1', type:'lead',    text:'New hot lead captured',         sub:'James Okafor · WhatsApp · 2 min ago',  read:false, time:'2 min ago'  },
@@ -335,7 +311,7 @@ function NotificationCenter({ notifs, setNotifs }: { notifs:Notification[]; setN
 /* ─── Sidebar ────────────────────────────────────────────────── */
 
 function Sidebar({ active, onNav, open, onClose, badges = {} }: {
-  active: Section; onNav:(s:Section)=>void; open:boolean; onClose:()=>void
+  active: Section | null; onNav:(s:Section)=>void; open:boolean; onClose:()=>void
   badges?: Partial<Record<Section, number>>
 }) {
   return (
@@ -1212,64 +1188,58 @@ function mapAppointmentRow(r: RawAppointmentRow): Appointment {
 
 /* ─── Real-time Activity Feed ────────────────────────────────── */
 
-function ActivitySection({ feed, setFeed }: { feed: ActivityItem[]; setFeed: Dispatch<SetStateAction<ActivityItem[]>> }) {
-
-  useEffect(() => {
-    let poolIdx = 0
-    const id = setInterval(() => {
-      const template = LIVE_POOL[poolIdx % LIVE_POOL.length]
-      poolIdx++
-      setFeed(prev => [{
-        ...template,
-        id: Date.now().toString(),
-        time: 'Just now',
-        live: true,
-      }, ...prev.map(i=>({...i, live:false})).slice(0, 14)])
-    }, 7000)
-    return () => clearInterval(id)
-  }, [setFeed])
-
+function ActivitySection({ feed }: { feed: ActivityItem[] }) {
   return (
     <Card>
       <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
         <div>
           <h2 className="text-sm font-bold text-white">Live Activity Feed</h2>
-          <p className="text-xs text-white/30 mt-0.5">{feed.length} events · updating in real time</p>
+          <p className="text-xs text-white/30 mt-0.5">
+            {feed.length > 0 ? `${feed.length} events · updating in real time` : 'Waiting for events'}
+          </p>
         </div>
         <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold"
           style={{ background:'rgba(52,211,153,0.08)', border:'1px solid rgba(52,211,153,0.2)', color:'#34d399' }}>
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />Live
         </div>
       </div>
-      <div className="divide-y divide-white/[0.04]">
-        <AnimatePresence initial={false}>
-          {feed.map(item => {
-            const cfg = ACTIVITY_CFG[item.type]
-            return (
-              <motion.div key={item.id}
-                initial={{ opacity:0, y:-16, scale:0.98 }} animate={{ opacity:1, y:0, scale:1 }} exit={{ opacity:0 }}
-                transition={{ duration:0.35 }}
-                className="flex items-start gap-4 px-5 py-4 transition-colors"
-                style={{ background: item.live ? 'rgba(52,211,153,0.03)' : 'transparent' }}
-                onMouseEnter={e=>(e.currentTarget.style.background='rgba(255,255,255,0.015)')}
-                onMouseLeave={e=>(e.currentTarget.style.background=item.live?'rgba(52,211,153,0.03)':'transparent')}>
-                {item.live && <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0 mt-1.5" />}
-                <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
-                  style={{ background:cfg.bg, border:`1px solid ${cfg.color}25` }}>
-                  <DataIcon icon={cfg.Icon} className="w-4 h-4" style={{ color:cfg.color }} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-white/80">{item.text}</div>
-                  <div className="text-xs text-white/35 mt-0.5">{item.sub}</div>
-                </div>
-                <div className="text-xs whitespace-nowrap flex-shrink-0 pt-0.5" style={{ color: item.live ? '#34d399' : 'rgba(255,255,255,0.25)' }}>
-                  {item.time}
-                </div>
-              </motion.div>
-            )
-          })}
-        </AnimatePresence>
-      </div>
+      {feed.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 gap-2">
+          <Activity className="w-7 h-7 text-white/10" />
+          <p className="text-sm text-white/25 font-medium">No activity yet</p>
+          <p className="text-xs text-white/15">Events appear here as leads interact with your automations</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-white/[0.04]">
+          <AnimatePresence initial={false}>
+            {feed.map(item => {
+              const cfg = ACTIVITY_CFG[item.type]
+              return (
+                <motion.div key={item.id}
+                  initial={{ opacity:0, y:-16, scale:0.98 }} animate={{ opacity:1, y:0, scale:1 }} exit={{ opacity:0 }}
+                  transition={{ duration:0.35 }}
+                  className="flex items-start gap-4 px-5 py-4 transition-colors"
+                  style={{ background: item.live ? 'rgba(52,211,153,0.03)' : 'transparent' }}
+                  onMouseEnter={e=>(e.currentTarget.style.background='rgba(255,255,255,0.015)')}
+                  onMouseLeave={e=>(e.currentTarget.style.background=item.live?'rgba(52,211,153,0.03)':'transparent')}>
+                  {item.live && <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0 mt-1.5" />}
+                  <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
+                    style={{ background:cfg.bg, border:`1px solid ${cfg.color}25` }}>
+                    <DataIcon icon={cfg.Icon} className="w-4 h-4" style={{ color:cfg.color }} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-white/80">{item.text}</div>
+                    <div className="text-xs text-white/35 mt-0.5">{item.sub}</div>
+                  </div>
+                  <div className="text-xs whitespace-nowrap flex-shrink-0 pt-0.5" style={{ color: item.live ? '#34d399' : 'rgba(255,255,255,0.25)' }}>
+                    {item.time}
+                  </div>
+                </motion.div>
+              )
+            })}
+          </AnimatePresence>
+        </div>
+      )}
     </Card>
   )
 }
@@ -1824,14 +1794,7 @@ const VALID_SECTIONS = new Set<string>([
   'overview','analytics','pipeline','activity','appointments','automation','settings',
 ])
 
-/**
- * Read window.location.hash synchronously.
- * Returns 'overview' on the server (window undefined) so SSR HTML is stable.
- * On the client the lazy useState initializer calls this before React's first
- * commit, so the sidebar highlights the correct tab without any flicker.
- */
 function getInitialSectionFromHash(): Section {
-  if (typeof window === 'undefined') return 'overview'
   const h = window.location.hash.slice(1)
   return VALID_SECTIONS.has(h) ? (h as Section) : 'overview'
 }
@@ -1839,7 +1802,10 @@ function getInitialSectionFromHash(): Section {
 /* ─── Main ───────────────────────────────────────────────────── */
 
 export default function ClientDashboard({ initialData }: { initialData?: DashboardData }) {
-  const [section,        setSection]        = useState<Section>(getInitialSectionFromHash)
+  // null = hash not yet read (SSR / before first layout effect).
+  // useLayoutEffect sets the real value synchronously before the browser paints,
+  // so the sidebar and content both render the correct tab on the very first frame.
+  const [section,        setSection]        = useState<Section | null>(null)
   const [sidebarOpen,    setSidebarOpen]    = useState(false)
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
   const [notifs,         setNotifs]         = useState<Notification[]>(SEED_NOTIFS)
@@ -1847,7 +1813,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
   // ── Live state (seeded from SSR, then kept fresh by Supabase Realtime)
   const [leads,       setLeads]       = useState<Lead[]>       (initialData?.leads?.length  ? initialData.leads  : LEADS)
   const [appointments,setAppointments]= useState<Appointment[]>(initialData?.appointments   ?? [])
-  const [activityFeed,setActivityFeed]= useState<ActivityItem[]>(initialData?.activity?.length ? initialData.activity : SEED_ACTIVITY)
+  const [activityFeed,setActivityFeed]= useState<ActivityItem[]>(initialData?.activity      ?? [])
 
   // Static / analytics (not realtime — refreshed on page load)
   const analytics        = initialData?.analytics?.length    ? initialData.analytics    : undefined
@@ -1858,9 +1824,10 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
   // Tracks IDs of leads that just arrived via realtime (cleared after 4 s)
   const [newLeadIds, setNewLeadIds] = useState<Set<string>>(new Set())
 
-  const selectedLead    = useMemo(() => leads.find(l => l.id === selectedLeadId) ?? null, [leads, selectedLeadId])
+  const selectedLead     = useMemo(() => leads.find(l => l.id === selectedLeadId) ?? null, [leads, selectedLeadId])
   const handleSelectLead = useCallback((id: string) => setSelectedLeadId(id), [])
-  const meta             = SECTION_META[section]
+  // section is null pre-mount; fall back to 'overview' only for the meta title
+  const meta             = SECTION_META[section ?? 'overview']
 
   // Dynamic nav badges driven by live state
   const navBadges = useMemo<Partial<Record<Section, number>>>(() => ({
@@ -1936,9 +1903,15 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
   }, [])
 
   // ── Hash-based tab persistence ────────────────────────────────
-  // Initial section is read synchronously by getInitialSectionFromHash() in
-  // useState, so no mount sync is needed here — only the hashchange listener
-  // for browser back/forward navigation after the page has loaded.
+  // useLayoutEffect fires synchronously after DOM mutations but BEFORE the
+  // browser paints. This is the single source of truth for the initial section.
+  // The server always renders section=null (no active tab, no content), then
+  // the layout effect sets the correct tab from the hash — all before first paint.
+  useLayoutEffect(() => {
+    setSection(getInitialSectionFromHash())
+  }, [])
+
+  // hashchange handles browser back/forward after the initial render
   useEffect(() => {
     const onHashChange = () => {
       const h = window.location.hash.slice(1)
@@ -1999,20 +1972,22 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
           </div>
         </div>
 
-        {/* Content */}
+        {/* Content — only rendered once section is resolved from hash */}
         <div className="px-4 sm:px-8 py-6">
           <AnimatePresence mode="wait">
-            <motion.div key={section}
-              initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-8 }}
-              transition={{ duration:0.22 }}>
-              {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={leads} appointments={appointments} activity={activityFeed} overviewMetrics={overviewMetrics} />}
-              {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} />}
-              {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={leads} newLeadIds={newLeadIds} />}
-              {section==='activity'     && <ActivitySection feed={activityFeed} setFeed={setActivityFeed} />}
-              {section==='appointments' && <AppointmentsSection appointments={appointments} leads={leads} onSelectLead={handleSelectLead} />}
-              {section==='automation'   && <AutomationSection leads={leads} integrations={integrations} overviewMetrics={overviewMetrics} />}
-              {section==='settings'     && <SettingsSection />}
-            </motion.div>
+            {section && (
+              <motion.div key={section}
+                initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-8 }}
+                transition={{ duration:0.22 }}>
+                {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={leads} appointments={appointments} activity={activityFeed} overviewMetrics={overviewMetrics} />}
+                {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} />}
+                {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={leads} newLeadIds={newLeadIds} />}
+                {section==='activity'     && <ActivitySection feed={activityFeed} />}
+                {section==='appointments' && <AppointmentsSection appointments={appointments} leads={leads} onSelectLead={handleSelectLead} />}
+                {section==='automation'   && <AutomationSection leads={leads} integrations={integrations} overviewMetrics={overviewMetrics} />}
+                {section==='settings'     && <SettingsSection />}
+              </motion.div>
+            )}
           </AnimatePresence>
         </div>
       </div>

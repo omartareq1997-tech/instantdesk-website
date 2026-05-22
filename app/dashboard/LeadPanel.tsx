@@ -3,15 +3,16 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  X, Bot, Tag, Clock, Lightbulb,
-  MessageCircle, Globe, Calendar, ArrowRight,
-  SlidersHorizontal, Phone, Mail, FileText, User,
+  X, Bot, Lightbulb,
+  MessageCircle, Calendar, ArrowRight,
+  SlidersHorizontal, Phone, Mail, FileText, Clock, Tag,
 } from 'lucide-react'
 
 /* ─── Types ──────────────────────────────────────────────────── */
 
 type ScoreLabel = 'hot' | 'warm' | 'cold'
 type LeadStatus = 'new' | 'contacted' | 'demo_booked' | 'won' | 'lost'
+type ApptStatus = 'confirmed' | 'pending' | 'completed' | 'cancelled'
 type FromRole   = 'user' | 'ai' | 'agent'
 
 interface Lead {
@@ -20,6 +21,19 @@ interface Lead {
   source: string; interest: string; assignedAgent: string
   score: number; scoreLabel: ScoreLabel; status: LeadStatus; date: string
   metadata?: Record<string, unknown>
+}
+
+// Minimal appointment shape — matches Appointment from types.ts
+interface ApptSummary {
+  id:      string
+  type:    string
+  date:    string    // YYYY-MM-DD
+  time:    string    // HH:MM
+  status:  ApptStatus
+  name:    string
+  company: string
+  notes?:  string
+  leadId?: string
 }
 
 interface ChatMessage {
@@ -50,15 +64,14 @@ function formatMetaValue(v: unknown): string {
 
 // Keys rendered separately — excluded from the generic metadata table
 const SURFACED_META_KEYS = new Set([
-  'full_conversation', 'message', 'initial_message',
-  'notes', 'note',
+  'full_conversation', 'message', 'initial_message', 'notes', 'note',
 ])
 
 /* ─── Conversation helpers ───────────────────────────────────── */
 
 function fmtTime(iso: string): string {
   if (!iso) return ''
-  try { return new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) }
+  try { return new Date(iso).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) }
   catch { return '' }
 }
 
@@ -68,20 +81,24 @@ function fmtSpeed(ms: number | null): string | null {
 }
 
 function fmtDate(iso: string): string {
-  try { return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) }
+  try { return new Date(iso).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' }) }
   catch { return iso }
 }
 
-/**
- * Parse a raw transcript string (metadata.full_conversation or a single message).
- * Supports: "User: ...\nBot: ...", "Customer: ...\nAI: ...", alternating lines.
- */
+/** Full weekday date: "Thursday 5 June 2026" */
+function fmtApptFull(date: string): string {
+  try {
+    return new Date(date + 'T12:00:00Z').toLocaleDateString('en-GB', {
+      weekday:'long', day:'numeric', month:'long', year:'numeric',
+    })
+  } catch { return date }
+}
+
 function parseRawTranscript(text: string): ChatMessage[] {
   const userRx = /^(?:user|customer|human|lead|client)\s*:/i
   const aiRx   = /^(?:bot|ai|assistant|agent|system|instantdesk)\s*:/i
   const lines  = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
   const hasPfx = lines.some(l => userRx.test(l) || aiRx.test(l))
-
   if (hasPfx) {
     return lines.flatMap((line, i): ChatMessage[] => {
       const m = line.match(/^[^:]+:\s*(.+)/i)
@@ -90,16 +107,15 @@ function parseRawTranscript(text: string): ChatMessage[] {
       return []
     })
   }
-  // No prefixes — alternating lines
   return lines.map((line, i) => ({
-    id: `p${i}`, from: (i % 2 === 0 ? 'user' : 'ai') as FromRole,
-    content: line, response_time_ms: null, created_at: '',
+    id:`p${i}`, from:(i%2===0?'user':'ai') as FromRole,
+    content:line, response_time_ms:null, created_at:'',
   }))
 }
 
 /* ─── Config ─────────────────────────────────────────────────── */
 
-const STATUS_CFG: Record<LeadStatus, { label: string; color: string; bg: string }> = {
+const STATUS_CFG: Record<LeadStatus, { label:string; color:string; bg:string }> = {
   new:         { label:'New',         color:'#a78bfa', bg:'rgba(167,139,250,0.10)' },
   contacted:   { label:'Contacted',   color:'#60a5fa', bg:'rgba(96,165,250,0.10)'  },
   demo_booked: { label:'Demo Booked', color:'#fbbf24', bg:'rgba(251,191,36,0.10)'  },
@@ -107,10 +123,17 @@ const STATUS_CFG: Record<LeadStatus, { label: string; color: string; bg: string 
   lost:        { label:'Lost',        color:'#f87171', bg:'rgba(248,113,113,0.10)' },
 }
 
-const SCORE_CFG: Record<ScoreLabel, { color: string; label: string }> = {
+const SCORE_CFG: Record<ScoreLabel, { color:string; label:string }> = {
   hot:  { color:'#f87171', label:'Hot'  },
   warm: { color:'#fb923c', label:'Warm' },
   cold: { color:'#60a5fa', label:'Cold' },
+}
+
+const APPT_STATUS_CFG: Record<ApptStatus, { label:string; color:string; bg:string; border:string }> = {
+  confirmed: { label:'Confirmed', color:'#34d399', bg:'rgba(52,211,153,0.07)',  border:'rgba(52,211,153,0.22)'  },
+  pending:   { label:'Pending',   color:'#fbbf24', bg:'rgba(251,191,36,0.07)',  border:'rgba(251,191,36,0.22)'  },
+  completed: { label:'Completed', color:'#60a5fa', bg:'rgba(96,165,250,0.07)',  border:'rgba(96,165,250,0.22)'  },
+  cancelled: { label:'Cancelled', color:'#f87171', bg:'rgba(248,113,113,0.07)', border:'rgba(248,113,113,0.22)' },
 }
 
 const CHANNEL_LABEL: Record<string, string> = {
@@ -118,26 +141,26 @@ const CHANNEL_LABEL: Record<string, string> = {
 }
 
 function initials(name: string) {
-  return name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
+  return name.split(' ').map(n => n[0]).join('').slice(0,2).toUpperCase()
 }
 
-/* ─── Skeletons ──────────────────────────────────────────────── */
+/* ─── Skeleton ───────────────────────────────────────────────── */
 
 function ConvSkeleton() {
   return (
     <div className="flex flex-col gap-3">
       {[85, 65, 75, 55].map((w, i) => (
-        <div key={i} className={`flex ${i % 2 === 0 ? 'justify-end' : 'justify-start'}`}>
+        <div key={i} className={`flex ${i%2===0?'justify-end':'justify-start'}`}>
           <div className="rounded-2xl animate-pulse"
             style={{ width:`${w}%`, height:34,
-              background: i % 2 === 0 ? 'rgba(255,255,255,0.05)' : 'rgba(139,92,246,0.08)' }} />
+              background: i%2===0 ? 'rgba(255,255,255,0.05)' : 'rgba(139,92,246,0.08)' }} />
         </div>
       ))}
     </div>
   )
 }
 
-/* ─── Shared chat bubbles ────────────────────────────────────── */
+/* ─── Chat bubbles ───────────────────────────────────────────── */
 
 function ChatBubbles({ messages }: { messages: ChatMessage[] }) {
   return (
@@ -145,7 +168,7 @@ function ChatBubbles({ messages }: { messages: ChatMessage[] }) {
       {messages.map((msg, i) => (
         <motion.div key={msg.id}
           initial={{ opacity:0, y:8 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.04 }}
-          className={`flex ${msg.from === 'user' ? 'justify-end' : 'justify-start'}`}
+          className={`flex ${msg.from==='user'?'justify-end':'justify-start'}`}
         >
           <div className="max-w-[85%]">
             {msg.from !== 'user' && (
@@ -155,7 +178,7 @@ function ChatBubbles({ messages }: { messages: ChatMessage[] }) {
                   <Bot className="w-2.5 h-2.5 text-violet-400" />
                 </div>
                 <span className="text-[9px] font-bold text-violet-400/60 uppercase tracking-wider">
-                  {msg.from === 'agent' ? 'Agent' : 'InstantDesk AI'}
+                  {msg.from==='agent'?'Agent':'InstantDesk AI'}
                 </span>
                 {fmtSpeed(msg.response_time_ms) && (
                   <span className="text-[9px] text-white/20">· replied in {fmtSpeed(msg.response_time_ms)}</span>
@@ -163,7 +186,7 @@ function ChatBubbles({ messages }: { messages: ChatMessage[] }) {
               </div>
             )}
             <div className="rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed"
-              style={msg.from !== 'user' ? {
+              style={msg.from!=='user' ? {
                 background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.2)',
                 color:'rgba(255,255,255,0.75)', borderTopLeftRadius:4,
               } : {
@@ -173,7 +196,7 @@ function ChatBubbles({ messages }: { messages: ChatMessage[] }) {
               {msg.content}
             </div>
             {msg.created_at && (
-              <div className={`text-[9px] text-white/20 mt-1 ${msg.from === 'user' ? 'text-right' : 'text-left'}`}>
+              <div className={`text-[9px] text-white/20 mt-1 ${msg.from==='user'?'text-right':'text-left'}`}>
                 {fmtTime(msg.created_at)}
               </div>
             )}
@@ -184,11 +207,96 @@ function ChatBubbles({ messages }: { messages: ChatMessage[] }) {
   )
 }
 
-/* ─── Component ──────────────────────────────────────────────── */
+/* ─── Appointment card ───────────────────────────────────────── */
 
-export default function LeadPanel({ lead, onClose }: { lead: Lead; onClose: () => void }) {
+function AppointmentCard({ appt }: { appt: ApptSummary }) {
+  const sc = APPT_STATUS_CFG[appt.status]
+  return (
+    <div className="rounded-2xl p-4 flex flex-col gap-3"
+      style={{ background:sc.bg, border:`1px solid ${sc.border}` }}>
+
+      {/* Header row: label + status badge */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0"
+            style={{ background:`${sc.color}20` }}>
+            <Calendar className="w-3.5 h-3.5" style={{ color:sc.color }} />
+          </div>
+          <span className="text-[10px] font-bold uppercase tracking-widest"
+            style={{ color:`${sc.color}90` }}>
+            Appointment
+          </span>
+        </div>
+        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+          style={{ color:sc.color, background:`${sc.color}18`, border:`1px solid ${sc.color}30` }}>
+          <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background:sc.color }} />
+          {sc.label}
+        </span>
+      </div>
+
+      {/* Type */}
+      <div className="text-sm font-bold text-white/85">{appt.type}</div>
+
+      {/* Date + Time */}
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-2 text-xs text-white/55">
+          <Calendar className="w-3 h-3 text-white/25 flex-shrink-0" />
+          <span>{fmtApptFull(appt.date)}</span>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-white/45">
+          <Clock className="w-3 h-3 text-white/20 flex-shrink-0" />
+          <span>{appt.time}</span>
+        </div>
+      </div>
+
+      {/* Lead + Company */}
+      {(appt.name || appt.company) && (
+        <div className="flex items-center gap-2 text-xs text-white/40">
+          <div className="w-5 h-5 rounded-md flex items-center justify-center text-[8px] font-black text-white flex-shrink-0"
+            style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.45),rgba(37,99,235,0.35))' }}>
+            {initials(appt.name || '?')}
+          </div>
+          <span>{appt.name}{appt.company ? ` · ${appt.company}` : ''}</span>
+        </div>
+      )}
+
+      {/* Notes / location */}
+      {appt.notes && (
+        <div className="flex items-start gap-2 pt-2.5" style={{ borderTop:`1px solid ${sc.color}18` }}>
+          <Tag className="w-3 h-3 mt-0.5 flex-shrink-0" style={{ color:`${sc.color}60` }} />
+          <p className="text-[11px] leading-relaxed" style={{ color:'rgba(255,255,255,0.45)' }}>
+            {appt.notes}
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ─── Main component ─────────────────────────────────────────── */
+
+export default function LeadPanel({
+  lead,
+  appointments,
+  onClose,
+}: {
+  lead:         Lead
+  appointments?: ApptSummary[]
+  onClose:      () => void
+}) {
   const statusCfg = STATUS_CFG[lead.status]
   const scoreCfg  = SCORE_CFG[lead.scoreLabel]
+
+  // Find all appointments linked to this lead, upcoming first
+  const leadAppts = (appointments ?? [])
+    .filter(a => a.leadId === lead.id)
+    .sort((a, b) => {
+      const aActive = a.status !== 'completed' && a.status !== 'cancelled'
+      const bActive = b.status !== 'completed' && b.status !== 'cancelled'
+      if (aActive && !bActive) return -1
+      if (!aActive && bActive) return 1
+      return `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`)
+    })
 
   /* ── Conversation fetch ──────────────────────────────────────── */
   const [messages,    setMessages]    = useState<ChatMessage[]>([])
@@ -196,9 +304,7 @@ export default function LeadPanel({ lead, onClose }: { lead: Lead; onClose: () =
   const [channel,     setChannel]     = useState<string | null>(null)
 
   useEffect(() => {
-    setConvLoading(true)
-    setMessages([])
-    setChannel(null)
+    setConvLoading(true); setMessages([]); setChannel(null)
     fetch(`/api/lead-messages?lead_id=${encodeURIComponent(lead.id)}`)
       .then(r => r.json())
       .then((d: { messages?: ChatMessage[]; channel?: string | null }) => {
@@ -240,18 +346,17 @@ export default function LeadPanel({ lead, onClose }: { lead: Lead; onClose: () =
     : typeof lead.metadata?.note  === 'string' ? lead.metadata.note
     : null
 
-  // Entries that go in the generic key-value table (excluding already-surfaced keys)
   const metaEntries = lead.metadata
     ? Object.entries(lead.metadata).filter(([k]) => !SURFACED_META_KEYS.has(k))
     : []
 
   /* ── Lead info rows ──────────────────────────────────────────── */
   const detailRows = [
-    { label:'Interest',  value: lead.interest     || null },
-    { label:'Agent',     value: lead.assignedAgent || null },
-    { label:'Source',    value: lead.source        || null },
-    { label:'Added',     value: lead.date ? fmtDate(lead.date) : null },
-  ].filter(r => r.value) as { label: string; value: string }[]
+    { label:'Interest', value: lead.interest     || null },
+    { label:'Agent',    value: lead.assignedAgent || null },
+    { label:'Source',   value: lead.source        || null },
+    { label:'Added',    value: lead.date ? fmtDate(lead.date) : null },
+  ].filter(r => r.value) as { label:string; value:string }[]
 
   return (
     <AnimatePresence>
@@ -287,8 +392,8 @@ export default function LeadPanel({ lead, onClose }: { lead: Lead; onClose: () =
           </div>
           <button onClick={onClose}
             className="w-8 h-8 rounded-xl flex items-center justify-center text-white/30 hover:text-white/80 transition-all flex-shrink-0"
-            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
+            onMouseEnter={e => { e.currentTarget.style.background='rgba(255,255,255,0.08)' }}
+            onMouseLeave={e => { e.currentTarget.style.background='transparent' }}>
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -314,6 +419,15 @@ export default function LeadPanel({ lead, onClose }: { lead: Lead; onClose: () =
                   <span className="text-xs font-medium text-white/65 truncate">{lead.email}</span>
                 </a>
               )}
+            </div>
+          )}
+
+          {/* ── Booked appointments ───────────────────────────── */}
+          {leadAppts.length > 0 && (
+            <div className="flex flex-col gap-2">
+              {leadAppts.map(appt => (
+                <AppointmentCard key={appt.id} appt={appt} />
+              ))}
             </div>
           )}
 
@@ -353,8 +467,8 @@ export default function LeadPanel({ lead, onClose }: { lead: Lead; onClose: () =
                 <div key={row.label}
                   className="flex items-center gap-3 px-4 py-2.5"
                   style={{
-                    background:   i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent',
-                    borderBottom: i < detailRows.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
+                    background:   i%2===0 ? 'rgba(255,255,255,0.02)' : 'transparent',
+                    borderBottom: i<detailRows.length-1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
                   }}>
                   <span className="text-[10px] font-bold uppercase tracking-widest text-white/25 w-16 flex-shrink-0">
                     {row.label}
@@ -382,9 +496,7 @@ export default function LeadPanel({ lead, onClose }: { lead: Lead; onClose: () =
             <div className="flex flex-col gap-3">
               <div className="flex items-center gap-1.5">
                 <SlidersHorizontal className="w-3 h-3 text-white/25" />
-                <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">
-                  Custom Details
-                </span>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">Custom Details</span>
               </div>
               <div className="rounded-2xl overflow-hidden"
                 style={{ border:'1px solid rgba(255,255,255,0.07)' }}>
@@ -392,8 +504,8 @@ export default function LeadPanel({ lead, onClose }: { lead: Lead; onClose: () =
                   <div key={key}
                     className="flex items-start justify-between gap-4 px-4 py-2.5"
                     style={{
-                      background:   i % 2 === 0 ? 'rgba(255,255,255,0.015)' : 'transparent',
-                      borderBottom: i < metaEntries.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
+                      background:   i%2===0 ? 'rgba(255,255,255,0.015)' : 'transparent',
+                      borderBottom: i<metaEntries.length-1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
                     }}>
                     <span className="text-[11px] font-semibold text-white/35 flex-shrink-0">
                       {formatMetaKey(key)}
@@ -412,9 +524,7 @@ export default function LeadPanel({ lead, onClose }: { lead: Lead; onClose: () =
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-1.5">
                 <MessageCircle className="w-3.5 h-3.5 text-white/25" />
-                <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">
-                  Conversation
-                </span>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">Conversation</span>
               </div>
               {!convLoading && channel && (
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"

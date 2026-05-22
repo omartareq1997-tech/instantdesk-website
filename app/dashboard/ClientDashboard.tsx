@@ -1802,7 +1802,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
       {/* Lead detail panel */}
       <AnimatePresence>
         {selectedLead && (
-          <LeadPanel key={selectedLead.id} lead={selectedLead} onClose={() => setSelectedLeadId(null)} />
+          <LeadPanel key={selectedLead.id} lead={selectedLead} appointments={appointments} onClose={() => setSelectedLeadId(null)} />
         )}
       </AnimatePresence>
     </div>

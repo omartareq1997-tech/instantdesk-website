@@ -71,6 +71,8 @@ const SURFACED_META_KEYS = new Set([
 
 function fmtTime(iso: string): string {
   if (!iso) return ''
+  // iso may be a bare "HH:MM" time string from a transcript, or a full ISO datetime
+  if (/^\d{1,2}:\d{2}/.test(iso)) return iso.slice(0, 5)
   try { return new Date(iso).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) }
   catch { return '' }
 }
@@ -94,22 +96,135 @@ function fmtApptFull(date: string): string {
   } catch { return date }
 }
 
-function parseRawTranscript(text: string): ChatMessage[] {
-  const userRx = /^(?:user|customer|human|lead|client)\s*:/i
-  const aiRx   = /^(?:bot|ai|assistant|agent|system|instantdesk)\s*:/i
-  const lines  = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
-  const hasPfx = lines.some(l => userRx.test(l) || aiRx.test(l))
-  if (hasPfx) {
-    return lines.flatMap((line, i): ChatMessage[] => {
-      const m = line.match(/^[^:]+:\s*(.+)/i)
-      if (userRx.test(line) && m) return [{ id:`p${i}`, from:'user', content:m[1], response_time_ms:null, created_at:'' }]
-      if (aiRx.test(line)   && m) return [{ id:`p${i}`, from:'ai',   content:m[1], response_time_ms:null, created_at:'' }]
-      return []
-    })
+/**
+ * Role label regexes.
+ * CLIENT_RX: the human side — Visitor, Client, User, Customer, Lead, You, Human, Reply
+ * BOT_RX:    the bot side   — Bot, AI, Assistant, Agent, System, InstantDesk, Support, Chatbot, Rep
+ * TS_RX:     optional timestamp prefix — [14:32], (14:32:05), "14:32 - "
+ */
+const CLIENT_RX = /^(?:client|user|customer|human|lead|visitor|you|reply|sender|guest)\s*[:\-]\s*/i
+const BOT_RX    = /^(?:bot|ai|assistant|agent|system|instantdesk|support|rep|help|chatbot|operator|staff)\s*[:\-]\s*/i
+const TS_RX     = /^[\[(]?\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?[\])]?\s*[-–|]?\s*/i
+
+/**
+ * Parse an HTML conversation transcript from a chat widget.
+ * Detects speaker by CSS classes, inline styles, or parent element classes.
+ * Returns [] if the HTML structure can't be mapped to roles.
+ */
+function parseHtmlConversation(html: string): ChatMessage[] {
+  if (typeof document === 'undefined') return []
+  const wrap = document.createElement('div')
+  wrap.innerHTML = html
+  const msgs: ChatMessage[] = []
+
+  // Identify role from element + parent classes / inline style
+  function detectRole(el: Element): FromRole | null {
+    const check = (cls: string): FromRole | null => {
+      // Client: right-side, outgoing, blue, visitor, user, etc.
+      if (/\b(visitor|client|user[-_]?msg|from[-_]?user|outgoing|sent|right|you|human|lead|customer|blue|own|mine)\b/.test(cls)) return 'user'
+      // Bot: left-side, incoming, white, bot, ai, assistant, etc.
+      if (/\b(bot|ai|assistant|agent|incoming|received|left|support|chatbot|white|other|operator)\b/.test(cls)) return 'ai'
+      return null
+    }
+    const cls = (el.getAttribute('class') ?? '').toLowerCase()
+    const role = check(cls)
+    if (role) return role
+    // Check inline style for alignment clues
+    const style = (el.getAttribute('style') ?? '').toLowerCase()
+    if (/text-align\s*:\s*right|float\s*:\s*right|margin-left\s*:\s*auto/.test(style)) return 'user'
+    if (/text-align\s*:\s*left|float\s*:\s*left|margin-right\s*:\s*auto/.test(style))  return 'ai'
+    // Check parent
+    if (el.parentElement) {
+      const parentRole = check((el.parentElement.getAttribute('class') ?? '').toLowerCase())
+      if (parentRole) return parentRole
+    }
+    return null
   }
+
+  // Walk DOM, collect leaf-ish message elements
+  function walk(el: Element, depth: number) {
+    if (depth > 10) return
+    const blockKids = Array.from(el.children).filter(c =>
+      /^(div|p|li|section|article|blockquote)$/i.test(c.tagName)
+    )
+    if (blockKids.length > 0) {
+      blockKids.forEach(c => walk(c, depth + 1))
+      return
+    }
+    const text = (el.textContent ?? '').trim()
+    if (!text) return
+    const role = detectRole(el)
+    if (role) {
+      msgs.push({ id:`h${msgs.length}`, from:role, content:text, response_time_ms:null, created_at:'' })
+    }
+  }
+
+  Array.from(wrap.children).forEach(c => walk(c, 0))
+  return msgs
+}
+
+/**
+ * Parse a raw text or HTML conversation transcript into ChatMessage[].
+ *
+ * Priority:
+ * 1. HTML → class/style-based role detection
+ * 2. Prefixed lines: "Client: …" / "Bot: …" (with optional timestamp prefix)
+ *    Continuation lines (no recognisable label) are appended to the previous message.
+ * 3. Fallback: alternate user / ai by line index
+ */
+function parseRawTranscript(rawText: string): ChatMessage[] {
+  const text = rawText.trim()
+  if (!text) return []
+
+  // ── 1. HTML input ─────────────────────────────────────────────
+  if (/<[a-z][\s\S]*?>/i.test(text)) {
+    const htmlMsgs = parseHtmlConversation(text)
+    if (htmlMsgs.length > 0) return htmlMsgs
+    // Strip tags and reparse as plain text
+    const stripped = text.replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').trim()
+    return parseRawTranscript(stripped)
+  }
+
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+
+  // ── 2. Prefixed lines ─────────────────────────────────────────
+  const hasPfx = lines.some(l => {
+    const stripped = l.replace(TS_RX, '')
+    return CLIENT_RX.test(stripped) || BOT_RX.test(stripped)
+  })
+
+  if (hasPfx) {
+    const msgs: ChatMessage[] = []
+    let cur: ChatMessage | null = null
+
+    for (let i = 0; i < lines.length; i++) {
+      const raw  = lines[i]
+      // Extract optional timestamp
+      const tsM  = raw.match(/^[\[(]?(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?)[\])]?/i)
+      const time = tsM ? tsM[1].trim() : ''
+      const line = raw.replace(TS_RX, '').trim()
+
+      if (CLIENT_RX.test(line)) {
+        if (cur) msgs.push(cur)
+        cur = { id:`p${i}`, from:'user', content:line.replace(CLIENT_RX, '').trim(), response_time_ms:null, created_at:time }
+      } else if (BOT_RX.test(line)) {
+        if (cur) msgs.push(cur)
+        cur = { id:`p${i}`, from:'ai', content:line.replace(BOT_RX, '').trim(), response_time_ms:null, created_at:time }
+      } else if (cur) {
+        // Continuation — append to the current speaker's message
+        cur.content += '\n' + line
+      }
+      // else: header/separator line before any speaker — skip
+    }
+    if (cur) msgs.push(cur)
+    // Filter out blank-content messages
+    return msgs.filter(m => m.content.trim().length > 0)
+  }
+
+  // ── 3. No labels — alternate user / ai by line index ──────────
   return lines.map((line, i) => ({
-    id:`p${i}`, from:(i%2===0?'user':'ai') as FromRole,
-    content:line, response_time_ms:null, created_at:'',
+    id: `p${i}`, from: (i % 2 === 0 ? 'user' : 'ai') as FromRole,
+    content: line, response_time_ms: null, created_at: '',
   }))
 }
 

@@ -164,6 +164,44 @@ function isScalar(v: unknown): v is string | number | boolean {
   return ['string','number','boolean'].includes(typeof v)
 }
 
+/* ── Conversation balance check ──────────────────────────────────────
+ *
+ * Mirrors the role-detection logic in LeadPanel.tsx but runs server-side
+ * (no DOMParser — HTML is probed with regex attribute matching instead).
+ *
+ * CLIENT_SIDE: Visitor, Client, User, Customer, Lead, You, Reply, Guest, Sender
+ * BOT_SIDE:    Bot, AI, Assistant, Agent, System, InstantDesk, Support, Rep,
+ *              Help, Chatbot, Operator, Staff
+ *
+ * For plain text the labels must appear at the start of a line (optionally
+ * preceded by a [HH:MM] timestamp).  For HTML the CSS class attribute is
+ * scanned for the canonical bubble-direction keywords.
+ * ──────────────────────────────────────────────────────────────────── */
+
+const _TS_PFX  = /^[\[(]?\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?[\])]?\s*[-–|]?\s*/i
+const _CLI_RX  = /^(?:client|user|customer|human|lead|visitor|you|reply|sender|guest)\s*[:\-]/i
+const _BOT_RX  = /^(?:bot|ai|assistant|agent|system|instantdesk|support|rep|help|chatbot|operator|staff)\s*[:\-]/i
+
+// HTML class-name patterns (scanned directly on the raw HTML string)
+const _HTML_CLI_CLS = /class=["'][^"']*\b(visitor|client|user[-_]?msg|from[-_]?user|outgoing|sent|right|you|human|lead|customer|blue|own|mine)\b/i
+const _HTML_BOT_CLS = /class=["'][^"']*\b(bot|ai|assistant|agent|incoming|received|left|support|chatbot|white|other|operator)\b/i
+
+function conversationSides(text: string): { hasClient: boolean; hasBot: boolean; labeled: boolean } {
+  const isHtml = /<[a-z][\s\S]{0,200}?>/i.test(text)
+
+  if (isHtml) {
+    const hasClient = _HTML_CLI_CLS.test(text)
+    const hasBot    = _HTML_BOT_CLS.test(text)
+    return { hasClient, hasBot, labeled: hasClient || hasBot }
+  }
+
+  // Plain text — strip timestamp prefix from each line before label check
+  const lines = text.split(/\r?\n/).map(l => l.trim().replace(_TS_PFX, '')).filter(Boolean)
+  const hasClient = lines.some(l => _CLI_RX.test(l))
+  const hasBot    = lines.some(l => _BOT_RX.test(l))
+  return { hasClient, hasBot, labeled: hasClient || hasBot }
+}
+
 /* ── Ingest types ────────────────────────────────────────────────── */
 
 interface IngestMessage {
@@ -235,6 +273,29 @@ export async function POST(req: NextRequest) {
   /* 3. Validate ────────────────────────────────────────────────── */
   if (!body.client_id || typeof body.client_id !== 'string') return err('client_id is required', 400, rid)
   if (!body.name      || typeof body.name      !== 'string') return err('name is required', 400, rid)
+
+  /* 3b. Conversation balance check ────────────────────────────────
+   *
+   * When full_conversation is provided and contains labeled messages,
+   * both a Client side and a Bot side must be present.  Unlabeled
+   * transcripts (no role prefixes, no HTML class clues) are allowed
+   * through — we can't verify those without context.
+   * ─────────────────────────────────────────────────────────────── */
+  if (body.full_conversation?.trim()) {
+    const { hasClient, hasBot, labeled } = conversationSides(body.full_conversation)
+    if (labeled && (!hasClient || !hasBot)) {
+      const missing = !hasClient ? 'Client' : 'Bot'
+      const found   = !hasClient ? 'Bot'    : 'Client'
+      console.warn(`[ingest/lead][${rid}] full_conversation missing ${missing} messages (only ${found} detected)`)
+      return err(
+        `full_conversation must contain at least one Client message and one Bot message. ` +
+        `Only ${found} messages were detected. ` +
+        `Label client messages with "Client:", "User:", or "Visitor:" and ` +
+        `bot messages with "Bot:", "AI:", or "Assistant:".`,
+        400, rid
+      )
+    }
+  }
 
   /* 4. Normalise direct columns ───────────────────────────────── */
   const clientId   = body.client_id.trim()

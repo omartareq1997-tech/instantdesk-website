@@ -161,37 +161,6 @@ import type {
    ──────────────────────────────────────────────────────────────── */
 const DEMO_CLIENT_ID = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
 
-/* ─── Mock fallback data ─────────────────────────────────────────
-   Returned when Supabase is unavailable or tables are empty.
-   Values match the seed data in ClientDashboard.tsx.
-   ──────────────────────────────────────────────────────────────── */
-
-const MOCK_LEADS: Lead[] = [
-  { id:'1',  name:'Sarah Mitchell',   company:'Orbit Digital',      source:'Website Chat', interest:'AI Receptionist',    assignedAgent:'Priya S.',  score:92, scoreLabel:'hot',  status:'demo_booked', date:'2026-05-21T09:15:00Z', auto:{ aiSms:'sent',      emailSeq:'active',      nurture:'not_started', smartAssign:'assigned',   autoCall:'off'       }},
-  { id:'2',  name:'James Okafor',     company:'Okafor & Co',        source:'WhatsApp',     interest:'WhatsApp Automation', assignedAgent:'James M.',  score:78, scoreLabel:'hot',  status:'new',         date:'2026-05-21T08:42:00Z', auto:{ aiSms:'sent',      emailSeq:'not_started', nurture:'not_started', smartAssign:'assigned',   autoCall:'scheduled' }},
-  { id:'3',  name:'Priya Sharma',     company:'GrowFast Ltd',       source:'Email',        interest:'Full Suite',          assignedAgent:'Priya S.',  score:61, scoreLabel:'warm', status:'contacted',   date:'2026-05-20T14:30:00Z', auto:{ aiSms:'scheduled', emailSeq:'active',      nurture:'active',      smartAssign:'assigned',   autoCall:'off'       }},
-  { id:'4',  name:'Daniel Lee',       company:'Lee Consulting',     source:'Website Chat', interest:'Lead Capture',        assignedAgent:'Daniel C.', score:55, scoreLabel:'warm', status:'won',         date:'2026-05-19T11:00:00Z', auto:{ aiSms:'off',       emailSeq:'paused',      nurture:'active',      smartAssign:'assigned',   autoCall:'completed' }},
-  { id:'5',  name:'Amina Hassan',     company:'Hassan Group',       source:'WhatsApp',     interest:'AI Receptionist',    assignedAgent:'Priya S.',  score:48, scoreLabel:'warm', status:'contacted',   date:'2026-05-18T16:20:00Z', auto:{ aiSms:'sent',      emailSeq:'active',      nurture:'not_started', smartAssign:'assigned',   autoCall:'off'       }},
-  { id:'6',  name:'Tom Reynolds',     company:'Reynolds Tech',      source:'Website Chat', interest:'WhatsApp Automation', assignedAgent:'James M.',  score:35, scoreLabel:'cold', status:'new',         date:'2026-05-17T10:45:00Z', auto:{ aiSms:'scheduled', emailSeq:'not_started', nurture:'not_started', smartAssign:'unassigned', autoCall:'off'       }},
-  { id:'7',  name:'Chen Wei',         company:'Wei Innovations',    source:'WhatsApp',     interest:'Full Suite',          assignedAgent:'Daniel C.', score:83, scoreLabel:'hot',  status:'demo_booked', date:'2026-05-16T09:30:00Z', auto:{ aiSms:'sent',      emailSeq:'active',      nurture:'not_started', smartAssign:'assigned',   autoCall:'scheduled' }},
-  { id:'8',  name:'Fatima Al-Rashid', company:'Al-Rashid Partners', source:'Email',        interest:'Enterprise Pack',     assignedAgent:'Sarah K.',  score:90, scoreLabel:'hot',  status:'won',         date:'2026-05-15T13:00:00Z', auto:{ aiSms:'off',       emailSeq:'paused',      nurture:'active',      smartAssign:'assigned',   autoCall:'completed' }},
-  { id:'9',  name:'Marcus Brown',     company:'Brown & Associates', source:'Website Chat', interest:'Lead Capture',        assignedAgent:'Sarah K.',  score:22, scoreLabel:'cold', status:'lost',        date:'2026-05-14T15:30:00Z', auto:{ aiSms:'off',       emailSeq:'paused',      nurture:'not_started', smartAssign:'assigned',   autoCall:'off'       }},
-  { id:'10', name:'Nina Kowalski',    company:'Kowalski Design',    source:'WhatsApp',     interest:'WhatsApp Automation', assignedAgent:'James M.',  score:44, scoreLabel:'warm', status:'contacted',   date:'2026-05-13T11:15:00Z', auto:{ aiSms:'sent',      emailSeq:'active',      nurture:'not_started', smartAssign:'assigned',   autoCall:'off'       }},
-]
-
-
-const MOCK_ACTIVITY: ActivityItem[] = [
-  { id:'1',  type:'sms',         text:'AI replied to James Okafor in 3s',         sub:'WhatsApp · auto-triggered',         time:'2 min ago',  live:true  },
-  { id:'2',  type:'appointment', text:'Demo booked — Sarah Mitchell',              sub:'Thu 22 May · 3:00 PM',             time:'10 min ago'            },
-  { id:'3',  type:'assignment',  text:'Lead assigned to Priya S.',               sub:'Chen Wei · smart assignment',       time:'18 min ago'            },
-  { id:'4',  type:'email',       text:'Email sequence triggered — Tom Reynolds',  sub:'Follow-up sequence day 1',          time:'32 min ago'            },
-  { id:'5',  type:'sms',         text:'AI recovered missed call — Nina Kowalski', sub:'WhatsApp reply sent in 8s',         time:'1 hour ago'            },
-  { id:'6',  type:'appointment', text:'Discovery call confirmed — Priya Sharma',  sub:'Fri 23 May · 2:00 PM',             time:'2 hours ago'           },
-  { id:'7',  type:'assignment',  text:'Smart assignment — Amina Hassan → Priya S.',sub:'Availability + territory score',  time:'3 hours ago'           },
-  { id:'8',  type:'email',       text:'Nurture sequence started — Marcus Brown',  sub:'30-day drip campaign',             time:'5 hours ago'           },
-  { id:'9',  type:'call',        text:'Auto-call completed — Daniel Lee',          sub:'Duration: 4 min 32 sec',           time:'Yesterday'             },
-  { id:'10', type:'email',       text:'Welcome email sent — James Okafor',         sub:'Instant auto-response',            time:'Yesterday'             },
-]
 
 // 14 days of analytics (Mon → Sun × 2), matching chart data in AnalyticsSection.tsx
 const MOCK_ANALYTICS: AnalyticsDay[] = [
@@ -341,7 +310,7 @@ function mapIntegration(r: IntegrationStatusRow): IntegrationRow {
 
 /**
  * Fetch all leads for a client, sorted by score descending.
- * Falls back to MOCK_LEADS if Supabase is unavailable or tables are empty.
+ * Returns [] when no leads exist or Supabase is unavailable.
  */
 export async function getClientLeads(clientId = DEMO_CLIENT_ID): Promise<Lead[]> {
   try {
@@ -352,10 +321,9 @@ export async function getClientLeads(clientId = DEMO_CLIENT_ID): Promise<Lead[]>
       .eq('client_id', clientId)
       .order('score', { ascending: false })
     if (error) throw error
-    if (!data?.length) return MOCK_LEADS
-    return data.map(r => mapLead(r as LeadRow))
+    return (data ?? []).map(r => mapLead(r as LeadRow))
   } catch {
-    return MOCK_LEADS
+    return []
   }
 }
 
@@ -416,8 +384,8 @@ export async function getClientAppointments(clientId = DEMO_CLIENT_ID): Promise<
 }
 
 /**
- * Fetch the 50 most recent activity events for a client.
- * Falls back to MOCK_ACTIVITY.
+ * Fetch the 50 most recent activity events for a client, newest first.
+ * Returns [] when no events exist or Supabase is unavailable.
  */
 export async function getClientActivityEvents(clientId = DEMO_CLIENT_ID): Promise<ActivityItem[]> {
   try {
@@ -429,10 +397,9 @@ export async function getClientActivityEvents(clientId = DEMO_CLIENT_ID): Promis
       .order('created_at', { ascending: false })
       .limit(50)
     if (error) throw error
-    if (!data?.length) return MOCK_ACTIVITY
-    return data.map(r => mapActivity(r as ActivityRow))
+    return (data ?? []).map(r => mapActivity(r as ActivityRow))
   } catch {
-    return MOCK_ACTIVITY
+    return []
   }
 }
 

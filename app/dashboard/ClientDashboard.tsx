@@ -42,19 +42,6 @@ interface Notification { id: string; type: NotifType; text: string; sub: string;
 
 /* ─── Mock Data ──────────────────────────────────────────────── */
 
-const LEADS: Lead[] = [
-  { id:'1',  name:'Sarah Mitchell',   company:'Orbit Digital',      source:'Website Chat', interest:'AI Receptionist',    assignedAgent:'Priya S.',  score:92, scoreLabel:'hot',  status:'demo_booked', date:'2026-05-21T09:15:00Z', auto:{ aiSms:'sent',      emailSeq:'active',      nurture:'not_started', smartAssign:'assigned',   autoCall:'off'       }},
-  { id:'2',  name:'James Okafor',     company:'Okafor & Co',        source:'WhatsApp',     interest:'WhatsApp Automation', assignedAgent:'James M.',  score:78, scoreLabel:'hot',  status:'new',         date:'2026-05-21T08:42:00Z', auto:{ aiSms:'sent',      emailSeq:'not_started', nurture:'not_started', smartAssign:'assigned',   autoCall:'scheduled' }},
-  { id:'3',  name:'Priya Sharma',     company:'GrowFast Ltd',       source:'Email',        interest:'Full Suite',          assignedAgent:'Priya S.',  score:61, scoreLabel:'warm', status:'contacted',   date:'2026-05-20T14:30:00Z', auto:{ aiSms:'scheduled', emailSeq:'active',      nurture:'active',      smartAssign:'assigned',   autoCall:'off'       }},
-  { id:'4',  name:'Daniel Lee',       company:'Lee Consulting',     source:'Website Chat', interest:'Lead Capture',        assignedAgent:'Daniel C.', score:55, scoreLabel:'warm', status:'won',         date:'2026-05-19T11:00:00Z', auto:{ aiSms:'off',       emailSeq:'paused',      nurture:'active',      smartAssign:'assigned',   autoCall:'completed' }},
-  { id:'5',  name:'Amina Hassan',     company:'Hassan Group',       source:'WhatsApp',     interest:'AI Receptionist',    assignedAgent:'Priya S.',  score:48, scoreLabel:'warm', status:'contacted',   date:'2026-05-18T16:20:00Z', auto:{ aiSms:'sent',      emailSeq:'active',      nurture:'not_started', smartAssign:'assigned',   autoCall:'off'       }},
-  { id:'6',  name:'Tom Reynolds',     company:'Reynolds Tech',      source:'Website Chat', interest:'WhatsApp Automation', assignedAgent:'James M.',  score:35, scoreLabel:'cold', status:'new',         date:'2026-05-17T10:45:00Z', auto:{ aiSms:'scheduled', emailSeq:'not_started', nurture:'not_started', smartAssign:'unassigned', autoCall:'off'       }},
-  { id:'7',  name:'Chen Wei',         company:'Wei Innovations',    source:'WhatsApp',     interest:'Full Suite',          assignedAgent:'Daniel C.', score:83, scoreLabel:'hot',  status:'demo_booked', date:'2026-05-16T09:30:00Z', auto:{ aiSms:'sent',      emailSeq:'active',      nurture:'not_started', smartAssign:'assigned',   autoCall:'scheduled' }},
-  { id:'8',  name:'Fatima Al-Rashid', company:'Al-Rashid Partners', source:'Email',        interest:'Enterprise Pack',     assignedAgent:'Sarah K.',  score:90, scoreLabel:'hot',  status:'won',         date:'2026-05-15T13:00:00Z', auto:{ aiSms:'off',       emailSeq:'paused',      nurture:'active',      smartAssign:'assigned',   autoCall:'completed' }},
-  { id:'9',  name:'Marcus Brown',     company:'Brown & Associates', source:'Website Chat', interest:'Lead Capture',        assignedAgent:'Sarah K.',  score:22, scoreLabel:'cold', status:'lost',        date:'2026-05-14T15:30:00Z', auto:{ aiSms:'off',       emailSeq:'paused',      nurture:'not_started', smartAssign:'assigned',   autoCall:'off'       }},
-  { id:'10', name:'Nina Kowalski',    company:'Kowalski Design',    source:'WhatsApp',     interest:'WhatsApp Automation', assignedAgent:'James M.',  score:44, scoreLabel:'warm', status:'contacted',   date:'2026-05-13T11:15:00Z', auto:{ aiSms:'sent',      emailSeq:'active',      nurture:'not_started', smartAssign:'assigned',   autoCall:'off'       }},
-]
-
 const SEED_NOTIFS: Notification[] = [
   { id:'1', type:'lead',    text:'New hot lead captured',         sub:'James Okafor · WhatsApp · 2 min ago',  read:false, time:'2 min ago'  },
   { id:'2', type:'booking', text:'Demo confirmed',                sub:'Sarah Mitchell · Thu 22 May 3pm',      read:false, time:'10 min ago' },
@@ -1008,7 +995,22 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>() }
           </thead>
           <tbody className="divide-y divide-white/[0.04]">
             <AnimatePresence initial={false}>
-              {filtered.length === 0 ? (
+              {leads.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-5 py-20 text-center">
+                    <div className="flex flex-col items-center gap-3">
+                      <div className="w-12 h-12 rounded-2xl flex items-center justify-center"
+                        style={{ background:'rgba(139,92,246,0.08)', border:'1px solid rgba(139,92,246,0.15)' }}>
+                        <Users className="w-5 h-5 text-violet-400/40" />
+                      </div>
+                      <p className="text-sm font-semibold text-white/30">No leads yet</p>
+                      <p className="text-xs text-white/18 max-w-[260px] leading-relaxed">
+                        New captured leads will appear here automatically as they come in through your integrations.
+                      </p>
+                    </div>
+                  </td>
+                </tr>
+              ) : filtered.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-5 py-16 text-center">
                     <p className="text-sm text-white/25">No leads match your filters</p>
@@ -1811,7 +1813,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
   const [notifs,         setNotifs]         = useState<Notification[]>(SEED_NOTIFS)
 
   // ── Live state (seeded from SSR, then kept fresh by Supabase Realtime)
-  const [leads,       setLeads]       = useState<Lead[]>       (initialData?.leads?.length  ? initialData.leads  : LEADS)
+  const [leads,       setLeads]       = useState<Lead[]>       (initialData?.leads ?? [])
   const [appointments,setAppointments]= useState<Appointment[]>(initialData?.appointments   ?? [])
   const [activityFeed,setActivityFeed]= useState<ActivityItem[]>(initialData?.activity      ?? [])
 

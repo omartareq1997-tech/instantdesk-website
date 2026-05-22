@@ -1398,10 +1398,26 @@ function WeekDatePicker({
 
 /* ─── Appointments ───────────────────────────────────────────── */
 
-function AppointmentsSection({ appointments }: { appointments: Appointment[] }) {
+function AppointmentsSection({
+  appointments, leads, onSelectLead,
+}: {
+  appointments:  Appointment[]
+  leads:         Lead[]
+  onSelectLead:  (id: string) => void
+}) {
   const [dayOffset,    setDayOffset]    = useState(0)       // offset in days from today
   const [selectedAppt, setSelectedAppt] = useState<DrawerAppointment | null>(null)
   const [pickerOpen,   setPickerOpen]   = useState(false)
+
+  // Open the full LeadPanel when the appointment has a linked lead; otherwise
+  // fall back to the lightweight ApptDrawer for appointment-only context.
+  function handleApptClick(appt: Appointment) {
+    if (appt.leadId && leads.some(l => l.id === appt.leadId)) {
+      onSelectLead(appt.leadId)
+    } else {
+      setSelectedAppt(toDrawer(appt))
+    }
+  }
 
   // ── Anchor date = today + dayOffset ────────────────────────────
   const now      = new Date()
@@ -1528,7 +1544,7 @@ function AppointmentsSection({ appointments }: { appointments: Appointment[] }) 
                         <motion.button key={appt.id}
                           whileHover={{ scale:1.02, boxShadow:`0 4px 12px ${sc.color}18` }}
                           whileTap={{ scale:0.98 }}
-                          onClick={() => setSelectedAppt(toDrawer(appt))}
+                          onClick={() => handleApptClick(appt)}
                           className="rounded-lg p-2 w-full text-left cursor-pointer"
                           style={{ background:`${sc.color}08`, border:`1px solid ${sc.color}20` }}>
                           <div className="text-[10px] font-bold text-white/80 leading-snug truncate">{appt.name}</div>
@@ -1572,7 +1588,7 @@ function AppointmentsSection({ appointments }: { appointments: Appointment[] }) 
                     initial={{ opacity:0, y:6 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.05 }}
                     whileHover={{ background:'rgba(139,92,246,0.04)' }}
                     className="flex items-center gap-4 px-5 py-3.5 cursor-pointer transition-colors"
-                    onClick={() => setSelectedAppt(toDrawer(appt))}>
+                    onClick={() => handleApptClick(appt)}>
                     <div className="w-8 h-8 rounded-xl flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
                       style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.4),rgba(37,99,235,0.3))' }}>
                       {initials(appt.name)}
@@ -1808,6 +1824,11 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
   const [section,        setSection]        = useState<Section>('overview')
   const [sidebarOpen,    setSidebarOpen]    = useState(false)
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
+
+  // Persist active tab in the URL hash so refresh keeps the user in place
+  const VALID_SECTIONS = new Set<string>([
+    'overview','analytics','pipeline','activity','appointments','automation','settings',
+  ])
   const [notifs,         setNotifs]         = useState<Notification[]>(SEED_NOTIFS)
 
   // ── Live state (seeded from SSR, then kept fresh by Supabase Realtime)
@@ -1901,6 +1922,24 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
     return () => { supabase.removeChannel(channel) }
   }, [])
 
+  // ── Hash-based tab persistence ────────────────────────────────
+  // On mount: read hash → restore section. On hashchange (browser back/fwd): sync.
+  useEffect(() => {
+    const sync = () => {
+      const h = window.location.hash.slice(1)
+      if (VALID_SECTIONS.has(h)) setSection(h as Section)
+    }
+    sync()
+    window.addEventListener('hashchange', sync)
+    return () => window.removeEventListener('hashchange', sync)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Navigate to a section and update the URL hash
+  const handleNav = useCallback((s: Section) => {
+    setSection(s)
+    history.replaceState(null, '', `#${s}`)
+  }, [])
+
   // Close sidebar on larger screens
   useEffect(() => {
     const mq = window.matchMedia('(min-width: 768px)')
@@ -1911,7 +1950,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background:'#050510' }}>
-      <Sidebar active={section} onNav={setSection} open={sidebarOpen} onClose={() => setSidebarOpen(false)} badges={navBadges} />
+      <Sidebar active={section} onNav={handleNav} open={sidebarOpen} onClose={() => setSidebarOpen(false)} badges={navBadges} />
 
       <div className="flex-1 overflow-y-auto min-w-0">
         {/* Sticky header */}
@@ -1956,7 +1995,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
               {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} />}
               {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={leads} newLeadIds={newLeadIds} />}
               {section==='activity'     && <ActivitySection feed={activityFeed} setFeed={setActivityFeed} />}
-              {section==='appointments' && <AppointmentsSection appointments={appointments} />}
+              {section==='appointments' && <AppointmentsSection appointments={appointments} leads={leads} onSelectLead={handleSelectLead} />}
               {section==='automation'   && <AutomationSection leads={leads} integrations={integrations} overviewMetrics={overviewMetrics} />}
               {section==='settings'     && <SettingsSection />}
             </motion.div>

@@ -1818,17 +1818,30 @@ function SettingsSection() {
   )
 }
 
+/* ─── Hash persistence helpers ───────────────────────────────── */
+
+const VALID_SECTIONS = new Set<string>([
+  'overview','analytics','pipeline','activity','appointments','automation','settings',
+])
+
+/**
+ * Read window.location.hash synchronously.
+ * Returns 'overview' on the server (window undefined) so SSR HTML is stable.
+ * On the client the lazy useState initializer calls this before React's first
+ * commit, so the sidebar highlights the correct tab without any flicker.
+ */
+function getInitialSectionFromHash(): Section {
+  if (typeof window === 'undefined') return 'overview'
+  const h = window.location.hash.slice(1)
+  return VALID_SECTIONS.has(h) ? (h as Section) : 'overview'
+}
+
 /* ─── Main ───────────────────────────────────────────────────── */
 
 export default function ClientDashboard({ initialData }: { initialData?: DashboardData }) {
-  const [section,        setSection]        = useState<Section>('overview')
+  const [section,        setSection]        = useState<Section>(getInitialSectionFromHash)
   const [sidebarOpen,    setSidebarOpen]    = useState(false)
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
-
-  // Persist active tab in the URL hash so refresh keeps the user in place
-  const VALID_SECTIONS = new Set<string>([
-    'overview','analytics','pipeline','activity','appointments','automation','settings',
-  ])
   const [notifs,         setNotifs]         = useState<Notification[]>(SEED_NOTIFS)
 
   // ── Live state (seeded from SSR, then kept fresh by Supabase Realtime)
@@ -1923,16 +1936,17 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
   }, [])
 
   // ── Hash-based tab persistence ────────────────────────────────
-  // On mount: read hash → restore section. On hashchange (browser back/fwd): sync.
+  // Initial section is read synchronously by getInitialSectionFromHash() in
+  // useState, so no mount sync is needed here — only the hashchange listener
+  // for browser back/forward navigation after the page has loaded.
   useEffect(() => {
-    const sync = () => {
+    const onHashChange = () => {
       const h = window.location.hash.slice(1)
       if (VALID_SECTIONS.has(h)) setSection(h as Section)
     }
-    sync()
-    window.addEventListener('hashchange', sync)
-    return () => window.removeEventListener('hashchange', sync)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
 
   // Navigate to a section and update the URL hash
   const handleNav = useCallback((s: Section) => {

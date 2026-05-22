@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useEffect, useCallback } from 'react'
+import { useState, useMemo, useEffect, useCallback, type Dispatch, type SetStateAction } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Zap, LayoutDashboard, Users, Calendar, Settings, LogOut,
@@ -14,6 +14,7 @@ import LeadPanel from './LeadPanel'
 import AnalyticsSection from './AnalyticsSection'
 import ApptDrawer, { type DrawerAppointment } from './ApptDrawer'
 import type { DashboardData, IntegrationRow, OverviewMetrics } from './types'
+import { supabase } from '../lib/supabase'
 
 /* ─── Types ──────────────────────────────────────────────────── */
 
@@ -333,7 +334,10 @@ function NotificationCenter({ notifs, setNotifs }: { notifs:Notification[]; setN
 
 /* ─── Sidebar ────────────────────────────────────────────────── */
 
-function Sidebar({ active, onNav, open, onClose }: { active:Section; onNav:(s:Section)=>void; open:boolean; onClose:()=>void }) {
+function Sidebar({ active, onNav, open, onClose, badges = {} }: {
+  active: Section; onNav:(s:Section)=>void; open:boolean; onClose:()=>void
+  badges?: Partial<Record<Section, number>>
+}) {
   return (
     <>
       {/* Mobile backdrop */}
@@ -372,6 +376,7 @@ function Sidebar({ active, onNav, open, onClose }: { active:Section; onNav:(s:Se
         <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto">
           {NAV_ITEMS.map(item => {
             const isActive = active === item.id
+            const badge = badges[item.id] ?? item.badge
             return (
               <div key={item.id} className="relative">
                 {isActive && (
@@ -383,10 +388,10 @@ function Sidebar({ active, onNav, open, onClose }: { active:Section; onNav:(s:Se
                   style={isActive ? { background:'rgba(139,92,246,0.10)', color:'#c4b5fd' } : { color:'rgba(255,255,255,0.40)' }}>
                   <item.Icon className="w-4 h-4 flex-shrink-0" />
                   <span className="flex-1 text-left">{item.label}</span>
-                  {item.badge !== undefined && (
+                  {badge !== undefined && (
                     <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
                       style={{ background:isActive?'rgba(167,139,250,0.2)':'rgba(255,255,255,0.08)', color:isActive?'#c4b5fd':'rgba(255,255,255,0.35)' }}>
-                      {item.badge}
+                      {badge}
                     </span>
                   )}
                 </button>
@@ -911,7 +916,7 @@ function FilterPanel({
 
 /* ─── Pipeline ───────────────────────────────────────────────── */
 
-function PipelineSection({ onSelectLead, leads }: { onSelectLead:(id:string)=>void; leads:Lead[] }) {
+function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>() }: { onSelectLead:(id:string)=>void; leads:Lead[]; newLeadIds?: Set<string> }) {
   const [search,     setSearch]     = useState('')
   const [filters,    setFilters]    = useState<PipelineFilters>(DEFAULT_FILTERS)
   const [filterOpen, setFilterOpen] = useState(false)
@@ -1036,21 +1041,34 @@ function PipelineSection({ onSelectLead, leads }: { onSelectLead:(id:string)=>vo
                     </button>
                   </td>
                 </tr>
-              ) : filtered.map((lead, i) => (
+              ) : filtered.map((lead, i) => {
+                const isNew = newLeadIds.has(lead.id)
+                return (
                 <motion.tr key={lead.id}
-                  initial={{ opacity:0, y:6 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0 }}
-                  transition={{ delay:i*0.025 }}
+                  initial={{ opacity:0, y:-10, scale:0.99 }} animate={{ opacity:1, y:0, scale:1 }} exit={{ opacity:0 }}
+                  transition={{ delay: isNew ? 0 : i*0.025, type: isNew ? 'spring' : 'tween', stiffness: 320, damping: 28 }}
                   onClick={() => onSelectLead(lead.id)}
-                  className="cursor-pointer group" style={{ background:'transparent' }}
+                  className="cursor-pointer group"
+                  style={{ background: isNew ? 'rgba(52,211,153,0.04)' : 'transparent' }}
                   onMouseEnter={e=>(e.currentTarget.style.background='rgba(139,92,246,0.04)')}
-                  onMouseLeave={e=>(e.currentTarget.style.background='transparent')}>
+                  onMouseLeave={e=>(e.currentTarget.style.background= isNew ? 'rgba(52,211,153,0.04)' : 'transparent')}>
 
                   {/* Lead / Company */}
                   <td className="px-4 py-3.5">
                     <div className="flex items-center gap-3">
-                      <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
-                        style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
-                        {initials(lead.name)}
+                      <div className="relative flex-shrink-0">
+                        <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-black text-white"
+                          style={{ background: isNew ? 'linear-gradient(135deg,rgba(52,211,153,0.6),rgba(16,185,129,0.5))' : 'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
+                          {initials(lead.name)}
+                        </div>
+                        {isNew && (
+                          <motion.span
+                            initial={{ scale:0 }} animate={{ scale:1 }} transition={{ type:'spring', stiffness:400, damping:20 }}
+                            className="absolute -top-1.5 -right-1.5 text-[8px] font-black px-1 py-0.5 rounded-full"
+                            style={{ background:'#34d399', color:'#fff' }}>
+                            NEW
+                          </motion.span>
+                        )}
                       </div>
                       <div>
                         <div className="text-sm font-semibold text-white/80 group-hover:text-white transition-colors whitespace-nowrap">
@@ -1096,7 +1114,8 @@ function PipelineSection({ onSelectLead, leads }: { onSelectLead:(id:string)=>vo
                   {/* Follow-up */}
                   <td className="px-4 py-3.5"><AutoDots auto={lead.auto} /></td>
                 </motion.tr>
-              ))}
+              )
+              })}
             </AnimatePresence>
           </tbody>
         </table>
@@ -1120,10 +1139,80 @@ function PipelineSection({ onSelectLead, leads }: { onSelectLead:(id:string)=>vo
   )
 }
 
+/* ─── Supabase row shapes (snake_case from realtime payloads) ── */
+
+interface RawLeadRow {
+  id: string; client_id: string; name: string; company: string | null
+  email: string | null; phone: string | null; source: string | null
+  interest: string | null; assigned_agent: string | null
+  score: number | null; score_label: string | null; status: string | null
+  ai_sms: string | null; email_seq: string | null; nurture: string | null
+  smart_assign: string | null; auto_call: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string; updated_at: string
+}
+interface RawActivityRow {
+  id: string; client_id: string; lead_id: string | null
+  type: string; title: string; description: string | null; created_at: string
+}
+interface RawAppointmentRow {
+  id: string; client_id: string; lead_id: string | null
+  lead_name: string | null; lead_company: string | null
+  type: string; scheduled_at: string; status: string; created_at: string
+  notes?: string | null
+}
+
+/* ─── Client-side mappers (mirror db.ts without server imports) ── */
+
+function mapLeadRow(r: RawLeadRow): Lead {
+  return {
+    id:            r.id,
+    name:          r.name,
+    company:       r.company       ?? '',
+    email:         r.email         ?? undefined,
+    phone:         r.phone         ?? undefined,
+    source:        r.source        ?? 'general',
+    interest:      r.interest      ?? '',
+    assignedAgent: r.assigned_agent ?? 'Unassigned',
+    score:         r.score         ?? 0,
+    scoreLabel:   (r.score_label   as ScoreLabel) ?? 'cold',
+    status:       (r.status        as LeadStatus) ?? 'new',
+    date:          r.created_at,
+    metadata:      r.metadata      ?? undefined,
+    auto: {
+      aiSms:       (r.ai_sms       as AutoState['aiSms'])       ?? 'off',
+      emailSeq:    (r.email_seq    as AutoState['emailSeq'])    ?? 'not_started',
+      nurture:     (r.nurture      as AutoState['nurture'])     ?? 'not_started',
+      smartAssign: (r.smart_assign as AutoState['smartAssign']) ?? 'unassigned',
+      autoCall:    (r.auto_call    as AutoState['autoCall'])    ?? 'off',
+    },
+  }
+}
+function mapActivityRow(r: RawActivityRow): ActivityItem {
+  const diff = Date.now() - new Date(r.created_at).getTime()
+  const mins = Math.floor(diff / 60000); const hours = Math.floor(mins / 60); const days = Math.floor(hours / 24)
+  const time = mins < 1 ? 'Just now' : mins < 60 ? `${mins} min ago` : hours < 24 ? `${hours} hour${hours>1?'s':''} ago` : `${days} day${days>1?'s':''} ago`
+  return { id: r.id, type: (r.type as ActivityType) ?? 'email', text: r.title, sub: r.description ?? '', time }
+}
+function mapAppointmentRow(r: RawAppointmentRow): Appointment {
+  const dt = new Date(r.scheduled_at)
+  return {
+    id:       r.id,
+    name:     r.lead_name    ?? 'Unknown',
+    company:  r.lead_company ?? '',
+    type:     r.type.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase()),
+    date:     dt.toISOString().split('T')[0],
+    time:     dt.toTimeString().slice(0, 5),
+    status:  (r.status as ApptStatus) ?? 'pending',
+    upcoming: dt > new Date(),
+    leadId:   r.lead_id ?? undefined,
+    notes:    r.notes   ?? undefined,
+  }
+}
+
 /* ─── Real-time Activity Feed ────────────────────────────────── */
 
-function ActivitySection({ initialEvents = SEED_ACTIVITY }: { initialEvents?: ActivityItem[] }) {
-  const [feed, setFeed] = useState<ActivityItem[]>(initialEvents)
+function ActivitySection({ feed, setFeed }: { feed: ActivityItem[]; setFeed: Dispatch<SetStateAction<ActivityItem[]>> }) {
 
   useEffect(() => {
     let poolIdx = 0
@@ -1138,7 +1227,7 @@ function ActivitySection({ initialEvents = SEED_ACTIVITY }: { initialEvents?: Ac
       }, ...prev.map(i=>({...i, live:false})).slice(0, 14)])
     }, 7000)
     return () => clearInterval(id)
-  }, [])
+  }, [setFeed])
 
   return (
     <Card>
@@ -1716,25 +1805,101 @@ function SettingsSection() {
 /* ─── Main ───────────────────────────────────────────────────── */
 
 export default function ClientDashboard({ initialData }: { initialData?: DashboardData }) {
-  const [section,       setSection]       = useState<Section>('overview')
-  const [sidebarOpen,   setSidebarOpen]   = useState(false)
-  const [selectedLeadId,setSelectedLeadId]= useState<string | null>(null)
-  const [notifs,        setNotifs]        = useState<Notification[]>(SEED_NOTIFS)
+  const [section,        setSection]        = useState<Section>('overview')
+  const [sidebarOpen,    setSidebarOpen]    = useState(false)
+  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
+  const [notifs,         setNotifs]         = useState<Notification[]>(SEED_NOTIFS)
 
-  // Merge server-fetched data with local mock fallbacks.
-  // getDashboardData() in page.tsx already falls back to mock if Supabase is empty,
-  // but the double-fallback here keeps the UI intact if initialData is ever undefined.
-  const leads            = initialData?.leads?.length        ? initialData.leads        : LEADS
-  const appointments     = initialData?.appointments ?? []
-  const activity         = initialData?.activity?.length     ? initialData.activity     : SEED_ACTIVITY
+  // ── Live state (seeded from SSR, then kept fresh by Supabase Realtime)
+  const [leads,       setLeads]       = useState<Lead[]>       (initialData?.leads?.length  ? initialData.leads  : LEADS)
+  const [appointments,setAppointments]= useState<Appointment[]>(initialData?.appointments   ?? [])
+  const [activityFeed,setActivityFeed]= useState<ActivityItem[]>(initialData?.activity?.length ? initialData.activity : SEED_ACTIVITY)
+
+  // Static / analytics (not realtime — refreshed on page load)
   const analytics        = initialData?.analytics?.length    ? initialData.analytics    : undefined
   const integrations     = initialData?.integrations                                   ?? []
   const analyticsSummary = initialData?.analyticsSummary
   const overviewMetrics  = initialData?.overviewMetrics
 
-  const selectedLead = useMemo(() => leads.find(l => l.id === selectedLeadId) ?? null, [leads, selectedLeadId])
+  // Tracks IDs of leads that just arrived via realtime (cleared after 4 s)
+  const [newLeadIds, setNewLeadIds] = useState<Set<string>>(new Set())
+
+  const selectedLead    = useMemo(() => leads.find(l => l.id === selectedLeadId) ?? null, [leads, selectedLeadId])
   const handleSelectLead = useCallback((id: string) => setSelectedLeadId(id), [])
-  const meta = SECTION_META[section]
+  const meta             = SECTION_META[section]
+
+  // Dynamic nav badges driven by live state
+  const navBadges = useMemo<Partial<Record<Section, number>>>(() => ({
+    pipeline:     leads.length,
+    appointments: appointments.filter(a => a.upcoming).length || undefined,
+  }), [leads, appointments])
+
+  // ── Supabase Realtime subscriptions ──────────────────────────
+  useEffect(() => {
+    // Demo client ID — replace with auth-resolved client_id when client auth lands
+    const CLIENT_ID = process.env.NEXT_PUBLIC_DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
+
+    const channel = supabase
+      .channel('dashboard-live')
+
+      // ── leads: INSERT → prepend with spring animation
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'leads', filter: `client_id=eq.${CLIENT_ID}` },
+        (payload) => {
+          const lead = mapLeadRow(payload.new as RawLeadRow)
+          setLeads(prev => [lead, ...prev])
+          setNewLeadIds(prev => new Set([...prev, lead.id]))
+          setTimeout(() => setNewLeadIds(prev => { const s = new Set(prev); s.delete(lead.id); return s }), 4000)
+          // Push a notification
+          setNotifs(prev => [{
+            id:   crypto.randomUUID(),
+            type: 'lead' as NotifType,
+            text: `New lead: ${lead.name}`,
+            sub:  `${lead.company} · ${lead.source} · just now`,
+            read: false,
+            time: 'Just now',
+          }, ...prev.slice(0, 19)])
+        }
+      )
+
+      // ── leads: UPDATE → patch in-place (score, status, metadata, etc.)
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'leads', filter: `client_id=eq.${CLIENT_ID}` },
+        (payload) => {
+          const updated = mapLeadRow(payload.new as RawLeadRow)
+          setLeads(prev => prev.map(l => l.id === updated.id ? updated : l))
+        }
+      )
+
+      // ── activity_events: INSERT → prepend to feed
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'activity_events', filter: `client_id=eq.${CLIENT_ID}` },
+        (payload) => {
+          const item: ActivityItem = { ...mapActivityRow(payload.new as RawActivityRow), live: true }
+          setActivityFeed(prev => [item, ...prev.map(i => ({ ...i, live: false })).slice(0, 14)])
+        }
+      )
+
+      // ── appointments: INSERT / UPDATE
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'appointments', filter: `client_id=eq.${CLIENT_ID}` },
+        (payload) => {
+          const appt = mapAppointmentRow(payload.new as RawAppointmentRow)
+          setAppointments(prev => [...prev, appt])
+        }
+      )
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'appointments', filter: `client_id=eq.${CLIENT_ID}` },
+        (payload) => {
+          const updated = mapAppointmentRow(payload.new as RawAppointmentRow)
+          setAppointments(prev => prev.map(a => a.id === updated.id ? updated : a))
+        }
+      )
+
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [])
 
   // Close sidebar on larger screens
   useEffect(() => {
@@ -1746,7 +1911,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background:'#050510' }}>
-      <Sidebar active={section} onNav={setSection} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Sidebar active={section} onNav={setSection} open={sidebarOpen} onClose={() => setSidebarOpen(false)} badges={navBadges} />
 
       <div className="flex-1 overflow-y-auto min-w-0">
         {/* Sticky header */}
@@ -1787,10 +1952,10 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
             <motion.div key={section}
               initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-8 }}
               transition={{ duration:0.22 }}>
-              {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={leads} appointments={appointments} activity={activity} overviewMetrics={overviewMetrics} />}
+              {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={leads} appointments={appointments} activity={activityFeed} overviewMetrics={overviewMetrics} />}
               {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} />}
-              {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={leads} />}
-              {section==='activity'     && <ActivitySection initialEvents={activity} />}
+              {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={leads} newLeadIds={newLeadIds} />}
+              {section==='activity'     && <ActivitySection feed={activityFeed} setFeed={setActivityFeed} />}
               {section==='appointments' && <AppointmentsSection appointments={appointments} />}
               {section==='automation'   && <AutomationSection leads={leads} integrations={integrations} overviewMetrics={overviewMetrics} />}
               {section==='settings'     && <SettingsSection />}

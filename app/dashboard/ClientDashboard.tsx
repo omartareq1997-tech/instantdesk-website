@@ -7,11 +7,12 @@ import {
   TrendingUp, TrendingDown, Mail, Phone, CheckCircle, AlertCircle,
   Clock, Search, X, BarChart2, MessageCircle, Database,
   Activity, RefreshCw, Bell, Shield, Link2, Download, Target,
-  DollarSign, Timer, Menu, ChevronRight, LineChart, BellDot,
+  DollarSign, Timer, Menu, ChevronLeft, ChevronRight, LineChart, BellDot,
   MessageSquare,
 } from 'lucide-react'
 import LeadPanel from './LeadPanel'
 import AnalyticsSection from './AnalyticsSection'
+import ApptDrawer, { type DrawerAppointment } from './ApptDrawer'
 import type { DashboardData, IntegrationRow, OverviewMetrics } from './types'
 
 /* ─── Types ──────────────────────────────────────────────────── */
@@ -33,7 +34,7 @@ interface Lead {
   date: string; auto: AutoState; metadata?: Record<string, unknown>
 }
 interface ActivityItem { id: string; type: ActivityType; text: string; sub: string; time: string; live?: boolean }
-interface Appointment { id: string; name: string; company: string; type: string; date: string; time: string; status: ApptStatus; upcoming: boolean }
+interface Appointment { id: string; name: string; company: string; type: string; date: string; time: string; status: ApptStatus; upcoming: boolean; leadId?: string; notes?: string }
 interface Notification { id: string; type: NotifType; text: string; sub: string; read: boolean; time: string }
 
 /* ─── Mock Data ──────────────────────────────────────────────── */
@@ -877,144 +878,363 @@ function ActivitySection({ initialEvents = SEED_ACTIVITY }: { initialEvents?: Ac
   )
 }
 
+/* ─── Appointments — date picker ─────────────────────────────── */
+
+function WeekDatePicker({
+  anchorMonday,
+  onSelect,
+  onClose,
+}: {
+  anchorMonday: Date
+  onSelect:     (d: Date) => void
+  onClose:      () => void
+}) {
+  const [viewYear,  setViewYear]  = useState(anchorMonday.getFullYear())
+  const [viewMonth, setViewMonth] = useState(anchorMonday.getMonth())
+
+  const todayISO = new Date().toISOString().split('T')[0]
+
+  const firstOfMonth = new Date(viewYear, viewMonth, 1)
+  const firstDow     = firstOfMonth.getDay()
+  const offset       = firstDow === 0 ? 6 : firstDow - 1   // Mon-based
+  const daysInMonth  = new Date(viewYear, viewMonth + 1, 0).getDate()
+  const totalCells   = Math.ceil((offset + daysInMonth) / 7) * 7
+
+  // Mon–Fri ISO dates of the currently viewed week (for highlight)
+  const anchorWeekSet = new Set(
+    Array.from({ length: 5 }, (_, i) => {
+      const d = new Date(anchorMonday)
+      d.setDate(anchorMonday.getDate() + i)
+      return d.toISOString().split('T')[0]
+    })
+  )
+
+  function prevMonth() {
+    if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1) }
+    else setViewMonth(m => m - 1)
+  }
+  function nextMonth() {
+    if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1) }
+    else setViewMonth(m => m + 1)
+  }
+
+  const DAY_HDR = ['M','T','W','T','F','S','S']
+
+  return (
+    <>
+      {/* Transparent backdrop to close picker */}
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+
+      <motion.div
+        initial={{ opacity:0, scale:0.95, y:-8 }}
+        animate={{ opacity:1, scale:1,    y: 0 }}
+        exit={{   opacity:0, scale:0.95, y:-8 }}
+        transition={{ duration:0.15 }}
+        className="absolute left-0 top-full mt-2 z-50 w-72 rounded-2xl overflow-hidden"
+        style={{
+          background:    'rgba(10,10,30,0.98)',
+          border:        '1px solid rgba(139,92,246,0.25)',
+          boxShadow:     '0 24px 60px rgba(0,0,0,0.7)',
+          backdropFilter:'blur(24px)',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Month navigation */}
+        <div className="flex items-center justify-between px-4 py-3"
+          style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+          <button onClick={prevMonth}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-white/40 hover:text-white/80 transition-colors"
+            style={{ background:'rgba(255,255,255,0.04)' }}>
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <span className="text-sm font-bold text-white">
+            {firstOfMonth.toLocaleDateString('en-GB', { month:'long', year:'numeric' })}
+          </span>
+          <button onClick={nextMonth}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-white/40 hover:text-white/80 transition-colors"
+            style={{ background:'rgba(255,255,255,0.04)' }}>
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Day-of-week headers */}
+        <div className="grid grid-cols-7 px-3 pt-2 pb-1">
+          {DAY_HDR.map((l, i) => (
+            <div key={i} className="h-7 flex items-center justify-center text-[10px] font-bold text-white/25">{l}</div>
+          ))}
+        </div>
+
+        {/* Day grid */}
+        <div className="grid grid-cols-7 px-3 pb-3 gap-y-0.5">
+          {Array.from({ length: totalCells }, (_, i) => {
+            const dayNum = i - offset + 1
+            if (dayNum < 1 || dayNum > daysInMonth) return <div key={i} className="h-8" />
+
+            const d   = new Date(viewYear, viewMonth, dayNum)
+            const iso = d.toISOString().split('T')[0]
+            const isToday    = iso === todayISO
+            const inWeek     = anchorWeekSet.has(iso)
+            const isWeekend  = (i % 7 >= 5)
+
+            return (
+              <button key={i}
+                onClick={() => { onSelect(d); onClose() }}
+                className="h-8 w-8 mx-auto flex items-center justify-center rounded-lg text-xs font-semibold transition-all hover:bg-violet-500/20"
+                style={{
+                  background: inWeek   ? 'rgba(139,92,246,0.22)'
+                            : isToday  ? 'rgba(139,92,246,0.10)'
+                            :            'transparent',
+                  color:      inWeek   ? '#c4b5fd'
+                            : isToday  ? '#a78bfa'
+                            : isWeekend? 'rgba(255,255,255,0.22)'
+                            :            'rgba(255,255,255,0.60)',
+                  border:     isToday && !inWeek ? '1px solid rgba(139,92,246,0.35)' : '1px solid transparent',
+                }}>
+                {dayNum}
+              </button>
+            )
+          })}
+        </div>
+      </motion.div>
+    </>
+  )
+}
+
 /* ─── Appointments ───────────────────────────────────────────── */
 
 function AppointmentsSection({ appointments }: { appointments: Appointment[] }) {
-  // ── Build the current Mon–Fri week from today's real date ───────
+  const [weekOffset,   setWeekOffset]   = useState(0)
+  const [selectedAppt, setSelectedAppt] = useState<DrawerAppointment | null>(null)
+  const [pickerOpen,   setPickerOpen]   = useState(false)
+
+  // ── Compute Monday of the viewed week ──────────────────────────
   const now      = new Date()
   const todayISO = now.toISOString().split('T')[0]
 
-  const dow      = now.getDay()                  // 0 = Sun … 6 = Sat
-  const daysBack = dow === 0 ? 6 : dow - 1       // steps back to Monday
-  const monday   = new Date(now)
-  monday.setDate(now.getDate() - daysBack)
-  monday.setHours(0, 0, 0, 0)
+  const dow      = now.getDay()
+  const daysBack = dow === 0 ? 6 : dow - 1
+  const baseMonday = new Date(now)
+  baseMonday.setDate(now.getDate() - daysBack)
+  baseMonday.setHours(0, 0, 0, 0)
+
+  // Viewed Monday = base + weekOffset weeks
+  const monday = new Date(baseMonday)
+  monday.setDate(baseMonday.getDate() + weekOffset * 7)
 
   const weekDays = Array.from({ length: 5 }, (_, i) => {
     const d = new Date(monday)
     d.setDate(monday.getDate() + i)
     const iso = d.toISOString().split('T')[0]
     return {
-      label: d.toLocaleDateString('en-GB', { weekday: 'short' }),        // "Mon"
-      date:  d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }), // "19 May"
+      label: d.toLocaleDateString('en-GB', { weekday:'short' }),
+      date:  d.toLocaleDateString('en-GB', { day:'numeric', month:'short' }),
       iso,
       today: iso === todayISO,
     }
   })
 
-  const weekIsoSet  = new Set(weekDays.map(d => d.iso))
-  const weekLabel   = `${weekDays[0].date}–${weekDays[4].date} ${monday.getFullYear()}`
+  const weekIsoSet = new Set(weekDays.map(d => d.iso))
+  const weekLabel  = `${weekDays[0].date}–${weekDays[4].date} ${monday.getFullYear()}`
 
-  // Upcoming: future appointments beyond this week (cancelled excluded)
+  // ── Navigation helpers ─────────────────────────────────────────
+  function goToDay(d: Date) {
+    const targetDow  = d.getDay()
+    const targetBack = targetDow === 0 ? 6 : targetDow - 1
+    const targetMon  = new Date(d)
+    targetMon.setDate(d.getDate() - targetBack)
+    targetMon.setHours(0, 0, 0, 0)
+    const diff = Math.round((targetMon.getTime() - baseMonday.getTime()) / (7 * 86400000))
+    setWeekOffset(diff)
+  }
+
+  // ── Upcoming: future beyond viewed week, not cancelled ─────────
   const upcoming = appointments
     .filter(a => !weekIsoSet.has(a.date) && a.date >= todayISO && a.status !== 'cancelled')
     .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`))
 
+  // ── Convert Appointment → DrawerAppointment ────────────────────
+  function toDrawer(a: Appointment): DrawerAppointment {
+    return {
+      id:      a.id,
+      name:    a.name,
+      company: a.company,
+      type:    a.type,
+      date:    a.date,
+      time:    a.time,
+      status:  a.status,
+      leadId:  a.leadId,
+      notes:   a.notes,
+    }
+  }
+
   return (
-    <div className="flex flex-col gap-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-bold text-white">Weekly Schedule</h2>
-          <p className="text-xs text-white/30 mt-0.5">Week of {weekLabel}</p>
-        </div>
-        <ExportButton />
-      </div>
+    <>
+      <div className="flex flex-col gap-5">
 
-      {/* 5-column week grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        {weekDays.map(day => {
-          const dayAppts = appointments.filter(a => a.date === day.iso)
-          return (
-            <Card key={day.iso} className={day.today ? 'ring-1 ring-violet-500/25' : ''}>
-              <div className="flex items-center justify-between px-3 py-2.5"
-                style={{
-                  borderBottom: dayAppts.length ? '1px solid rgba(255,255,255,0.06)' : 'none',
-                  background:   day.today ? 'rgba(139,92,246,0.06)' : 'transparent',
-                }}>
-                <div>
-                  <div className="text-xs font-black text-white/60">{day.label}</div>
-                  <div className="text-[10px] text-white/25">{day.date}</div>
-                </div>
-                {day.today && (
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
-                    style={{ background:'rgba(139,92,246,0.2)', color:'#c4b5fd', border:'1px solid rgba(139,92,246,0.3)' }}>
-                    TODAY
-                  </span>
-                )}
-              </div>
-              {dayAppts.length > 0 ? (
-                <div className="p-2 flex flex-col gap-2">
-                  {dayAppts.map(appt => {
-                    const sc = APPT_CFG[appt.status]
-                    return (
-                      <div key={appt.id} className="rounded-xl p-2.5"
-                        style={{ background:`${sc.color}08`, border:`1px solid ${sc.color}20` }}>
-                        <div className="text-[11px] font-bold text-white/80 leading-snug">{appt.name}</div>
-                        <div className="text-[10px] text-white/40 mt-0.5">{appt.type}</div>
-                        <div className="flex items-center justify-between mt-1.5">
-                          <div className="flex items-center gap-1 text-[10px] text-white/35">
-                            <Clock className="w-3 h-3" />{appt.time}
-                          </div>
-                          <span className="text-[9px] font-bold" style={{ color:sc.color }}>{sc.label}</span>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              ) : (
-                <div className="px-3 py-5 text-center">
-                  <div className="text-[10px] text-white/15">Free</div>
-                </div>
+        {/* Header with navigation */}
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="relative">
+            <button
+              onClick={() => setPickerOpen(v => !v)}
+              className="flex flex-col cursor-pointer hover:opacity-80 transition-opacity text-left"
+            >
+              <h2 className="text-base font-bold text-white">Weekly Schedule</h2>
+              <p className="text-xs text-white/30 mt-0.5 flex items-center gap-1">
+                Week of {weekLabel}
+                <ChevronRight className="w-3 h-3 opacity-50 rotate-90 inline" />
+              </p>
+            </button>
+
+            <AnimatePresence>
+              {pickerOpen && (
+                <WeekDatePicker
+                  anchorMonday={monday}
+                  onSelect={goToDay}
+                  onClose={() => setPickerOpen(false)}
+                />
               )}
-            </Card>
-          )
-        })}
+            </AnimatePresence>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Today button — visible only when not on the current week */}
+            {weekOffset !== 0 && (
+              <motion.button
+                initial={{ opacity:0, scale:0.9 }} animate={{ opacity:1, scale:1 }} exit={{ opacity:0, scale:0.9 }}
+                onClick={() => setWeekOffset(0)}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.25)', color:'#c4b5fd' }}>
+                Today
+              </motion.button>
+            )}
+
+            {/* Prev week */}
+            <button onClick={() => setWeekOffset(o => o - 1)}
+              className="w-8 h-8 rounded-xl flex items-center justify-center text-white/40 hover:text-white/80 transition-colors"
+              style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)' }}>
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+
+            {/* Next week */}
+            <button onClick={() => setWeekOffset(o => o + 1)}
+              className="w-8 h-8 rounded-xl flex items-center justify-center text-white/40 hover:text-white/80 transition-colors"
+              style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)' }}>
+              <ChevronRight className="w-4 h-4" />
+            </button>
+
+            <ExportButton />
+          </div>
+        </div>
+
+        {/* 5-column week grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          {weekDays.map(day => {
+            const dayAppts = appointments.filter(a => a.date === day.iso)
+            return (
+              <Card key={day.iso} className={day.today ? 'ring-1 ring-violet-500/25' : ''}>
+                <div className="flex items-center justify-between px-3 py-2.5"
+                  style={{
+                    borderBottom: dayAppts.length ? '1px solid rgba(255,255,255,0.06)' : 'none',
+                    background:   day.today ? 'rgba(139,92,246,0.06)' : 'transparent',
+                  }}>
+                  <div>
+                    <div className="text-xs font-black text-white/60">{day.label}</div>
+                    <div className="text-[10px] text-white/25">{day.date}</div>
+                  </div>
+                  {day.today && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+                      style={{ background:'rgba(139,92,246,0.2)', color:'#c4b5fd', border:'1px solid rgba(139,92,246,0.3)' }}>
+                      TODAY
+                    </span>
+                  )}
+                </div>
+                {dayAppts.length > 0 ? (
+                  <div className="p-2 flex flex-col gap-2">
+                    {dayAppts.map(appt => {
+                      const sc = APPT_CFG[appt.status]
+                      return (
+                        <motion.button
+                          key={appt.id}
+                          whileHover={{ scale:1.02, boxShadow:`0 4px 16px ${sc.color}18` }}
+                          whileTap={{ scale:0.98 }}
+                          onClick={() => setSelectedAppt(toDrawer(appt))}
+                          className="rounded-xl p-2.5 w-full text-left cursor-pointer transition-all"
+                          style={{ background:`${sc.color}08`, border:`1px solid ${sc.color}20` }}>
+                          <div className="text-[11px] font-bold text-white/80 leading-snug">{appt.name}</div>
+                          <div className="text-[10px] text-white/40 mt-0.5">{appt.type}</div>
+                          <div className="flex items-center justify-between mt-1.5">
+                            <div className="flex items-center gap-1 text-[10px] text-white/35">
+                              <Clock className="w-3 h-3" />{appt.time}
+                            </div>
+                            <span className="text-[9px] font-bold" style={{ color:sc.color }}>{sc.label}</span>
+                          </div>
+                        </motion.button>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="px-3 py-5 text-center">
+                    <div className="text-[10px] text-white/15">Free</div>
+                  </div>
+                )}
+              </Card>
+            )
+          })}
+        </div>
+
+        {/* Upcoming list */}
+        <Card>
+          <div className="flex items-center justify-between px-5 py-4"
+            style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+            <h2 className="text-sm font-bold text-white">Upcoming</h2>
+            <span className="text-xs text-white/30">Beyond this week</span>
+          </div>
+          {upcoming.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-10 gap-2">
+              <Calendar className="w-7 h-7 text-white/10" />
+              <p className="text-sm text-white/25 font-medium">No upcoming appointments</p>
+              <p className="text-xs text-white/15">Bookings beyond this week will appear here</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-white/[0.04]">
+              {upcoming.map((appt, i) => {
+                const sc = APPT_CFG[appt.status]
+                return (
+                  <motion.div key={appt.id}
+                    initial={{ opacity:0, y:6 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.05 }}
+                    whileHover={{ background:'rgba(139,92,246,0.04)' }}
+                    className="flex items-center gap-4 px-5 py-3.5 cursor-pointer transition-colors"
+                    onClick={() => setSelectedAppt(toDrawer(appt))}>
+                    <div className="w-8 h-8 rounded-xl flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
+                      style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.4),rgba(37,99,235,0.3))' }}>
+                      {initials(appt.name)}
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-sm font-semibold text-white/80">{appt.name}</div>
+                      <div className="text-xs text-white/30">{appt.type} · {appt.company}</div>
+                    </div>
+                    <div className="text-right mr-2">
+                      <div className="text-xs text-white/50">{fmtApptDate(appt.date)}</div>
+                      <div className="text-[10px] text-white/30">{appt.time}</div>
+                    </div>
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full"
+                      style={{ color:sc.color, background:sc.bg }}>
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ background:sc.color }} />{sc.label}
+                    </span>
+                  </motion.div>
+                )
+              })}
+            </div>
+          )}
+        </Card>
+
       </div>
 
-      {/* Upcoming list */}
-      <Card>
-        <div className="flex items-center justify-between px-5 py-4"
-          style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
-          <h2 className="text-sm font-bold text-white">Upcoming</h2>
-          <span className="text-xs text-white/30">Beyond this week</span>
-        </div>
-        {upcoming.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-10 gap-2">
-            <Calendar className="w-7 h-7 text-white/10" />
-            <p className="text-sm text-white/25 font-medium">No upcoming appointments</p>
-            <p className="text-xs text-white/15">Bookings beyond this week will appear here</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-white/[0.04]">
-            {upcoming.map((appt, i) => {
-              const sc = APPT_CFG[appt.status]
-              return (
-                <motion.div key={appt.id}
-                  initial={{ opacity:0, y:6 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.05 }}
-                  className="flex items-center gap-4 px-5 py-3.5">
-                  <div className="w-8 h-8 rounded-xl flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
-                    style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.4),rgba(37,99,235,0.3))' }}>
-                    {initials(appt.name)}
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-sm font-semibold text-white/80">{appt.name}</div>
-                    <div className="text-xs text-white/30">{appt.type} · {appt.company}</div>
-                  </div>
-                  <div className="text-right mr-2">
-                    <div className="text-xs text-white/50">{fmtApptDate(appt.date)}</div>
-                    <div className="text-[10px] text-white/30">{appt.time}</div>
-                  </div>
-                  <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full"
-                    style={{ color:sc.color, background:sc.bg }}>
-                    <span className="w-1.5 h-1.5 rounded-full" style={{ background:sc.color }} />{sc.label}
-                  </span>
-                </motion.div>
-              )
-            })}
-          </div>
-        )}
-      </Card>
-    </div>
+      {/* Appointment detail drawer */}
+      {selectedAppt && (
+        <ApptDrawer appt={selectedAppt} onClose={() => setSelectedAppt(null)} />
+      )}
+    </>
   )
 }
 

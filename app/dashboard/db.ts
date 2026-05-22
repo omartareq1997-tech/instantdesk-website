@@ -235,6 +235,7 @@ interface AppointmentRow {
   id: string; client_id: string; lead_id: string | null
   lead_name: string | null; lead_company: string | null
   type: string; scheduled_at: string; status: string; created_at: string
+  notes?: string | null  // optional — requires: ALTER TABLE appointments ADD COLUMN notes TEXT;
 }
 
 interface ActivityRow {
@@ -291,6 +292,8 @@ function mapAppointment(r: AppointmentRow): Appointment {
     time:     dt.toTimeString().slice(0, 5),
     status:  (r.status as ApptStatus) ?? 'pending',
     upcoming: dt > today,
+    leadId:   r.lead_id  ?? undefined,
+    notes:    r.notes    ?? undefined,
   }
 }
 

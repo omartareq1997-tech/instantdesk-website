@@ -49,6 +49,8 @@ export interface Appointment {
   time: string    // HH:MM
   status: ApptStatus
   upcoming: boolean
+  leadId?: string  // FK to leads — used to fetch conversation in the drawer
+  notes?: string   // Optional notes (requires notes TEXT column on appointments table)
 }
 
 export interface ActivityItem {

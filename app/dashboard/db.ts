@@ -262,6 +262,8 @@ function mapLead(r: LeadRow): Lead {
     id:            r.id,
     name:          r.name,
     company:       r.company       ?? '',
+    email:         r.email         ?? undefined,
+    phone:         r.phone         ?? undefined,
     source:        r.source        ?? 'general',
     interest:      r.interest      ?? '',
     assignedAgent: r.assigned_agent ?? 'Unassigned',

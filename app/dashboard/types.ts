@@ -28,6 +28,8 @@ export interface Lead {
   id: string
   name: string
   company: string
+  email?: string
+  phone?: string
   source: string
   interest: string
   assignedAgent: string

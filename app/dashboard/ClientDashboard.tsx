@@ -29,7 +29,9 @@ interface AutoState {
   nurture: 'active'|'not_started'; smartAssign: 'assigned'|'unassigned'; autoCall: 'scheduled'|'completed'|'off'
 }
 interface Lead {
-  id: string; name: string; company: string; source: string; interest: string
+  id: string; name: string; company: string
+  email?: string; phone?: string
+  source: string; interest: string
   assignedAgent: string; score: number; scoreLabel: ScoreLabel; status: LeadStatus
   date: string; auto: AutoState; metadata?: Record<string, unknown>
 }
@@ -881,16 +883,16 @@ function ActivitySection({ initialEvents = SEED_ACTIVITY }: { initialEvents?: Ac
 /* ─── Appointments — date picker ─────────────────────────────── */
 
 function WeekDatePicker({
-  anchorMonday,
+  anchorDate,
   onSelect,
   onClose,
 }: {
-  anchorMonday: Date
-  onSelect:     (d: Date) => void
-  onClose:      () => void
+  anchorDate: Date        // first day of the 7-day window
+  onSelect:   (d: Date) => void
+  onClose:    () => void
 }) {
-  const [viewYear,  setViewYear]  = useState(anchorMonday.getFullYear())
-  const [viewMonth, setViewMonth] = useState(anchorMonday.getMonth())
+  const [viewYear,  setViewYear]  = useState(anchorDate.getFullYear())
+  const [viewMonth, setViewMonth] = useState(anchorDate.getMonth())
 
   const todayISO = new Date().toISOString().split('T')[0]
 
@@ -900,11 +902,11 @@ function WeekDatePicker({
   const daysInMonth  = new Date(viewYear, viewMonth + 1, 0).getDate()
   const totalCells   = Math.ceil((offset + daysInMonth) / 7) * 7
 
-  // Mon–Fri ISO dates of the currently viewed week (for highlight)
+  // All 7 days of the currently viewed window (for highlight)
   const anchorWeekSet = new Set(
-    Array.from({ length: 5 }, (_, i) => {
-      const d = new Date(anchorMonday)
-      d.setDate(anchorMonday.getDate() + i)
+    Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(anchorDate)
+      d.setDate(anchorDate.getDate() + i)
       return d.toISOString().split('T')[0]
     })
   )
@@ -1003,92 +1005,74 @@ function WeekDatePicker({
 /* ─── Appointments ───────────────────────────────────────────── */
 
 function AppointmentsSection({ appointments }: { appointments: Appointment[] }) {
-  const [weekOffset,   setWeekOffset]   = useState(0)
+  const [dayOffset,    setDayOffset]    = useState(0)       // offset in days from today
   const [selectedAppt, setSelectedAppt] = useState<DrawerAppointment | null>(null)
   const [pickerOpen,   setPickerOpen]   = useState(false)
 
-  // ── Compute Monday of the viewed week ──────────────────────────
+  // ── Anchor date = today + dayOffset ────────────────────────────
   const now      = new Date()
   const todayISO = now.toISOString().split('T')[0]
 
-  const dow      = now.getDay()
-  const daysBack = dow === 0 ? 6 : dow - 1
-  const baseMonday = new Date(now)
-  baseMonday.setDate(now.getDate() - daysBack)
-  baseMonday.setHours(0, 0, 0, 0)
+  const baseToday = new Date(now)
+  baseToday.setHours(0, 0, 0, 0)
 
-  // Viewed Monday = base + weekOffset weeks
-  const monday = new Date(baseMonday)
-  monday.setDate(baseMonday.getDate() + weekOffset * 7)
+  const anchorDate = new Date(baseToday)
+  anchorDate.setDate(baseToday.getDate() + dayOffset)
 
-  const weekDays = Array.from({ length: 5 }, (_, i) => {
-    const d = new Date(monday)
-    d.setDate(monday.getDate() + i)
+  // ── 7-day window: anchorDate … anchorDate + 6 ──────────────────
+  const viewDays = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(anchorDate)
+    d.setDate(anchorDate.getDate() + i)
     const iso = d.toISOString().split('T')[0]
     return {
-      label: d.toLocaleDateString('en-GB', { weekday:'short' }),
-      date:  d.toLocaleDateString('en-GB', { day:'numeric', month:'short' }),
+      label:   d.toLocaleDateString('en-GB', { weekday:'short' }),  // "Mon"
+      dateNum: d.toLocaleDateString('en-GB', { day:'numeric', month:'short' }), // "22 May"
       iso,
-      today: iso === todayISO,
+      today:   iso === todayISO,
     }
   })
 
-  const weekIsoSet = new Set(weekDays.map(d => d.iso))
-  const weekLabel  = `${weekDays[0].date}–${weekDays[4].date} ${monday.getFullYear()}`
+  const windowIsoSet = new Set(viewDays.map(d => d.iso))
+  const rangeLabel   = `${viewDays[0].dateNum}–${viewDays[6].dateNum} ${anchorDate.getFullYear()}`
 
-  // ── Navigation helpers ─────────────────────────────────────────
+  // ── Navigate to a specific day (from date picker) ──────────────
   function goToDay(d: Date) {
-    const targetDow  = d.getDay()
-    const targetBack = targetDow === 0 ? 6 : targetDow - 1
-    const targetMon  = new Date(d)
-    targetMon.setDate(d.getDate() - targetBack)
-    targetMon.setHours(0, 0, 0, 0)
-    const diff = Math.round((targetMon.getTime() - baseMonday.getTime()) / (7 * 86400000))
-    setWeekOffset(diff)
+    const t = new Date(d); t.setHours(0, 0, 0, 0)
+    const diff = Math.round((t.getTime() - baseToday.getTime()) / 86400000)
+    setDayOffset(diff)
   }
-
-  // ── Upcoming: future beyond viewed week, not cancelled ─────────
-  const upcoming = appointments
-    .filter(a => !weekIsoSet.has(a.date) && a.date >= todayISO && a.status !== 'cancelled')
-    .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`))
 
   // ── Convert Appointment → DrawerAppointment ────────────────────
   function toDrawer(a: Appointment): DrawerAppointment {
-    return {
-      id:      a.id,
-      name:    a.name,
-      company: a.company,
-      type:    a.type,
-      date:    a.date,
-      time:    a.time,
-      status:  a.status,
-      leadId:  a.leadId,
-      notes:   a.notes,
-    }
+    return { id:a.id, name:a.name, company:a.company, type:a.type,
+             date:a.date, time:a.time, status:a.status, leadId:a.leadId, notes:a.notes }
   }
+
+  // ── Upcoming: beyond the 7-day window, not cancelled ──────────
+  const lastWindowDate = viewDays[6].iso
+  const upcoming = appointments
+    .filter(a => a.date > lastWindowDate && a.status !== 'cancelled')
+    .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`))
 
   return (
     <>
       <div className="flex flex-col gap-5">
 
-        {/* Header with navigation */}
+        {/* ── Header ─────────────────────────────────────────── */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="relative">
-            <button
-              onClick={() => setPickerOpen(v => !v)}
-              className="flex flex-col cursor-pointer hover:opacity-80 transition-opacity text-left"
-            >
-              <h2 className="text-base font-bold text-white">Weekly Schedule</h2>
+            <button onClick={() => setPickerOpen(v => !v)}
+              className="flex flex-col cursor-pointer hover:opacity-80 transition-opacity text-left">
+              <h2 className="text-base font-bold text-white">Schedule</h2>
               <p className="text-xs text-white/30 mt-0.5 flex items-center gap-1">
-                Week of {weekLabel}
+                {rangeLabel}
                 <ChevronRight className="w-3 h-3 opacity-50 rotate-90 inline" />
               </p>
             </button>
-
             <AnimatePresence>
               {pickerOpen && (
                 <WeekDatePicker
-                  anchorMonday={monday}
+                  anchorDate={anchorDate}
                   onSelect={goToDay}
                   onClose={() => setPickerOpen(false)}
                 />
@@ -1097,84 +1081,74 @@ function AppointmentsSection({ appointments }: { appointments: Appointment[] }) 
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Today button — visible only when not on the current week */}
-            {weekOffset !== 0 && (
+            {dayOffset !== 0 && (
               <motion.button
-                initial={{ opacity:0, scale:0.9 }} animate={{ opacity:1, scale:1 }} exit={{ opacity:0, scale:0.9 }}
-                onClick={() => setWeekOffset(0)}
-                className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                initial={{ opacity:0, scale:0.9 }} animate={{ opacity:1, scale:1 }}
+                onClick={() => setDayOffset(0)}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold"
                 style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.25)', color:'#c4b5fd' }}>
                 Today
               </motion.button>
             )}
-
-            {/* Prev week */}
-            <button onClick={() => setWeekOffset(o => o - 1)}
+            <button onClick={() => setDayOffset(o => o - 1)}
               className="w-8 h-8 rounded-xl flex items-center justify-center text-white/40 hover:text-white/80 transition-colors"
               style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)' }}>
               <ChevronLeft className="w-4 h-4" />
             </button>
-
-            {/* Next week */}
-            <button onClick={() => setWeekOffset(o => o + 1)}
+            <button onClick={() => setDayOffset(o => o + 1)}
               className="w-8 h-8 rounded-xl flex items-center justify-center text-white/40 hover:text-white/80 transition-colors"
               style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)' }}>
               <ChevronRight className="w-4 h-4" />
             </button>
-
             <ExportButton />
           </div>
         </div>
 
-        {/* 5-column week grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          {weekDays.map(day => {
+        {/* ── 7-day grid ─────────────────────────────────────── */}
+        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+          {viewDays.map(day => {
             const dayAppts = appointments.filter(a => a.date === day.iso)
             return (
               <Card key={day.iso} className={day.today ? 'ring-1 ring-violet-500/25' : ''}>
-                <div className="flex items-center justify-between px-3 py-2.5"
+                <div className="flex items-center justify-between px-2.5 py-2"
                   style={{
                     borderBottom: dayAppts.length ? '1px solid rgba(255,255,255,0.06)' : 'none',
                     background:   day.today ? 'rgba(139,92,246,0.06)' : 'transparent',
                   }}>
                   <div>
-                    <div className="text-xs font-black text-white/60">{day.label}</div>
-                    <div className="text-[10px] text-white/25">{day.date}</div>
+                    <div className="text-[11px] font-black text-white/60">{day.label}</div>
+                    <div className="text-[9px] text-white/25 leading-tight">{day.dateNum}</div>
                   </div>
                   {day.today && (
-                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+                    <span className="text-[8px] font-bold px-1 py-0.5 rounded-full"
                       style={{ background:'rgba(139,92,246,0.2)', color:'#c4b5fd', border:'1px solid rgba(139,92,246,0.3)' }}>
                       TODAY
                     </span>
                   )}
                 </div>
                 {dayAppts.length > 0 ? (
-                  <div className="p-2 flex flex-col gap-2">
+                  <div className="p-1.5 flex flex-col gap-1.5">
                     {dayAppts.map(appt => {
                       const sc = APPT_CFG[appt.status]
                       return (
-                        <motion.button
-                          key={appt.id}
-                          whileHover={{ scale:1.02, boxShadow:`0 4px 16px ${sc.color}18` }}
+                        <motion.button key={appt.id}
+                          whileHover={{ scale:1.02, boxShadow:`0 4px 12px ${sc.color}18` }}
                           whileTap={{ scale:0.98 }}
                           onClick={() => setSelectedAppt(toDrawer(appt))}
-                          className="rounded-xl p-2.5 w-full text-left cursor-pointer transition-all"
+                          className="rounded-lg p-2 w-full text-left cursor-pointer"
                           style={{ background:`${sc.color}08`, border:`1px solid ${sc.color}20` }}>
-                          <div className="text-[11px] font-bold text-white/80 leading-snug">{appt.name}</div>
-                          <div className="text-[10px] text-white/40 mt-0.5">{appt.type}</div>
-                          <div className="flex items-center justify-between mt-1.5">
-                            <div className="flex items-center gap-1 text-[10px] text-white/35">
-                              <Clock className="w-3 h-3" />{appt.time}
-                            </div>
-                            <span className="text-[9px] font-bold" style={{ color:sc.color }}>{sc.label}</span>
+                          <div className="text-[10px] font-bold text-white/80 leading-snug truncate">{appt.name}</div>
+                          <div className="text-[9px] text-white/35 mt-0.5 truncate">{appt.type}</div>
+                          <div className="flex items-center gap-1 text-[9px] text-white/30 mt-1">
+                            <Clock className="w-2.5 h-2.5" />{appt.time}
                           </div>
                         </motion.button>
                       )
                     })}
                   </div>
                 ) : (
-                  <div className="px-3 py-5 text-center">
-                    <div className="text-[10px] text-white/15">Free</div>
+                  <div className="py-4 text-center">
+                    <div className="text-[9px] text-white/12">Free</div>
                   </div>
                 )}
               </Card>
@@ -1182,18 +1156,18 @@ function AppointmentsSection({ appointments }: { appointments: Appointment[] }) 
           })}
         </div>
 
-        {/* Upcoming list */}
+        {/* ── Upcoming list ───────────────────────────────────── */}
         <Card>
           <div className="flex items-center justify-between px-5 py-4"
             style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
             <h2 className="text-sm font-bold text-white">Upcoming</h2>
-            <span className="text-xs text-white/30">Beyond this week</span>
+            <span className="text-xs text-white/30">Beyond this view</span>
           </div>
           {upcoming.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-10 gap-2">
               <Calendar className="w-7 h-7 text-white/10" />
               <p className="text-sm text-white/25 font-medium">No upcoming appointments</p>
-              <p className="text-xs text-white/15">Bookings beyond this week will appear here</p>
+              <p className="text-xs text-white/15">Bookings beyond this window will appear here</p>
             </div>
           ) : (
             <div className="divide-y divide-white/[0.04]">
@@ -1230,7 +1204,6 @@ function AppointmentsSection({ appointments }: { appointments: Appointment[] }) 
 
       </div>
 
-      {/* Appointment detail drawer */}
       {selectedAppt && (
         <ApptDrawer appt={selectedAppt} onClose={() => setSelectedAppt(null)} />
       )}

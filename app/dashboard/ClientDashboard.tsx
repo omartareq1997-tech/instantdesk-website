@@ -8,7 +8,7 @@ import {
   Clock, Search, X, BarChart2, MessageCircle, Database,
   Activity, RefreshCw, Bell, Shield, Link2, Download, Target,
   DollarSign, Timer, Menu, ChevronLeft, ChevronRight, LineChart, BellDot,
-  MessageSquare,
+  MessageSquare, SlidersHorizontal,
 } from 'lucide-react'
 import LeadPanel from './LeadPanel'
 import AnalyticsSection from './AnalyticsSection'
@@ -700,76 +700,352 @@ function OverviewSection({
   )
 }
 
+/* ─── Pipeline — filter types & helpers ─────────────────────── */
+
+type DateRangeKey = 'all' | 'today' | 'yesterday' | 'last7' | 'last30' | 'custom'
+
+interface PipelineFilters {
+  score:      ScoreLabel | 'all'
+  status:     LeadStatus | 'all'
+  source:     'all' | 'whatsapp' | 'website_chat' | 'email' | 'instagram'
+  dateRange:  DateRangeKey
+  customFrom: string
+  customTo:   string
+}
+
+const DEFAULT_FILTERS: PipelineFilters = {
+  score:'all', status:'all', source:'all', dateRange:'all', customFrom:'', customTo:'',
+}
+
+function countActiveFilters(f: PipelineFilters): number {
+  return [f.score!=='all', f.status!=='all', f.source!=='all', f.dateRange!=='all'].filter(Boolean).length
+}
+
+function fmtLeadDate(iso: string): string {
+  try {
+    const d = new Date(iso)
+    const now = new Date()
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const yday = new Date(todayStart); yday.setDate(todayStart.getDate() - 1)
+    const t = d.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })
+    if (d >= todayStart) return `Today, ${t}`
+    if (d >= yday)       return `Yesterday, ${t}`
+    return d.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' })
+  } catch { return '' }
+}
+
+function inDateRange(iso: string, f: PipelineFilters): boolean {
+  if (f.dateRange === 'all') return true
+  try {
+    const d = new Date(iso).getTime()
+    const now = new Date()
+    const ts = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+    if (f.dateRange === 'today')     return d >= ts
+    if (f.dateRange === 'yesterday') return d >= ts - 86400000 && d < ts
+    if (f.dateRange === 'last7')     return d >= ts - 7  * 86400000
+    if (f.dateRange === 'last30')    return d >= ts - 30 * 86400000
+    if (f.dateRange === 'custom') {
+      if (f.customFrom && d < new Date(f.customFrom).getTime()) return false
+      if (f.customTo   && d > new Date(f.customTo + 'T23:59:59').getTime()) return false
+      return true
+    }
+  } catch { return true }
+  return true
+}
+
+/* ─── Pipeline — filter panel sub-components ────────────────── */
+
+function FSection({ label, children }: { label:string; children:React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-[10px] font-bold uppercase tracking-widest text-white/30 mb-2">{label}</div>
+      {children}
+    </div>
+  )
+}
+
+function ChipGroup({
+  opts, value, onChange,
+}: {
+  opts: { v:string; label:string; color?:string }[]
+  value: string
+  onChange: (v:string) => void
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {opts.map(o => {
+        const on = o.v === value
+        return (
+          <button key={o.v} onClick={() => onChange(o.v)}
+            className="px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all"
+            style={on ? {
+              background: o.color ? `${o.color}20` : 'rgba(139,92,246,0.2)',
+              border:`1px solid ${o.color ?? 'rgba(139,92,246,0.4)'}`,
+              color: o.color ?? '#c4b5fd',
+            } : {
+              background:'rgba(255,255,255,0.04)',
+              border:'1px solid rgba(255,255,255,0.08)',
+              color:'rgba(255,255,255,0.45)',
+            }}>
+            {o.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function FilterPanel({
+  filters, onChange, onClose,
+}: {
+  filters: PipelineFilters
+  onChange:(f:PipelineFilters) => void
+  onClose: () => void
+}) {
+  const set = (patch: Partial<PipelineFilters>) => onChange({ ...filters, ...patch })
+  const ac  = countActiveFilters(filters)
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <motion.div
+        initial={{ opacity:0, scale:0.96, y:-6 }}
+        animate={{ opacity:1, scale:1,    y: 0  }}
+        exit={{   opacity:0, scale:0.96, y:-6  }}
+        transition={{ duration:0.15 }}
+        className="absolute right-0 top-full mt-2 z-50 w-80 rounded-2xl"
+        style={{
+          background:'rgba(10,10,30,0.98)', border:'1px solid rgba(139,92,246,0.22)',
+          boxShadow:'0 24px 60px rgba(0,0,0,0.7)', backdropFilter:'blur(24px)',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3"
+          style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+          <span className="text-sm font-bold text-white">Filters</span>
+          {ac > 0 && (
+            <button onClick={() => onChange(DEFAULT_FILTERS)}
+              className="text-[11px] font-semibold text-violet-400/80 hover:text-violet-300 transition-colors">
+              Reset all
+            </button>
+          )}
+        </div>
+
+        <div className="p-4 flex flex-col gap-5">
+          <FSection label="Score">
+            <ChipGroup value={filters.score} onChange={v => set({ score: v as PipelineFilters['score'] })}
+              opts={[
+                { v:'all',  label:'All'  },
+                { v:'hot',  label:'Hot',  color:'#f87171' },
+                { v:'warm', label:'Warm', color:'#fb923c' },
+                { v:'cold', label:'Cold', color:'#60a5fa' },
+              ]} />
+          </FSection>
+
+          <FSection label="Status">
+            <ChipGroup value={filters.status} onChange={v => set({ status: v as PipelineFilters['status'] })}
+              opts={[
+                { v:'all',         label:'All'         },
+                { v:'new',         label:'New'         },
+                { v:'contacted',   label:'Contacted'   },
+                { v:'demo_booked', label:'Demo Booked' },
+                { v:'won',         label:'Won'         },
+                { v:'lost',        label:'Lost'        },
+              ]} />
+          </FSection>
+
+          <FSection label="Source">
+            <ChipGroup value={filters.source} onChange={v => set({ source: v as PipelineFilters['source'] })}
+              opts={[
+                { v:'all',          label:'All'          },
+                { v:'whatsapp',     label:'WhatsApp'     },
+                { v:'website_chat', label:'Website Chat' },
+                { v:'email',        label:'Email'        },
+                { v:'instagram',    label:'Instagram'    },
+              ]} />
+          </FSection>
+
+          <FSection label="Date Added">
+            <ChipGroup value={filters.dateRange} onChange={v => set({ dateRange: v as DateRangeKey })}
+              opts={[
+                { v:'all',       label:'Any time'    },
+                { v:'today',     label:'Today'       },
+                { v:'yesterday', label:'Yesterday'   },
+                { v:'last7',     label:'Last 7 days' },
+                { v:'last30',    label:'Last 30 days'},
+                { v:'custom',    label:'Custom'      },
+              ]} />
+            {filters.dateRange === 'custom' && (
+              <div className="flex items-center gap-2 mt-2.5">
+                <input type="date" value={filters.customFrom}
+                  onChange={e => set({ customFrom: e.target.value })}
+                  className="flex-1 px-2 py-1.5 rounded-lg text-xs text-white/70 outline-none"
+                  style={{ background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.12)', colorScheme:'dark' }} />
+                <span className="text-white/30 text-xs">–</span>
+                <input type="date" value={filters.customTo}
+                  onChange={e => set({ customTo: e.target.value })}
+                  className="flex-1 px-2 py-1.5 rounded-lg text-xs text-white/70 outline-none"
+                  style={{ background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.12)', colorScheme:'dark' }} />
+              </div>
+            )}
+          </FSection>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between px-4 py-3"
+          style={{ borderTop:'1px solid rgba(255,255,255,0.06)' }}>
+          <span className="text-[11px] text-white/30">
+            {ac > 0 ? `${ac} filter${ac > 1 ? 's' : ''} active` : 'No filters active'}
+          </span>
+          <button onClick={onClose}
+            className="text-xs font-semibold px-3 py-1.5 rounded-lg transition-all"
+            style={{ background:'rgba(139,92,246,0.15)', border:'1px solid rgba(139,92,246,0.3)', color:'#c4b5fd' }}>
+            Done
+          </button>
+        </div>
+      </motion.div>
+    </>
+  )
+}
+
 /* ─── Pipeline ───────────────────────────────────────────────── */
 
 function PipelineSection({ onSelectLead, leads }: { onSelectLead:(id:string)=>void; leads:Lead[] }) {
-  const [search, setSearch]           = useState('')
-  const [scoreFilter, setScoreFilter] = useState<ScoreLabel|'all'>('all')
+  const [search,     setSearch]     = useState('')
+  const [filters,    setFilters]    = useState<PipelineFilters>(DEFAULT_FILTERS)
+  const [filterOpen, setFilterOpen] = useState(false)
+
+  const ac = countActiveFilters(filters)
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
     return leads.filter(l => {
-      if (scoreFilter!=='all' && l.scoreLabel!==scoreFilter) return false
-      if (!q) return true
-      return l.name.toLowerCase().includes(q) || l.company.toLowerCase().includes(q) || l.interest.toLowerCase().includes(q)
-    }).sort((a,b) => b.score-a.score)
-  }, [leads, search, scoreFilter])
+      // Score
+      if (filters.score !== 'all' && l.scoreLabel !== filters.score) return false
+      // Status
+      if (filters.status !== 'all' && l.status !== filters.status) return false
+      // Source — normalise "Website Chat" → "website_chat" for comparison
+      if (filters.source !== 'all') {
+        const norm = l.source.toLowerCase().replace(/[\s-]+/g, '_')
+        if (norm !== filters.source) return false
+      }
+      // Date added
+      if (!inDateRange(l.date, filters)) return false
+      // Text search — name, company, email, phone, source, interest, agent + all metadata string values
+      if (q) {
+        const haystack = [
+          l.name, l.company, l.interest, l.source, l.assignedAgent,
+          l.email ?? '', l.phone ?? '',
+          ...Object.values(l.metadata ?? {})
+            .filter(v => typeof v === 'string' || typeof v === 'number')
+            .map(String),
+        ]
+        if (!haystack.some(s => s.toLowerCase().includes(q))) return false
+      }
+      return true
+    }).sort((a, b) => b.score - a.score)
+  }, [leads, search, filters])
+
+  const clearAll = () => { setSearch(''); setFilters(DEFAULT_FILTERS) }
 
   return (
     <Card>
+      {/* Header */}
       <div className="flex items-center justify-between gap-3 px-5 py-4 flex-wrap"
         style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
-        <h2 className="text-sm font-bold text-white">Lead Pipeline <span className="font-normal text-white/30">({filtered.length})</span></h2>
-        <div className="flex items-center gap-2 flex-wrap">
-          {(['all','hot','warm','cold'] as const).map(s => {
-            const isA = scoreFilter===s; const c = s==='all'?null:SCORE_CFG[s]
-            return (
-              <button key={s} onClick={() => setScoreFilter(s)}
-                className="px-3 py-1.5 rounded-lg text-[11px] font-semibold capitalize transition-all"
-                style={isA ? { background:c?c.bg:'rgba(255,255,255,0.08)', border:`1px solid ${c?c.border:'rgba(255,255,255,0.2)'}`, color:c?c.color:'#fff' }
-                           : { background:'transparent', border:'1px solid transparent', color:'rgba(255,255,255,0.35)' }}>
-                {s==='all'?'All Scores':s}
-              </button>
-            )
-          })}
-          <ExportButton />
-        </div>
+        <h2 className="text-sm font-bold text-white">
+          Lead Pipeline <span className="font-normal text-white/30">({filtered.length})</span>
+        </h2>
+        <ExportButton />
       </div>
 
-      <div className="px-5 py-3" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
-        <div className="relative max-w-sm">
+      {/* Search + Filter bar */}
+      <div className="flex items-center gap-2 px-5 py-3"
+        style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+        {/* Search */}
+        <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/25 pointer-events-none" />
-          <input type="text" placeholder="Search leads…" value={search} onChange={e=>setSearch(e.target.value)}
+          <input type="text"
+            placeholder="Search name, email, phone, city, budget, any field…"
+            value={search} onChange={e => setSearch(e.target.value)}
             className="w-full pl-9 pr-9 py-2 rounded-xl text-sm text-white placeholder-white/20 outline-none transition-all"
             style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)' }}
             onFocus={e=>{ e.currentTarget.style.border='1px solid rgba(139,92,246,0.4)' }}
             onBlur={e=>{  e.currentTarget.style.border='1px solid rgba(255,255,255,0.08)' }}
           />
-          {search && <button onClick={()=>setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/25 hover:text-white/60"><X className="w-3.5 h-3.5" /></button>}
+          {search && (
+            <button onClick={() => setSearch('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-white/25 hover:text-white/60">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Filter button */}
+        <div className="relative flex-shrink-0">
+          <button onClick={() => setFilterOpen(v => !v)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap"
+            style={ac > 0 || filterOpen ? {
+              background:'rgba(139,92,246,0.15)', border:'1px solid rgba(139,92,246,0.35)', color:'#c4b5fd',
+            } : {
+              background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', color:'rgba(255,255,255,0.5)',
+            }}>
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+            Filter
+            {ac > 0 && (
+              <span className="flex items-center justify-center w-4 h-4 rounded-full text-[9px] font-black text-white"
+                style={{ background:'#7c3aed' }}>
+                {ac}
+              </span>
+            )}
+          </button>
+
+          <AnimatePresence>
+            {filterOpen && (
+              <FilterPanel
+                filters={filters}
+                onChange={setFilters}
+                onClose={() => setFilterOpen(false)}
+              />
+            )}
+          </AnimatePresence>
         </div>
       </div>
 
+      {/* Table */}
       <div className="overflow-x-auto">
-        <table className="w-full" style={{ minWidth:900 }}>
-          <thead><tr style={{ borderBottom:'1px solid rgba(255,255,255,0.05)' }}>
-            {['Lead / Company','Source','Interest','Agent','Score','Status','Follow-up'].map(col=>(
-              <th key={col} className="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-white/25">{col}</th>
-            ))}
-          </tr></thead>
+        <table className="w-full" style={{ minWidth:1040 }}>
+          <thead>
+            <tr style={{ borderBottom:'1px solid rgba(255,255,255,0.05)' }}>
+              {['Lead / Company','Source','Interest','Agent','Score','Status','Added','Follow-up'].map(col => (
+                <th key={col} className="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-white/25">
+                  {col}
+                </th>
+              ))}
+            </tr>
+          </thead>
           <tbody className="divide-y divide-white/[0.04]">
             <AnimatePresence initial={false}>
-              {filtered.length===0 ? (
-                <tr><td colSpan={7} className="px-5 py-16 text-center">
-                  <p className="text-sm text-white/25">No leads match your filters</p>
-                  <button onClick={()=>{setSearch('');setScoreFilter('all')}} className="text-xs text-violet-400 mt-2">Clear filters</button>
-                </td></tr>
-              ) : filtered.map((lead,i) => (
-                <motion.tr key={lead.id} initial={{ opacity:0, y:6 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0 }}
-                  transition={{ delay:i*0.025 }} onClick={() => onSelectLead(lead.id)}
-                  className="cursor-pointer group"
-                  style={{ background:'transparent' }}
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-5 py-16 text-center">
+                    <p className="text-sm text-white/25">No leads match your filters</p>
+                    <button onClick={clearAll} className="text-xs text-violet-400 mt-2">
+                      Clear all filters
+                    </button>
+                  </td>
+                </tr>
+              ) : filtered.map((lead, i) => (
+                <motion.tr key={lead.id}
+                  initial={{ opacity:0, y:6 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0 }}
+                  transition={{ delay:i*0.025 }}
+                  onClick={() => onSelectLead(lead.id)}
+                  className="cursor-pointer group" style={{ background:'transparent' }}
                   onMouseEnter={e=>(e.currentTarget.style.background='rgba(139,92,246,0.04)')}
                   onMouseLeave={e=>(e.currentTarget.style.background='transparent')}>
+
+                  {/* Lead / Company */}
                   <td className="px-4 py-3.5">
                     <div className="flex items-center gap-3">
                       <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
@@ -777,13 +1053,25 @@ function PipelineSection({ onSelectLead, leads }: { onSelectLead:(id:string)=>vo
                         {initials(lead.name)}
                       </div>
                       <div>
-                        <div className="text-sm font-semibold text-white/80 group-hover:text-white transition-colors whitespace-nowrap">{lead.name}</div>
+                        <div className="text-sm font-semibold text-white/80 group-hover:text-white transition-colors whitespace-nowrap">
+                          {lead.name}
+                        </div>
                         <div className="text-xs text-white/30 truncate max-w-[120px]">{lead.company}</div>
                       </div>
                     </div>
                   </td>
-                  <td className="px-4 py-3.5"><span className="text-xs text-white/50 bg-white/5 px-2 py-1 rounded-lg whitespace-nowrap">{lead.source}</span></td>
+
+                  {/* Source */}
+                  <td className="px-4 py-3.5">
+                    <span className="text-xs text-white/50 bg-white/5 px-2 py-1 rounded-lg whitespace-nowrap">
+                      {lead.source}
+                    </span>
+                  </td>
+
+                  {/* Interest */}
                   <td className="px-4 py-3.5 text-xs text-white/55 whitespace-nowrap">{lead.interest}</td>
+
+                  {/* Agent */}
                   <td className="px-4 py-3.5">
                     <div className="flex items-center gap-2">
                       <div className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-black text-white flex-shrink-0"
@@ -793,8 +1081,19 @@ function PipelineSection({ onSelectLead, leads }: { onSelectLead:(id:string)=>vo
                       <span className="text-xs text-white/55 whitespace-nowrap">{lead.assignedAgent}</span>
                     </div>
                   </td>
+
+                  {/* Score */}
                   <td className="px-4 py-3.5"><ScoreBadge score={lead.score} label={lead.scoreLabel} /></td>
+
+                  {/* Status */}
                   <td className="px-4 py-3.5"><StatusBadge status={lead.status} /></td>
+
+                  {/* Added */}
+                  <td className="px-4 py-3.5">
+                    <span className="text-xs text-white/40 whitespace-nowrap">{fmtLeadDate(lead.date)}</span>
+                  </td>
+
+                  {/* Follow-up */}
                   <td className="px-4 py-3.5"><AutoDots auto={lead.auto} /></td>
                 </motion.tr>
               ))}
@@ -803,11 +1102,17 @@ function PipelineSection({ onSelectLead, leads }: { onSelectLead:(id:string)=>vo
         </table>
       </div>
 
-      <div className="flex items-center justify-between px-5 py-3" style={{ borderTop:'1px solid rgba(255,255,255,0.05)' }}>
-        <span className="text-xs text-white/20">Showing {filtered.length} of {leads.length} · click a row to view details</span>
+      {/* Footer */}
+      <div className="flex items-center justify-between px-5 py-3"
+        style={{ borderTop:'1px solid rgba(255,255,255,0.05)' }}>
+        <span className="text-xs text-white/20">
+          Showing {filtered.length} of {leads.length} · click a row to view details
+        </span>
         <div className="flex gap-4 text-[10px]">
-          {(['hot','warm','cold'] as ScoreLabel[]).map(s=>(
-            <span key={s} style={{ color:SCORE_CFG[s].color }}>{leads.filter(l=>l.scoreLabel===s).length} {SCORE_CFG[s].label}</span>
+          {(['hot','warm','cold'] as ScoreLabel[]).map(s => (
+            <span key={s} style={{ color:SCORE_CFG[s].color }}>
+              {leads.filter(l => l.scoreLabel===s).length} {SCORE_CFG[s].label}
+            </span>
           ))}
         </div>
       </div>

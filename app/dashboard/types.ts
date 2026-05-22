@@ -36,6 +36,8 @@ export interface Lead {
   status: LeadStatus
   date: string
   auto: AutoState
+  /** Niche-specific custom fields sent by Make — stored as JSONB in leads.metadata */
+  metadata?: Record<string, unknown>
 }
 
 export interface Appointment {

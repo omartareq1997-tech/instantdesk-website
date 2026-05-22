@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   X, Bot, Tag, Clock, Lightbulb, Star,
   MessageCircle, Globe, Calendar, ArrowRight,
-  CheckCircle, AlertCircle,
+  CheckCircle, AlertCircle, SlidersHorizontal,
 } from 'lucide-react'
 
 /* ─── Types (local mirror) ───────────────────────────────────── */
@@ -17,6 +17,25 @@ interface Lead {
   id: string; name: string; company: string; source: string
   interest: string; assignedAgent: string
   score: number; scoreLabel: ScoreLabel; status: LeadStatus; date: string
+  metadata?: Record<string, unknown>
+}
+
+/* ─── Metadata helpers ───────────────────────────────────────── */
+
+function formatMetaKey(key: string): string {
+  return key
+    .replace(/_/g, ' ')                         // snake_case → words
+    .replace(/([a-z])([A-Z])/g, '$1 $2')        // camelCase → words
+    .replace(/\b\w/g, c => c.toUpperCase())     // Title Case
+}
+
+function formatMetaValue(v: unknown): string {
+  if (v === null || v === undefined) return '—'
+  if (typeof v === 'boolean')        return v ? 'Yes' : 'No'
+  if (typeof v === 'string')         return v
+  if (typeof v === 'number')         return v.toLocaleString()
+  if (Array.isArray(v))              return v.join(', ')
+  return JSON.stringify(v)
 }
 
 interface Message { from: 'user' | 'ai'; text: string; time: string; speed?: string }
@@ -285,6 +304,34 @@ export default function LeadPanel({ lead, onClose }: { lead: Lead; onClose: () =
               <div className="text-xs font-semibold text-white/60">{lead.interest}</div>
             </div>
           </div>
+
+          {/* Custom Details — rendered from leads.metadata JSONB */}
+          {lead.metadata && Object.keys(lead.metadata).length > 0 && (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-1.5">
+                <SlidersHorizontal className="w-3 h-3 text-white/25" />
+                <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">Custom Details</span>
+              </div>
+              <div className="rounded-2xl overflow-hidden"
+                style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
+                {Object.entries(lead.metadata).map(([key, value], i, arr) => (
+                  <div key={key}
+                    className="flex items-start justify-between gap-4 px-4 py-2.5"
+                    style={{
+                      background: i % 2 === 0 ? 'rgba(255,255,255,0.015)' : 'transparent',
+                      borderBottom: i < arr.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
+                    }}>
+                    <span className="text-[11px] font-semibold text-white/35 flex-shrink-0">
+                      {formatMetaKey(key)}
+                    </span>
+                    <span className="text-[11px] font-medium text-white/65 text-right break-all">
+                      {formatMetaValue(value)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
         </div>
       </motion.aside>

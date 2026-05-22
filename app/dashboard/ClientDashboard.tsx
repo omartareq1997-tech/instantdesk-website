@@ -30,7 +30,7 @@ interface AutoState {
 interface Lead {
   id: string; name: string; company: string; source: string; interest: string
   assignedAgent: string; score: number; scoreLabel: ScoreLabel; status: LeadStatus
-  date: string; auto: AutoState
+  date: string; auto: AutoState; metadata?: Record<string, unknown>
 }
 interface ActivityItem { id: string; type: ActivityType; text: string; sub: string; time: string; live?: boolean }
 interface Appointment { id: string; name: string; company: string; type: string; date: string; time: string; status: ApptStatus; upcoming: boolean }

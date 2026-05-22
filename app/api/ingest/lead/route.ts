@@ -52,6 +52,26 @@
  *   "name":      "James Okafor"
  * }
  *
+ * ── Niche-specific metadata examples ─────────────────────────────
+ * Any flat key/value pairs can be sent inside "metadata" and will be
+ * stored as JSONB on the leads row. The Lead Pipeline drawer renders
+ * all keys under a "Custom Details" section automatically.
+ *
+ * Dental practice:
+ * { ..., "metadata": { "practice_type": "NHS + Private", "patients_per_day": 40, "software": "Dentally" } }
+ *
+ * Legal firm:
+ * { ..., "metadata": { "area_of_law": "Employment", "case_value": "£50k+", "urgency": "High" } }
+ *
+ * E-commerce:
+ * { ..., "metadata": { "platform": "Shopify", "monthly_orders": 1200, "avg_basket": "£68" } }
+ *
+ * SaaS startup:
+ * { ..., "metadata": { "mrr": "£8k", "team_size": 12, "tech_stack": "React + Node", "trial": true } }
+ *
+ * Metadata values can be strings, numbers, or booleans. Nested
+ * objects and arrays will be JSON-serialised for display.
+ *
  * ── Response (success) ────────────────────────────────────────────
  * HTTP 200
  * {
@@ -157,6 +177,9 @@ interface IngestLeadBody {
   appointment_type?: string
   conversation_id?:  string
   messages?:         IngestMessage[]
+  /** Niche-specific custom fields. Stored as JSONB on the leads row.
+   *  Scalar values only (string | number | boolean). */
+  metadata?:         Record<string, unknown>
 }
 
 /* ── Route handler ───────────────────────────────────────────────── */
@@ -206,6 +229,20 @@ export async function POST(req: NextRequest) {
   const scoreLabel  = typeof body.score_label === 'string' ? body.score_label : scoreData.score_label
   const messages    = Array.isArray(body.messages) ? body.messages : []
   const firstMsg    = body.message?.trim() || messages.find(m => m.role === 'user')?.content || null
+  // Sanitise metadata: keep only scalar values, drop nulls
+  const metadata: Record<string, unknown> | null = (() => {
+    if (!body.metadata || typeof body.metadata !== 'object' || Array.isArray(body.metadata)) return null
+    const clean: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(body.metadata)) {
+      if (v !== null && v !== undefined && ['string','number','boolean'].includes(typeof v)) {
+        clean[k] = v
+      } else if (Array.isArray(v) || (typeof v === 'object' && v !== null)) {
+        // Allow nested JSON — rendered as serialised string in the UI
+        clean[k] = v
+      }
+    }
+    return Object.keys(clean).length > 0 ? clean : null
+  })()
 
   /* 5. Supabase (service role — bypasses RLS) ──────────────────── */
   const sb = createAdminClient()
@@ -226,13 +263,15 @@ export async function POST(req: NextRequest) {
         .maybeSingle()
 
       if (existing?.id) {
-        // Update fields that may have changed
-        await sb.from('leads').update({
+        // Update fields that may have changed; merge metadata (new keys win)
+        const updatePayload: Record<string, unknown> = {
           name, company, phone,
           source, interest: interest ?? undefined,
           score, score_label: scoreLabel,
           updated_at: new Date().toISOString(),
-        }).eq('id', existing.id)
+        }
+        if (metadata) updatePayload.metadata = metadata
+        await sb.from('leads').update(updatePayload).eq('id', existing.id)
         leadId = existing.id
       } else {
         const { data, error } = await sb
@@ -243,6 +282,7 @@ export async function POST(req: NextRequest) {
             source, interest: interest ?? undefined,
             score, score_label: scoreLabel,
             status: 'new',
+            ...(metadata && { metadata }),
           })
           .select('id')
           .single()
@@ -260,6 +300,7 @@ export async function POST(req: NextRequest) {
           source, interest: interest ?? undefined,
           score, score_label: scoreLabel,
           status: 'new',
+          ...(metadata && { metadata }),
         })
         .select('id')
         .single()

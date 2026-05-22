@@ -235,6 +235,7 @@ interface LeadRow {
   score: number | null; score_label: string | null; status: string | null
   ai_sms: string | null; email_seq: string | null; nurture: string | null
   smart_assign: string | null; auto_call: string | null
+  metadata: Record<string, unknown> | null
   created_at: string; updated_at: string
 }
 
@@ -275,6 +276,7 @@ function mapLead(r: LeadRow): Lead {
     scoreLabel:   (r.score_label   as ScoreLabel)  ?? 'cold',
     status:       (r.status        as LeadStatus)  ?? 'new',
     date:          r.created_at,
+    metadata:     r.metadata ?? undefined,
     auto: {
       aiSms:       (r.ai_sms      as AutoState['aiSms'])       ?? 'off',
       emailSeq:    (r.email_seq   as AutoState['emailSeq'])    ?? 'not_started',

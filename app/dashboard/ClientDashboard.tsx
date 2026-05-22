@@ -74,14 +74,6 @@ const LIVE_POOL: Omit<ActivityItem, 'id' | 'time' | 'live'>[] = [
   { type:'sms',         text:'AI replied to Mia Chen in 5s',              sub:'Instagram DM · high intent detected' },
 ]
 
-const APPOINTMENTS: Appointment[] = [
-  { id:'1', name:'Fatima Al-Rashid', company:'Al-Rashid Partners', type:'Onboarding',     date:'2026-05-18', time:'09:00', status:'completed', upcoming:false },
-  { id:'2', name:'Daniel Lee',       company:'Lee Consulting',     type:'Onboarding',     date:'2026-05-19', time:'11:00', status:'completed', upcoming:false },
-  { id:'3', name:'Chen Wei',         company:'Wei Innovations',    type:'Demo Call',      date:'2026-05-22', time:'10:00', status:'confirmed', upcoming:true  },
-  { id:'4', name:'Sarah Mitchell',   company:'Orbit Digital',      type:'Demo Call',      date:'2026-05-22', time:'15:00', status:'confirmed', upcoming:true  },
-  { id:'5', name:'Priya Sharma',     company:'GrowFast Ltd',       type:'Discovery Call', date:'2026-05-23', time:'14:00', status:'pending',   upcoming:true  },
-  { id:'6', name:'Tom Reynolds',     company:'Reynolds Tech',      type:'Discovery Call', date:'2026-05-28', time:'16:00', status:'pending',   upcoming:true  },
-]
 
 const SEED_NOTIFS: Notification[] = [
   { id:'1', type:'lead',    text:'New hot lead captured',         sub:'James Okafor · WhatsApp · 2 min ago',  read:false, time:'2 min ago'  },
@@ -98,13 +90,6 @@ const AUTOMATIONS = [
   { id:'crm',      label:'Google Sheets / CRM',   color:'#a78bfa', Icon:Database,      description:'All leads and conversations synced automatically to your sheet', status:'connected', lastActivity:'5 min ago', stat1Label:'Records synced',  stat1Value:'47',  stat2Label:'Last sync',       stat2Value:'5 min ago' },
 ]
 
-const WEEK = [
-  { label:'Mon', date:'18 May', iso:'2026-05-18' },
-  { label:'Tue', date:'19 May', iso:'2026-05-19' },
-  { label:'Wed', date:'20 May', iso:'2026-05-20' },
-  { label:'Thu', date:'21 May', iso:'2026-05-21', today:true },
-  { label:'Fri', date:'22 May', iso:'2026-05-22' },
-]
 
 /* ─── Config ─────────────────────────────────────────────────── */
 
@@ -895,33 +880,69 @@ function ActivitySection({ initialEvents = SEED_ACTIVITY }: { initialEvents?: Ac
 /* ─── Appointments ───────────────────────────────────────────── */
 
 function AppointmentsSection({ appointments }: { appointments: Appointment[] }) {
+  // ── Build the current Mon–Fri week from today's real date ───────
+  const now      = new Date()
+  const todayISO = now.toISOString().split('T')[0]
+
+  const dow      = now.getDay()                  // 0 = Sun … 6 = Sat
+  const daysBack = dow === 0 ? 6 : dow - 1       // steps back to Monday
+  const monday   = new Date(now)
+  monday.setDate(now.getDate() - daysBack)
+  monday.setHours(0, 0, 0, 0)
+
+  const weekDays = Array.from({ length: 5 }, (_, i) => {
+    const d = new Date(monday)
+    d.setDate(monday.getDate() + i)
+    const iso = d.toISOString().split('T')[0]
+    return {
+      label: d.toLocaleDateString('en-GB', { weekday: 'short' }),        // "Mon"
+      date:  d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }), // "19 May"
+      iso,
+      today: iso === todayISO,
+    }
+  })
+
+  const weekIsoSet  = new Set(weekDays.map(d => d.iso))
+  const weekLabel   = `${weekDays[0].date}–${weekDays[4].date} ${monday.getFullYear()}`
+
+  // Upcoming: future appointments beyond this week (cancelled excluded)
+  const upcoming = appointments
+    .filter(a => !weekIsoSet.has(a.date) && a.date >= todayISO && a.status !== 'cancelled')
+    .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`))
+
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-base font-bold text-white">Weekly Schedule</h2>
-          <p className="text-xs text-white/30 mt-0.5">Week of 18–24 May 2026</p>
+          <p className="text-xs text-white/30 mt-0.5">Week of {weekLabel}</p>
         </div>
         <ExportButton />
       </div>
 
+      {/* 5-column week grid */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        {WEEK.map(day => {
-          const dayAppts = appointments.filter(a=>a.date===day.iso)
+        {weekDays.map(day => {
+          const dayAppts = appointments.filter(a => a.date === day.iso)
           return (
-            <Card key={day.label} className={(day as {today?:boolean}).today?'ring-1 ring-violet-500/25':''}>
+            <Card key={day.iso} className={day.today ? 'ring-1 ring-violet-500/25' : ''}>
               <div className="flex items-center justify-between px-3 py-2.5"
-                style={{ borderBottom:dayAppts.length?'1px solid rgba(255,255,255,0.06)':'none', background:(day as {today?:boolean}).today?'rgba(139,92,246,0.06)':'transparent' }}>
+                style={{
+                  borderBottom: dayAppts.length ? '1px solid rgba(255,255,255,0.06)' : 'none',
+                  background:   day.today ? 'rgba(139,92,246,0.06)' : 'transparent',
+                }}>
                 <div>
                   <div className="text-xs font-black text-white/60">{day.label}</div>
                   <div className="text-[10px] text-white/25">{day.date}</div>
                 </div>
-                {(day as {today?:boolean}).today && (
+                {day.today && (
                   <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
-                    style={{ background:'rgba(139,92,246,0.2)', color:'#c4b5fd', border:'1px solid rgba(139,92,246,0.3)' }}>TODAY</span>
+                    style={{ background:'rgba(139,92,246,0.2)', color:'#c4b5fd', border:'1px solid rgba(139,92,246,0.3)' }}>
+                    TODAY
+                  </span>
                 )}
               </div>
-              {dayAppts.length>0 ? (
+              {dayAppts.length > 0 ? (
                 <div className="p-2 flex flex-col gap-2">
                   {dayAppts.map(appt => {
                     const sc = APPT_CFG[appt.status]
@@ -931,7 +952,9 @@ function AppointmentsSection({ appointments }: { appointments: Appointment[] }) 
                         <div className="text-[11px] font-bold text-white/80 leading-snug">{appt.name}</div>
                         <div className="text-[10px] text-white/40 mt-0.5">{appt.type}</div>
                         <div className="flex items-center justify-between mt-1.5">
-                          <div className="flex items-center gap-1 text-[10px] text-white/35"><Clock className="w-3 h-3" />{appt.time}</div>
+                          <div className="flex items-center gap-1 text-[10px] text-white/35">
+                            <Clock className="w-3 h-3" />{appt.time}
+                          </div>
                           <span className="text-[9px] font-bold" style={{ color:sc.color }}>{sc.label}</span>
                         </div>
                       </div>
@@ -939,44 +962,57 @@ function AppointmentsSection({ appointments }: { appointments: Appointment[] }) 
                   })}
                 </div>
               ) : (
-                <div className="px-3 py-5 text-center"><div className="text-[10px] text-white/15">Free</div></div>
+                <div className="px-3 py-5 text-center">
+                  <div className="text-[10px] text-white/15">Free</div>
+                </div>
               )}
             </Card>
           )
         })}
       </div>
 
+      {/* Upcoming list */}
       <Card>
-        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+        <div className="flex items-center justify-between px-5 py-4"
+          style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
           <h2 className="text-sm font-bold text-white">Upcoming</h2>
           <span className="text-xs text-white/30">Beyond this week</span>
         </div>
-        <div className="divide-y divide-white/[0.04]">
-          {appointments.filter(a=>!WEEK.some(d=>d.iso===a.date)).map((appt,i) => {
-            const sc = APPT_CFG[appt.status]
-            return (
-              <motion.div key={appt.id} initial={{ opacity:0, y:6 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.05 }}
-                className="flex items-center gap-4 px-5 py-3.5">
-                <div className="w-8 h-8 rounded-xl flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
-                  style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.4),rgba(37,99,235,0.3))' }}>
-                  {initials(appt.name)}
-                </div>
-                <div className="flex-1">
-                  <div className="text-sm font-semibold text-white/80">{appt.name}</div>
-                  <div className="text-xs text-white/30">{appt.type} · {appt.company}</div>
-                </div>
-                <div className="text-right mr-2">
-                  <div className="text-xs text-white/50">{fmtApptDate(appt.date)}</div>
-                  <div className="text-[10px] text-white/30">{appt.time}</div>
-                </div>
-                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full"
-                  style={{ color:sc.color, background:sc.bg }}>
-                  <span className="w-1.5 h-1.5 rounded-full" style={{ background:sc.color }} />{sc.label}
-                </span>
-              </motion.div>
-            )
-          })}
-        </div>
+        {upcoming.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 gap-2">
+            <Calendar className="w-7 h-7 text-white/10" />
+            <p className="text-sm text-white/25 font-medium">No upcoming appointments</p>
+            <p className="text-xs text-white/15">Bookings beyond this week will appear here</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-white/[0.04]">
+            {upcoming.map((appt, i) => {
+              const sc = APPT_CFG[appt.status]
+              return (
+                <motion.div key={appt.id}
+                  initial={{ opacity:0, y:6 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.05 }}
+                  className="flex items-center gap-4 px-5 py-3.5">
+                  <div className="w-8 h-8 rounded-xl flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
+                    style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.4),rgba(37,99,235,0.3))' }}>
+                    {initials(appt.name)}
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold text-white/80">{appt.name}</div>
+                    <div className="text-xs text-white/30">{appt.type} · {appt.company}</div>
+                  </div>
+                  <div className="text-right mr-2">
+                    <div className="text-xs text-white/50">{fmtApptDate(appt.date)}</div>
+                    <div className="text-[10px] text-white/30">{appt.time}</div>
+                  </div>
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full"
+                    style={{ color:sc.color, background:sc.bg }}>
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ background:sc.color }} />{sc.label}
+                  </span>
+                </motion.div>
+              )
+            })}
+          </div>
+        )}
       </Card>
     </div>
   )
@@ -1191,7 +1227,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
   // getDashboardData() in page.tsx already falls back to mock if Supabase is empty,
   // but the double-fallback here keeps the UI intact if initialData is ever undefined.
   const leads            = initialData?.leads?.length        ? initialData.leads        : LEADS
-  const appointments     = initialData?.appointments?.length ? initialData.appointments : APPOINTMENTS
+  const appointments     = initialData?.appointments ?? []
   const activity         = initialData?.activity?.length     ? initialData.activity     : SEED_ACTIVITY
   const analytics        = initialData?.analytics?.length    ? initialData.analytics    : undefined
   const integrations     = initialData?.integrations                                   ?? []

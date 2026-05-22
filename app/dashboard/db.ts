@@ -179,14 +179,6 @@ const MOCK_LEADS: Lead[] = [
   { id:'10', name:'Nina Kowalski',    company:'Kowalski Design',    source:'WhatsApp',     interest:'WhatsApp Automation', assignedAgent:'James M.',  score:44, scoreLabel:'warm', status:'contacted',   date:'2026-05-13T11:15:00Z', auto:{ aiSms:'sent',      emailSeq:'active',      nurture:'not_started', smartAssign:'assigned',   autoCall:'off'       }},
 ]
 
-const MOCK_APPOINTMENTS: Appointment[] = [
-  { id:'1', name:'Fatima Al-Rashid', company:'Al-Rashid Partners', type:'Onboarding',     date:'2026-05-18', time:'09:00', status:'completed', upcoming:false },
-  { id:'2', name:'Daniel Lee',       company:'Lee Consulting',     type:'Onboarding',     date:'2026-05-19', time:'11:00', status:'completed', upcoming:false },
-  { id:'3', name:'Chen Wei',         company:'Wei Innovations',    type:'Demo Call',      date:'2026-05-22', time:'10:00', status:'confirmed', upcoming:true  },
-  { id:'4', name:'Sarah Mitchell',   company:'Orbit Digital',      type:'Demo Call',      date:'2026-05-22', time:'15:00', status:'confirmed', upcoming:true  },
-  { id:'5', name:'Priya Sharma',     company:'GrowFast Ltd',       type:'Discovery Call', date:'2026-05-23', time:'14:00', status:'pending',   upcoming:true  },
-  { id:'6', name:'Tom Reynolds',     company:'Reynolds Tech',      type:'Discovery Call', date:'2026-05-28', time:'16:00', status:'pending',   upcoming:true  },
-]
 
 const MOCK_ACTIVITY: ActivityItem[] = [
   { id:'1',  type:'sms',         text:'AI replied to James Okafor in 3s',         sub:'WhatsApp · auto-triggered',         time:'2 min ago',  live:true  },
@@ -400,8 +392,8 @@ export async function getClientMessages(conversationId: string) {
 }
 
 /**
- * Fetch appointments for a client, upcoming ones first.
- * Falls back to MOCK_APPOINTMENTS.
+ * Fetch all appointments for a client ordered by scheduled_at.
+ * Returns [] if the table is empty or Supabase is unavailable.
  */
 export async function getClientAppointments(clientId = DEMO_CLIENT_ID): Promise<Appointment[]> {
   try {
@@ -412,10 +404,9 @@ export async function getClientAppointments(clientId = DEMO_CLIENT_ID): Promise<
       .eq('client_id', clientId)
       .order('scheduled_at', { ascending: true })
     if (error) throw error
-    if (!data?.length) return MOCK_APPOINTMENTS
-    return data.map(r => mapAppointment(r as AppointmentRow))
+    return (data ?? []).map(r => mapAppointment(r as AppointmentRow))
   } catch {
-    return MOCK_APPOINTMENTS
+    return []
   }
 }
 

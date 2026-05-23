@@ -96,6 +96,40 @@ export interface AnalyticsSummary {
   conversionRate:     number   // won leads / total leads * 100  (0-100)
 }
 
+/* ─── Team ─────────────────────────────────────────────────────── */
+
+export type Role         = 'owner' | 'team_leader' | 'agent' | 'viewer'
+export type MemberStatus = 'active' | 'invited'
+
+/**
+ * One row from the team_members table.
+ * SQL to create (run once in Supabase SQL editor):
+ *
+ *   CREATE TABLE IF NOT EXISTS team_members (
+ *     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ *     client_id    UUID NOT NULL,
+ *     name         TEXT NOT NULL,
+ *     email        TEXT NOT NULL,
+ *     role         TEXT NOT NULL DEFAULT 'agent',
+ *     status       TEXT NOT NULL DEFAULT 'invited',
+ *     invited_by   TEXT,
+ *     invite_token UUID DEFAULT gen_random_uuid(),
+ *     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+ *     UNIQUE(client_id, email)
+ *   );
+ */
+export interface TeamMember {
+  id:           string
+  client_id:    string
+  name:         string
+  email:        string
+  role:         Role
+  status:       MemberStatus
+  invited_by:   string | null
+  invite_token: string | null
+  created_at:   string
+}
+
 /** Raw integration status returned from integrations_status table. */
 export interface IntegrationRow {
   id: string

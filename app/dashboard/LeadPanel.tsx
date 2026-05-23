@@ -10,6 +10,7 @@ import {
   MessageSquare, Flame, Snowflake, ThumbsUp, Trash2, Pencil,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import type { TeamMember } from './types'
 
 /* ─── Types ──────────────────────────────────────────────────── */
 
@@ -687,6 +688,7 @@ function ApptCard({
 export default function LeadPanel({
   lead, appointments, onClose,
   onLeadDeleted, onLeadUpdated, onApptDeleted, onApptUpdated, onAddAppointment,
+  teamMembers = [],
 }: {
   lead:          Lead
   appointments?: ApptSummary[]
@@ -696,6 +698,7 @@ export default function LeadPanel({
   onApptDeleted?:    (apptId: string) => void
   onApptUpdated?:    (patch: { id:string; type:string; date:string; time:string; status:ApptStatus; notes?:string; leadId?:string }) => void
   onAddAppointment?: (leadId: string) => void
+  teamMembers?:      TeamMember[]
 }) {
   const statusCfg = STATUS_CFG[lead.status]
   const scoreCfg  = SCORE_CFG[lead.scoreLabel]
@@ -859,6 +862,24 @@ export default function LeadPanel({
   /* ── Delete lead ───────────────────────────────────────────── */
   const [deleteConfirm, setDeleteConfirm] = useState(false)
   const [deletingLead,  setDeletingLead]  = useState(false)
+
+  /* ── Agent assignment ─────────────────────────────────────── */
+  const [localAgent,   setLocalAgent]   = useState(lead.assignedAgent)
+  const [assigningAgent, setAssigningAgent] = useState(false)
+
+  const handleAssignAgent = useCallback(async (agentName: string) => {
+    const prev = localAgent
+    setLocalAgent(agentName)
+    try {
+      await fetch(`/api/leads/${lead.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assigned_agent: agentName === 'Unassigned' ? '' : agentName }),
+      })
+    } catch {
+      setLocalAgent(prev)
+    }
+    setAssigningAgent(false)
+  }, [lead.id, localAgent])
 
   /* ── Lead edit mode ────────────────────────────────────────── */
   const [editMode,    setEditMode]    = useState(false)
@@ -1328,7 +1349,6 @@ export default function LeadPanel({
                     {[
                       { label:'Source',   value: lead.source },
                       { label:'Interest', value: isSpecificInterest(lead.interest) ? lead.interest : '' },
-                      { label:'Agent',    value: lead.assignedAgent },
                       { label:'Added',    value: fmtDate(lead.date) },
                     ].filter(r => r.value).map((row, i, arr) => (
                       <div key={row.label} className="flex items-center gap-3 px-4 py-2.5"
@@ -1337,6 +1357,35 @@ export default function LeadPanel({
                         <span className="text-xs text-white/65 font-medium">{row.value}</span>
                       </div>
                     ))}
+                    {/* Agent row — interactive if team members are available */}
+                    <div className="flex items-center gap-3 px-4 py-2.5"
+                      style={{ background:'rgba(255,255,255,0.02)' }}>
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-white/25 w-16 flex-shrink-0">Agent</span>
+                      {teamMembers.length > 0 ? (
+                        assigningAgent ? (
+                          <select autoFocus
+                            defaultValue={localAgent}
+                            onChange={e => void handleAssignAgent(e.target.value)}
+                            onBlur={() => setAssigningAgent(false)}
+                            className="text-xs outline-none appearance-none rounded-lg px-2 py-0.5 -ml-2"
+                            style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.3)', color:'#c4b5fd', colorScheme:'dark' }}>
+                            <option value="Unassigned">Unassigned</option>
+                            {teamMembers.map(m => (
+                              <option key={m.id} value={m.name}>{m.name}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <button type="button" onClick={() => setAssigningAgent(true)}
+                            className="flex items-center gap-1.5 text-xs text-white/65 font-medium hover:text-violet-300 transition-colors group"
+                            title="Click to reassign">
+                            <span>{localAgent}</span>
+                            <ChevronDown className="w-3 h-3 opacity-0 group-hover:opacity-60 transition-opacity" />
+                          </button>
+                        )
+                      ) : (
+                        <span className="text-xs text-white/65 font-medium">{localAgent}</span>
+                      )}
+                    </div>
                   </div>
                   <button type="button" onClick={()=>setEditMode(true)}
                     className="flex items-center gap-1.5 self-start text-[11px] font-semibold px-3 py-1.5 rounded-lg transition-all"

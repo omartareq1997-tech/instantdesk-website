@@ -10,18 +10,19 @@ import {
   DollarSign, Timer, Menu, ChevronLeft, ChevronRight, LineChart, BellDot,
   MessageSquare, SlidersHorizontal, Volume2, VolumeX, ArrowUpDown, Plus,
   History, ScrollText, Undo2, Pencil, Trash2, CalendarPlus, MoveRight,
+  UserPlus, Copy, Check, UserCog, Crown, Eye,
 } from 'lucide-react'
 import LeadPanel from './LeadPanel'
 import AddLeadModal from './AddLeadModal'
 import AddAppointmentModal from './AddAppointmentModal'
 import AnalyticsSection from './AnalyticsSection'
 import ApptDrawer, { type DrawerAppointment } from './ApptDrawer'
-import type { DashboardData, IntegrationRow, OverviewMetrics } from './types'
+import type { DashboardData, IntegrationRow, OverviewMetrics, TeamMember, Role } from './types'
 import { supabase } from '../lib/supabase'
 
 /* ─── Types ──────────────────────────────────────────────────── */
 
-type Section      = 'overview' | 'analytics' | 'pipeline' | 'activity' | 'appointments' | 'automation' | 'settings' | 'log'
+type Section      = 'overview' | 'analytics' | 'pipeline' | 'activity' | 'appointments' | 'automation' | 'settings' | 'log' | 'team'
 type LeadStatus   = 'new' | 'contacted' | 'demo_booked' | 'won' | 'lost'
 type ScoreLabel   = 'hot' | 'warm' | 'cold'
 type ApptStatus   = 'confirmed' | 'pending' | 'completed' | 'cancelled'
@@ -87,12 +88,19 @@ const APPT_CFG: Record<ApptStatus, { label:string; color:string; bg:string }> = 
   cancelled:  { label:'Cancelled',  color:'#f87171', bg:'rgba(248,113,113,0.10)' },
 }
 
-const ACTIVITY_CFG: Record<ActivityType, { color:string; bg:string; Icon: React.ComponentType<{className?:string;style?:React.CSSProperties}> }> = {
-  sms:         { color:'#34d399', bg:'rgba(52,211,153,0.12)',  Icon:MessageCircle },
-  appointment: { color:'#60a5fa', bg:'rgba(96,165,250,0.12)',  Icon:Calendar      },
-  assignment:  { color:'#a78bfa', bg:'rgba(167,139,250,0.12)', Icon:Users         },
-  email:       { color:'#fbbf24', bg:'rgba(251,191,36,0.12)',  Icon:Mail          },
-  call:        { color:'#fb923c', bg:'rgba(251,146,60,0.12)',  Icon:Phone         },
+type ActivityCfg = { color:string; bg:string; Icon: React.ComponentType<{className?:string;style?:React.CSSProperties}> }
+
+const ACTIVITY_CFG_DEFAULT: ActivityCfg = { color:'rgba(255,255,255,0.25)', bg:'rgba(255,255,255,0.06)', Icon:Activity }
+
+const ACTIVITY_CFG: Record<string, ActivityCfg> = {
+  sms:                  { color:'#34d399', bg:'rgba(52,211,153,0.12)',  Icon:MessageCircle },
+  appointment:          { color:'#60a5fa', bg:'rgba(96,165,250,0.12)',  Icon:Calendar      },
+  assignment:           { color:'#a78bfa', bg:'rgba(167,139,250,0.12)', Icon:Users         },
+  email:                { color:'#fbbf24', bg:'rgba(251,191,36,0.12)',  Icon:Mail          },
+  call:                 { color:'#fb923c', bg:'rgba(251,146,60,0.12)',  Icon:Phone         },
+  team_member_invited:  { color:'#34d399', bg:'rgba(52,211,153,0.12)',  Icon:UserPlus      },
+  team_member_deleted:  { color:'#f87171', bg:'rgba(248,113,113,0.12)', Icon:Trash2        },
+  lead_assigned:        { color:'#a78bfa', bg:'rgba(167,139,250,0.12)', Icon:UserCog       },
 }
 
 const NOTIF_CFG: Record<NotifType, { color:string; Icon: React.ComponentType<{className?:string;style?:React.CSSProperties}> }> = {
@@ -123,19 +131,21 @@ const NAV_ITEMS: {id:Section; label:string; Icon:React.ComponentType<{className?
   { id:'activity',     label:'Activity Feed', Icon:Activity                 },
   { id:'appointments', label:'Appointments',  Icon:Calendar,    badge:4     },
   { id:'log',          label:'Audit Log',     Icon:History                  },
+  { id:'team',         label:'Team',          Icon:UserCog                  },
   { id:'automation',   label:'Automation',    Icon:Zap                      },
   { id:'settings',     label:'Settings',      Icon:Settings                 },
 ]
 
 const SECTION_META: Record<Section,{title:string;sub:string}> = {
-  overview:     { title:'Overview',       sub:'Performance snapshot and live activity'          },
-  analytics:    { title:'Analytics',      sub:'Conversation metrics and conversion data'        },
-  pipeline:     { title:'Lead Pipeline',  sub:'Click any lead to view full details'            },
-  activity:     { title:'Activity Feed',  sub:'Automated events across all channels'            },
-  appointments: { title:'Appointments',   sub:'Weekly schedule and upcoming bookings'           },
+  overview:     { title:'Overview',       sub:'Performance snapshot and live activity'                },
+  analytics:    { title:'Analytics',      sub:'Conversation metrics and conversion data'              },
+  pipeline:     { title:'Lead Pipeline',  sub:'Click any lead to view full details'                  },
+  activity:     { title:'Activity Feed',  sub:'Automated events across all channels'                  },
+  appointments: { title:'Appointments',   sub:'Weekly schedule and upcoming bookings'                 },
   log:          { title:'Audit Log',      sub:'Full history of every action — click Undo to reverse'  },
-  automation:   { title:'Automation',     sub:'Follow-up status per lead and performance'       },
-  settings:     { title:'Settings',       sub:'Account and portal configuration'               },
+  team:         { title:'Team',           sub:'Members, roles and lead assignments'                   },
+  automation:   { title:'Automation',     sub:'Follow-up status per lead and performance'             },
+  settings:     { title:'Settings',       sub:'Account and portal configuration'                     },
 }
 
 /* ─── Helpers ────────────────────────────────────────────────── */
@@ -567,7 +577,7 @@ function OverviewSection({
             ) : (
               <div className="divide-y divide-white/[0.04]">
                 {activity.slice(0, 5).map((item, i) => {
-                  const cfg = ACTIVITY_CFG[item.type]
+                  const cfg = ACTIVITY_CFG[item.type] ?? ACTIVITY_CFG_DEFAULT
                   return (
                     <motion.div key={item.id}
                       initial={{ opacity:0, x:-8 }} animate={{ opacity:1, x:0 }} transition={{ delay:0.55+i*0.04 }}
@@ -700,14 +710,15 @@ interface PipelineFilters {
   dateRange:  DateRangeKey
   customFrom: string
   customTo:   string
+  agent:      string   // 'all' or an agent name
 }
 
 const DEFAULT_FILTERS: PipelineFilters = {
-  score:'all', status:'all', source:'all', dateRange:'all', customFrom:'', customTo:'',
+  score:'all', status:'all', source:'all', dateRange:'all', customFrom:'', customTo:'', agent:'all',
 }
 
 function countActiveFilters(f: PipelineFilters): number {
-  return [f.score!=='all', f.status!=='all', f.source!=='all', f.dateRange!=='all'].filter(Boolean).length
+  return [f.score!=='all', f.status!=='all', f.source!=='all', f.dateRange!=='all', f.agent!=='all'].filter(Boolean).length
 }
 
 function fmtLeadDate(iso: string): string {
@@ -862,11 +873,12 @@ function ChipGroup({
 }
 
 function FilterPanel({
-  filters, onChange, onClose,
+  filters, onChange, onClose, agentOpts,
 }: {
   filters: PipelineFilters
   onChange:(f:PipelineFilters) => void
   onClose: () => void
+  agentOpts: string[]
 }) {
   const set = (patch: Partial<PipelineFilters>) => onChange({ ...filters, ...patch })
   const ac  = countActiveFilters(filters)
@@ -956,6 +968,13 @@ function FilterPanel({
               </div>
             )}
           </FSection>
+
+          {agentOpts.length > 1 && (
+            <FSection label="Assigned Agent">
+              <ChipGroup value={filters.agent} onChange={v => set({ agent: v })}
+                opts={[{ v:'all', label:'All' }, ...agentOpts.map(a => ({ v:a, label:a.split(' ')[0] }))]} />
+            </FSection>
+          )}
         </div>
 
         {/* Footer */}
@@ -977,7 +996,7 @@ function FilterPanel({
 
 /* ─── Pipeline ───────────────────────────────────────────────── */
 
-function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), onAddLead }: { onSelectLead:(id:string)=>void; leads:Lead[]; newLeadIds?: Set<string>; onAddLead?: () => void }) {
+function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), onAddLead, teamMembers = [] }: { onSelectLead:(id:string)=>void; leads:Lead[]; newLeadIds?: Set<string>; onAddLead?: () => void; teamMembers?: TeamMember[] }) {
   // v2 — sort feature active. Check browser console for this log to confirm latest build.
   console.log('[PipelineSection] sort feature v2 loaded, leads:', leads.length)
   const [search,     setSearch]     = useState('')
@@ -989,21 +1008,24 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
   const ac = countActiveFilters(filters)
   const sortLabel = SORT_OPTIONS.find(o => o.key === sort)?.label ?? 'Sort'
 
+  // Unique agent names for the filter: active team members first, then any from leads
+  const agentOpts = useMemo(() => {
+    const fromTeam  = teamMembers.filter(m => m.status === 'active').map(m => m.name)
+    const fromLeads = leads.map(l => l.assignedAgent).filter(a => a && a !== 'Unassigned')
+    return [...new Set([...fromTeam, ...fromLeads])].sort()
+  }, [teamMembers, leads])
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
     const rows = leads.filter(l => {
-      // Score
       if (filters.score !== 'all' && l.scoreLabel !== filters.score) return false
-      // Status
       if (filters.status !== 'all' && l.status !== filters.status) return false
-      // Source — normalise "Website Chat" → "website_chat" for comparison
       if (filters.source !== 'all') {
         const norm = l.source.toLowerCase().replace(/[\s-]+/g, '_')
         if (norm !== filters.source) return false
       }
-      // Date added
+      if (filters.agent !== 'all' && l.assignedAgent !== filters.agent) return false
       if (!inDateRange(l.date, filters)) return false
-      // Text search — name, company, email, phone, source, interest, agent + all metadata string values
       if (q) {
         const haystack = [
           l.name, l.company, l.interest, l.source, l.assignedAgent,
@@ -1016,7 +1038,6 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
       }
       return true
     })
-    // Apply sort after filter — never lose the user's chosen order
     return applySortKey(rows, sort)
   }, [leads, search, filters, sort])
 
@@ -1113,6 +1134,7 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
                 filters={filters}
                 onChange={setFilters}
                 onClose={() => setFilterOpen(false)}
+                agentOpts={agentOpts}
               />
             )}
           </AnimatePresence>
@@ -1411,7 +1433,7 @@ function ActivitySection({ feed }: { feed: ActivityItem[] }) {
         <div className="divide-y divide-white/[0.04]">
           <AnimatePresence initial={false}>
             {feed.map(item => {
-              const cfg = ACTIVITY_CFG[item.type]
+              const cfg = ACTIVITY_CFG[item.type] ?? ACTIVITY_CFG_DEFAULT
               return (
                 <motion.div key={item.id}
                   initial={{ opacity:0, y:-16, scale:0.98 }} animate={{ opacity:1, y:0, scale:1 }} exit={{ opacity:0 }}
@@ -2843,10 +2865,288 @@ function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boo
   )
 }
 
+/* ─── Team ───────────────────────────────────────────────────── */
+
+const ROLE_CFG: Record<Role, { label: string; color: string; bg: string; border: string; desc: string }> = {
+  owner:       { label:'Owner',       color:'#fbbf24', bg:'rgba(251,191,36,0.10)',   border:'rgba(251,191,36,0.22)',   desc:'Full access to everything'              },
+  team_leader: { label:'Team Leader', color:'#a78bfa', bg:'rgba(167,139,250,0.10)',  border:'rgba(167,139,250,0.22)',  desc:'Manage agents and assigned leads'        },
+  agent:       { label:'Agent',       color:'#60a5fa', bg:'rgba(96,165,250,0.10)',   border:'rgba(96,165,250,0.22)',   desc:'View and update assigned leads'          },
+  viewer:      { label:'Viewer',      color:'rgba(255,255,255,0.35)', bg:'rgba(255,255,255,0.05)', border:'rgba(255,255,255,0.12)', desc:'Read-only access' },
+}
+
+function RoleBadge({ role }: { role: Role }) {
+  const c = ROLE_CFG[role] ?? ROLE_CFG.agent
+  return (
+    <span className="inline-flex items-center text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full"
+      style={{ color:c.color, background:c.bg, border:`1px solid ${c.border}` }}>
+      {c.label}
+    </span>
+  )
+}
+
+function TeamSection({
+  members, onRefresh, onToast,
+}: {
+  members:   TeamMember[]
+  onRefresh: () => void
+  onToast:   (title: string, sub: string, ok: boolean) => void
+}) {
+  const [showInvite, setShowInvite] = useState(false)
+  const [form,       setForm]       = useState({ name:'', email:'', role:'agent' as Role })
+  const [inviting,   setInviting]   = useState(false)
+  const [inviteErr,  setInviteErr]  = useState('')
+  const [copiedId,   setCopiedId]   = useState<string | null>(null)
+  const [removingId, setRemovingId] = useState<string | null>(null)
+  const [editRoleId, setEditRoleId] = useState<string | null>(null)
+
+  async function handleInvite() {
+    if (!form.name.trim() || !form.email.trim()) { setInviteErr('Name and email are required'); return }
+    setInviting(true); setInviteErr('')
+    try {
+      const res  = await fetch('/api/team', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      const data = await res.json() as { error?: string }
+      if (!res.ok) { setInviteErr(data.error ?? 'Failed to invite'); setInviting(false); return }
+      setShowInvite(false)
+      setForm({ name:'', email:'', role:'agent' })
+      onRefresh()
+      onToast('Invited', form.name, true)
+    } catch { setInviteErr('Network error') }
+    setInviting(false)
+  }
+
+  async function handleRemove(member: TeamMember) {
+    setRemovingId(member.id)
+    try {
+      await fetch(`/api/team/${member.id}`, { method: 'DELETE' })
+      onRefresh()
+      onToast('Removed', member.name, true)
+    } catch { onToast('Error', 'Failed to remove member', false) }
+    setRemovingId(null)
+  }
+
+  async function handleRoleChange(id: string, role: Role) {
+    setEditRoleId(null)
+    try {
+      await fetch(`/api/team/${id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role }),
+      })
+      onRefresh()
+    } catch { onToast('Error', 'Failed to update role', false) }
+  }
+
+  function copyInviteLink(member: TeamMember) {
+    if (!member.invite_token) return
+    const link = `${window.location.origin}/join?token=${member.invite_token}`
+    void navigator.clipboard.writeText(link)
+    setCopiedId(member.id)
+    setTimeout(() => setCopiedId(null), 2000)
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+
+      {/* Header */}
+      <Card className="px-5 py-4">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <h2 className="text-sm font-bold text-white">Team Members</h2>
+            <p className="text-xs text-white/30 mt-0.5">
+              {members.length} member{members.length !== 1 ? 's' : ''} · manage access and lead assignments
+            </p>
+          </div>
+          <button onClick={() => { setShowInvite(v => !v); setInviteErr('') }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
+            style={{ background:'rgba(167,139,250,0.12)', border:'1px solid rgba(167,139,250,0.3)', color:'#c4b5fd' }}>
+            <UserPlus className="w-3.5 h-3.5" />{showInvite ? 'Cancel' : 'Invite Member'}
+          </button>
+        </div>
+      </Card>
+
+      {/* Invite form */}
+      <AnimatePresence>
+        {showInvite && (
+          <motion.div initial={{ opacity:0, y:-8 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-8 }}
+            transition={{ duration:0.15 }}>
+            <Card className="px-5 py-5 flex flex-col gap-4">
+              <h3 className="text-sm font-bold text-white/80">Invite team member</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <input type="text" placeholder="Full name" value={form.name}
+                  onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                  className="px-3 py-2 rounded-xl text-sm text-white placeholder-white/20 outline-none"
+                  style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }}
+                  onFocus={e=>{ e.currentTarget.style.border='1px solid rgba(139,92,246,0.4)' }}
+                  onBlur={e=>{  e.currentTarget.style.border='1px solid rgba(255,255,255,0.1)'  }} />
+                <input type="email" placeholder="Email address" value={form.email}
+                  onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+                  className="px-3 py-2 rounded-xl text-sm text-white placeholder-white/20 outline-none"
+                  style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }}
+                  onFocus={e=>{ e.currentTarget.style.border='1px solid rgba(139,92,246,0.4)' }}
+                  onBlur={e=>{  e.currentTarget.style.border='1px solid rgba(255,255,255,0.1)'  }} />
+                <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value as Role }))}
+                  className="px-3 py-2 rounded-xl text-sm outline-none appearance-none"
+                  style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.7)', colorScheme:'dark' }}>
+                  <option value="owner">Owner</option>
+                  <option value="team_leader">Team Leader</option>
+                  <option value="agent">Agent</option>
+                  <option value="viewer">Viewer</option>
+                </select>
+              </div>
+              {inviteErr && <p className="text-xs text-red-400">{inviteErr}</p>}
+              <div className="flex gap-3">
+                <button onClick={() => void handleInvite()} disabled={inviting}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-all"
+                  style={{ background:'rgba(139,92,246,0.18)', border:'1px solid rgba(139,92,246,0.35)', color:'#c4b5fd' }}>
+                  {inviting
+                    ? <><motion.span className="w-3 h-3 rounded-full border-2 border-violet-400/30 border-t-violet-400"
+                        animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity, ease:'linear' }} />Inviting…</>
+                    : <><UserPlus className="w-3.5 h-3.5" />Send Invite</>}
+                </button>
+                <button onClick={() => { setShowInvite(false); setInviteErr('') }}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-white/35 hover:text-white/60 transition-colors"
+                  style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)' }}>
+                  Cancel
+                </button>
+              </div>
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Role permissions legend */}
+      <Card className="px-5 py-4">
+        <h3 className="text-[10px] font-black uppercase tracking-widest text-white/25 mb-3">Role Permissions</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {(Object.entries(ROLE_CFG) as [Role, typeof ROLE_CFG[Role]][]).map(([role, cfg]) => (
+            <div key={role} className="flex flex-col gap-1.5 p-3 rounded-xl"
+              style={{ background:cfg.bg, border:`1px solid ${cfg.border}` }}>
+              <div className="flex items-center gap-1.5">
+                {role === 'owner'       && <Crown className="w-3 h-3 flex-shrink-0" style={{ color:cfg.color }} />}
+                {role === 'team_leader' && <Shield className="w-3 h-3 flex-shrink-0" style={{ color:cfg.color }} />}
+                {role === 'agent'       && <Users  className="w-3 h-3 flex-shrink-0" style={{ color:cfg.color }} />}
+                {role === 'viewer'      && <Eye    className="w-3 h-3 flex-shrink-0" style={{ color:cfg.color }} />}
+                <span className="text-[10px] font-black uppercase tracking-widest" style={{ color:cfg.color }}>{cfg.label}</span>
+              </div>
+              <span className="text-[10px] text-white/40 leading-snug">{cfg.desc}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* SQL prerequisite notice */}
+      <div className="flex items-start gap-3 px-4 py-3 rounded-xl"
+        style={{ background:'rgba(96,165,250,0.06)', border:'1px solid rgba(96,165,250,0.15)' }}>
+        <AlertCircle className="w-4 h-4 text-blue-400/60 flex-shrink-0 mt-0.5" />
+        <div>
+          <p className="text-xs font-semibold text-blue-300/80">Database setup required to use this feature</p>
+          <p className="text-[10px] text-blue-300/50 mt-0.5">Run once in your Supabase SQL editor — see the comment at the top of <code>app/dashboard/types.ts</code></p>
+        </div>
+      </div>
+
+      {/* Members list */}
+      {members.length === 0 ? (
+        <Card className="flex flex-col items-center justify-center py-16 gap-3">
+          <UserCog className="w-8 h-8 text-white/10" />
+          <p className="text-sm text-white/25 font-medium">No team members yet</p>
+          <p className="text-xs text-white/15">Invite your first member above to get started</p>
+        </Card>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {members.map(member => {
+            const isCopied   = copiedId   === member.id
+            const isRemoving = removingId === member.id
+            return (
+              <Card key={member.id} className="px-4 py-4 flex items-center gap-4 flex-wrap sm:flex-nowrap">
+                {/* Avatar */}
+                <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-black text-white flex-shrink-0"
+                  style={{ background:'linear-gradient(135deg,rgba(139,92,246,0.45),rgba(59,130,246,0.45))' }}>
+                  {member.name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()}
+                </div>
+
+                {/* Info */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-semibold text-white/85">{member.name}</span>
+                    <RoleBadge role={member.role} />
+                    {member.status === 'invited' && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                        style={{ background:'rgba(251,191,36,0.08)', color:'#fbbf24', border:'1px solid rgba(251,191,36,0.2)' }}>
+                        Invite Pending
+                      </span>
+                    )}
+                    {member.status === 'active' && (
+                      <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                        style={{ background:'rgba(52,211,153,0.08)', color:'#34d399', border:'1px solid rgba(52,211,153,0.18)' }}>
+                        <span className="w-1 h-1 rounded-full bg-emerald-400" />Active
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-xs text-white/35 mt-0.5 block">{member.email}</span>
+                  {member.invited_by && (
+                    <span className="text-[10px] text-white/20 mt-0.5 block">Invited by {member.invited_by}</span>
+                  )}
+                </div>
+
+                {/* Role change */}
+                <div className="relative flex-shrink-0">
+                  {editRoleId === member.id ? (
+                    <select
+                      autoFocus
+                      defaultValue={member.role}
+                      onChange={e => void handleRoleChange(member.id, e.target.value as Role)}
+                      onBlur={() => setEditRoleId(null)}
+                      className="px-2 py-1 rounded-lg text-xs outline-none appearance-none"
+                      style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.3)', color:'#c4b5fd', colorScheme:'dark' }}>
+                      <option value="owner">Owner</option>
+                      <option value="team_leader">Team Leader</option>
+                      <option value="agent">Agent</option>
+                      <option value="viewer">Viewer</option>
+                    </select>
+                  ) : (
+                    <button onClick={() => setEditRoleId(member.id)}
+                      className="text-[10px] text-white/25 hover:text-white/55 transition-colors px-2 py-1 rounded-lg"
+                      style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)' }}>
+                      Change role
+                    </button>
+                  )}
+                </div>
+
+                {/* Actions */}
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {member.invite_token && (
+                    <button onClick={() => copyInviteLink(member)}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
+                      style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.09)', color:'rgba(255,255,255,0.35)' }}>
+                      {isCopied
+                        ? <><Check className="w-3 h-3 text-emerald-400" /><span className="text-emerald-400">Copied!</span></>
+                        : <><Copy className="w-3 h-3" />Copy link</>}
+                    </button>
+                  )}
+                  <button onClick={() => void handleRemove(member)} disabled={isRemoving}
+                    className="p-1.5 rounded-lg transition-all hover:bg-red-500/10"
+                    style={{ color: isRemoving ? 'rgba(248,113,113,0.2)' : 'rgba(248,113,113,0.4)' }}>
+                    {isRemoving
+                      ? <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-red-400/20 border-t-red-400 block"
+                          animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity, ease:'linear' }} />
+                      : <Trash2 className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </Card>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* ─── Hash persistence helpers ───────────────────────────────── */
 
 const VALID_SECTIONS = new Set<string>([
-  'overview','analytics','pipeline','activity','appointments','log','automation','settings',
+  'overview','analytics','pipeline','activity','appointments','log','team','automation','settings',
 ])
 
 function getInitialSectionFromHash(): Section {
@@ -2884,6 +3184,19 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
   const integrations     = initialData?.integrations                                   ?? []
   const analyticsSummary = initialData?.analyticsSummary
   const overviewMetrics  = initialData?.overviewMetrics
+
+  // ── Team members ──────────────────────────────────────────────
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
+
+  const fetchTeamMembers = useCallback(async () => {
+    try {
+      const res  = await fetch('/api/team')
+      const data = await res.json() as { members?: TeamMember[] }
+      setTeamMembers(data.members ?? [])
+    } catch { /* silently ignore — team feature is optional */ }
+  }, [])
+
+  useEffect(() => { void fetchTeamMembers() }, [fetchTeamMembers])
 
   // Tracks IDs of leads that just arrived via realtime (cleared after 4 s)
   const [newLeadIds, setNewLeadIds] = useState<Set<string>>(new Set())
@@ -3236,10 +3549,17 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
                 transition={{ duration:0.22 }}>
                 {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={leads} appointments={appointments} activity={activityFeed} overviewMetrics={overviewMetrics} />}
                 {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} />}
-                {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={leads} newLeadIds={newLeadIds} onAddLead={() => setShowAddLead(true)} />}
+                {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={leads} newLeadIds={newLeadIds} onAddLead={() => setShowAddLead(true)} teamMembers={teamMembers} />}
                 {section==='activity'     && <ActivitySection feed={activityFeed} />}
                 {section==='appointments' && <AppointmentsSection appointments={appointments} leads={leads} onSelectLead={handleSelectLead} onApptUpdated={handleApptUpdated} onAddAppointment={() => openAddAppt()} />}
                 {section==='log'          && <LogSection onToast={(title, sub, ok) =>
+                  setToasts(prev => [{
+                    id: crypto.randomUUID(), type: 'hint' as const,
+                    title, sub, badge: ok ? 'Done' : 'Error',
+                    badgeColor: ok ? '#34d399' : '#f87171', duration: 4000,
+                  }, ...prev.slice(0, 3)])
+                } />}
+                {section==='team'         && <TeamSection members={teamMembers} onRefresh={fetchTeamMembers} onToast={(title, sub, ok) =>
                   setToasts(prev => [{
                     id: crypto.randomUUID(), type: 'hint' as const,
                     title, sub, badge: ok ? 'Done' : 'Error',
@@ -3267,6 +3587,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
             onApptDeleted={handleApptDeleted}
             onApptUpdated={handleApptUpdated}
             onAddAppointment={(leadId) => openAddAppt(leadId)}
+            teamMembers={teamMembers}
           />
         )}
       </AnimatePresence>

@@ -88,15 +88,33 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     if (before) {
       const changedPatchKeys  = Object.keys(patch).filter(k => k !== 'updated_at')
       const isStatusChange    = 'status' in patch && patch.status !== before.status
+      const isAssignment      = 'assigned_agent' in patch && patch.assigned_agent !== before.assigned_agent
       const isMetadataChange  = 'metadata' in patch && !('status' in patch) &&
         !('name' in patch) && !('company' in patch) && !('email' in patch) &&
-        !('phone' in patch) && !('source' in patch) && !('score' in patch)
-      const isScoreChange     = !isStatusChange && !isMetadataChange &&
+        !('phone' in patch) && !('source' in patch) && !('score' in patch) &&
+        !('assigned_agent' in patch)
+      const isScoreChange     = !isStatusChange && !isMetadataChange && !isAssignment &&
         changedPatchKeys.every(k => k === 'score' || k === 'score_label') &&
         (patch.score !== before.score || patch.score_label !== before.score_label)
-      const isCoreEdit        = !isStatusChange && !isMetadataChange && !isScoreChange
+      const isCoreEdit        = !isStatusChange && !isMetadataChange && !isScoreChange && !isAssignment
 
-      if (isStatusChange) {
+      if (isAssignment) {
+        const oldAgent = (before.assigned_agent as string | null) ?? 'Unassigned'
+        const newAgent = ((patch.assigned_agent as string | null) || 'Unassigned')
+        void logEvent({
+          type:        'lead_assigned',
+          title:       `Lead assigned: ${before.name}`,
+          description: `${oldAgent} → ${newAgent}`,
+          leadId:      id,
+          meta: {
+            actor: ACTOR, undoable: true, entity_id: id, entity_type: 'lead',
+            entity_name: before.name,
+            old_value:   { assigned_agent: oldAgent },
+            new_value:   { assigned_agent: newAgent },
+            undo_data:   { lead_id: id, old_fields: { assigned_agent: before.assigned_agent } },
+          },
+        })
+      } else if (isStatusChange) {
         void logEvent({
           type:        'status_changed',
           title:       `Status changed: ${before.name}`,

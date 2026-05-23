@@ -86,11 +86,15 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
     // Determine which log event to emit
     if (before) {
-      const isStatusChange   = 'status' in patch && patch.status !== before.status
-      const isMetadataChange = 'metadata' in patch && !('status' in patch) &&
+      const changedPatchKeys  = Object.keys(patch).filter(k => k !== 'updated_at')
+      const isStatusChange    = 'status' in patch && patch.status !== before.status
+      const isMetadataChange  = 'metadata' in patch && !('status' in patch) &&
         !('name' in patch) && !('company' in patch) && !('email' in patch) &&
         !('phone' in patch) && !('source' in patch) && !('score' in patch)
-      const isCoreEdit = !isStatusChange && !isMetadataChange
+      const isScoreChange     = !isStatusChange && !isMetadataChange &&
+        changedPatchKeys.every(k => k === 'score' || k === 'score_label') &&
+        (patch.score !== before.score || patch.score_label !== before.score_label)
+      const isCoreEdit        = !isStatusChange && !isMetadataChange && !isScoreChange
 
       if (isStatusChange) {
         void logEvent({
@@ -106,6 +110,23 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
             undo_data:  { lead_id: id, old_status: before.status },
           },
         })
+      } else if (isScoreChange) {
+        void logEvent({
+          type:        'score_changed',
+          title:       `Score changed: ${before.name}`,
+          description: `${before.score_label ?? ''} → ${(patch.score_label ?? '') as string}`,
+          leadId:      id,
+          meta: {
+            actor: ACTOR, undoable: true, entity_id: id, entity_type: 'lead',
+            entity_name: before.name,
+            old_value:  { score: before.score, score_label: before.score_label },
+            new_value:  { score: patch.score,  score_label: patch.score_label  },
+            undo_data:  {
+              lead_id:    id,
+              old_fields: { score: before.score, score_label: before.score_label },
+            },
+          },
+        })
       } else if (isMetadataChange) {
         void logEvent({
           type:        'notes_changed',
@@ -118,24 +139,23 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
           },
         })
       } else if (isCoreEdit) {
-        const changedFields = Object.keys(patch).filter(k => k !== 'updated_at')
         void logEvent({
-          type:        'lead_edited',
-          title:       `Lead edited: ${data.name}`,
-          description: `Changed: ${changedFields.join(', ')}`,
+          type:        'lead_updated',
+          title:       `Lead updated: ${data.name}`,
+          description: `Changed: ${changedPatchKeys.join(', ')}`,
           leadId:      id,
           meta: {
             actor: ACTOR, undoable: true, entity_id: id, entity_type: 'lead',
             entity_name: data.name,
-            old_value: changedFields.reduce<Record<string, unknown>>((acc, k) => {
+            old_value: changedPatchKeys.reduce<Record<string, unknown>>((acc, k) => {
               acc[k] = (before as Record<string, unknown>)[k]; return acc
             }, {}),
-            new_value: changedFields.reduce<Record<string, unknown>>((acc, k) => {
+            new_value: changedPatchKeys.reduce<Record<string, unknown>>((acc, k) => {
               acc[k] = patch[k]; return acc
             }, {}),
             undo_data: {
               lead_id:    id,
-              old_fields: changedFields.reduce<Record<string, unknown>>((acc, k) => {
+              old_fields: changedPatchKeys.reduce<Record<string, unknown>>((acc, k) => {
                 acc[k] = (before as Record<string, unknown>)[k]; return acc
               }, {}),
             },

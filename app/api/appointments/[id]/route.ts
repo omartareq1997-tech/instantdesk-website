@@ -89,7 +89,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
         })
       } else {
         void logEvent({
-          type:        'appointment_edited',
+          type:        'appointment_updated',
           title:       `Appointment updated: ${before.lead_name ?? 'Unknown'}`,
           description: before.type?.replace(/_/g, ' '),
           leadId:      before.lead_id ?? null,

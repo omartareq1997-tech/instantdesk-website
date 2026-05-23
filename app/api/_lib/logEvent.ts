@@ -15,17 +15,18 @@ const CLIENT_ID = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-0000000
 export const ACTOR = 'Alex Thompson'
 
 export interface LogMeta {
-  actor:        string
-  undoable:     boolean
-  entity_id?:   string              // ID of affected lead or appointment (preserved even after deletion)
-  entity_type?: 'lead' | 'appointment'
-  entity_name?: string              // lead name / appt lead name — kept for display after deletion
-  _type?:       string              // original event type, preserved when DB type is mapped to fallback
-  old_value?:   Record<string, unknown>
-  new_value?:   Record<string, unknown>
-  undo_data?:   Record<string, unknown>
-  undone?:      boolean
-  undone_at?:   string
+  actor:               string
+  undoable:            boolean
+  entity_id?:          string              // ID of affected lead or appointment (preserved even after deletion)
+  entity_type?:        'lead' | 'appointment'
+  entity_name?:        string              // lead name / appt lead name — kept for display after deletion
+  _type?:              string              // original event type, preserved when DB type is mapped to fallback
+  old_value?:          Record<string, unknown>
+  new_value?:          Record<string, unknown>
+  undo_data?:          Record<string, unknown>
+  undone?:             boolean
+  undone_at?:          string
+  original_event_id?:  string              // for undo_* events: ID of the original event that was undone
 }
 
 export interface LogPayload {

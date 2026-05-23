@@ -2276,42 +2276,97 @@ interface LogEvent {
   metadata:    Record<string, unknown> | null
 }
 
-const LOG_TYPE_LABELS: Record<string, string> = {
-  lead_created:         'Lead Created',
-  lead_deleted:         'Lead Deleted',
-  lead_edited:          'Lead Edited',
-  status_changed:       'Status Changed',
-  notes_changed:        'Notes Updated',
-  appointment_created:  'Appointment Scheduled',
-  appointment_deleted:  'Appointment Deleted',
-  appointment_edited:   'Appointment Updated',
-  appointment_moved:    'Appointment Moved',
+type LogFilter = 'all' | 'leads' | 'appointments' | 'deletes' | 'edits' | 'undoable'
+
+const FILTER_CFG: { id: LogFilter; label: string }[] = [
+  { id: 'all',          label: 'All'          },
+  { id: 'leads',        label: 'Leads'        },
+  { id: 'appointments', label: 'Appointments' },
+  { id: 'deletes',      label: 'Deletes'      },
+  { id: 'edits',        label: 'Edits'        },
+  { id: 'undoable',     label: 'Undoable'     },
+]
+
+const LEAD_TYPES    = new Set(['lead_created','lead_deleted','lead_updated','lead_edited','status_changed','notes_changed','score_changed'])
+const APPT_TYPES    = new Set(['appointment_created','appointment_deleted','appointment_updated','appointment_edited','appointment_moved'])
+const DELETE_TYPES  = new Set(['lead_deleted','appointment_deleted'])
+const EDIT_TYPES    = new Set(['lead_updated','lead_edited','status_changed','notes_changed','score_changed','appointment_updated','appointment_edited','appointment_moved'])
+
+function applyFilter(ev: LogEvent, filter: LogFilter, undoneIds: Set<string>): boolean {
+  const type = (ev.metadata?._type as string) || ev.type
+  if (filter === 'all')          return true
+  if (filter === 'leads')        return LEAD_TYPES.has(type) || type.startsWith('undo_lead_') || type.startsWith('undo_status_') || type.startsWith('undo_notes_') || type.startsWith('undo_score_')
+  if (filter === 'appointments') return APPT_TYPES.has(type) || type.startsWith('undo_appointment_')
+  if (filter === 'deletes')      return DELETE_TYPES.has(type)
+  if (filter === 'edits')        return EDIT_TYPES.has(type)
+  if (filter === 'undoable')     return !!(ev.metadata?.undoable) && !undoneIds.has(ev.id) && !(ev.metadata?.undone)
+  return true
 }
 
-const LOG_CFG: Record<string, { color: string; bg: string; Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }> }> = {
-  lead_created:         { color: '#34d399', bg: 'rgba(52,211,153,0.12)',   Icon: Users         },
-  lead_deleted:         { color: '#f87171', bg: 'rgba(248,113,113,0.12)',  Icon: Trash2        },
-  lead_edited:          { color: '#a78bfa', bg: 'rgba(167,139,250,0.12)',  Icon: Pencil        },
-  status_changed:       { color: '#fbbf24', bg: 'rgba(251,191,36,0.12)',   Icon: ArrowUpDown   },
-  notes_changed:        { color: '#60a5fa', bg: 'rgba(96,165,250,0.12)',   Icon: ScrollText    },
-  appointment_created:  { color: '#34d399', bg: 'rgba(52,211,153,0.12)',   Icon: CalendarPlus  },
-  appointment_deleted:  { color: '#f87171', bg: 'rgba(248,113,113,0.12)',  Icon: Trash2        },
-  appointment_edited:   { color: '#a78bfa', bg: 'rgba(167,139,250,0.12)',  Icon: Pencil        },
-  appointment_moved:    { color: '#38bdf8', bg: 'rgba(56,189,248,0.12)',   Icon: MoveRight     },
+const LOG_TYPE_LABELS: Record<string, string> = {
+  lead_created:              'Lead Created',
+  lead_deleted:              'Lead Deleted',
+  lead_edited:               'Lead Updated',
+  lead_updated:              'Lead Updated',
+  status_changed:            'Status Changed',
+  notes_changed:             'Notes Updated',
+  score_changed:             'Score Changed',
+  appointment_created:       'Appt Scheduled',
+  appointment_deleted:       'Appt Deleted',
+  appointment_edited:        'Appt Updated',
+  appointment_updated:       'Appt Updated',
+  appointment_moved:         'Appt Moved',
+  undo_lead_created:         'Undone · Lead Create',
+  undo_lead_deleted:         'Undone · Lead Delete',
+  undo_lead_edited:          'Undone · Lead Update',
+  undo_lead_updated:         'Undone · Lead Update',
+  undo_status_changed:       'Undone · Status Change',
+  undo_notes_changed:        'Undone · Notes Update',
+  undo_score_changed:        'Undone · Score Change',
+  undo_appointment_created:  'Undone · Appt Create',
+  undo_appointment_deleted:  'Undone · Appt Delete',
+  undo_appointment_edited:   'Undone · Appt Update',
+  undo_appointment_updated:  'Undone · Appt Update',
+  undo_appointment_moved:    'Undone · Appt Move',
 }
-const LOG_CFG_DEFAULT = { color: 'rgba(255,255,255,0.25)', bg: 'rgba(255,255,255,0.05)', Icon: Activity }
+
+type LogCfg = { color: string; bg: string; Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }> }
+const UNDO_CFG: LogCfg = { color: '#a78bfa', bg: 'rgba(167,139,250,0.08)', Icon: Undo2 }
+
+const LOG_CFG: Record<string, LogCfg> = {
+  lead_created:         { color: '#34d399', bg: 'rgba(52,211,153,0.12)',   Icon: Users        },
+  lead_deleted:         { color: '#f87171', bg: 'rgba(248,113,113,0.12)',  Icon: Trash2       },
+  lead_edited:          { color: '#a78bfa', bg: 'rgba(167,139,250,0.12)',  Icon: Pencil       },
+  lead_updated:         { color: '#a78bfa', bg: 'rgba(167,139,250,0.12)',  Icon: Pencil       },
+  status_changed:       { color: '#fbbf24', bg: 'rgba(251,191,36,0.12)',   Icon: ArrowUpDown  },
+  notes_changed:        { color: '#60a5fa', bg: 'rgba(96,165,250,0.12)',   Icon: ScrollText   },
+  score_changed:        { color: '#fb923c', bg: 'rgba(251,146,60,0.12)',   Icon: TrendingUp   },
+  appointment_created:  { color: '#34d399', bg: 'rgba(52,211,153,0.12)',   Icon: CalendarPlus },
+  appointment_deleted:  { color: '#f87171', bg: 'rgba(248,113,113,0.12)',  Icon: Trash2       },
+  appointment_edited:   { color: '#a78bfa', bg: 'rgba(167,139,250,0.12)',  Icon: Pencil       },
+  appointment_updated:  { color: '#a78bfa', bg: 'rgba(167,139,250,0.12)',  Icon: Pencil       },
+  appointment_moved:    { color: '#38bdf8', bg: 'rgba(56,189,248,0.12)',   Icon: MoveRight    },
+}
+const LOG_CFG_DEFAULT: LogCfg = { color: 'rgba(255,255,255,0.25)', bg: 'rgba(255,255,255,0.05)', Icon: Activity }
+
+function getLogCfg(type: string): LogCfg {
+  if (type.startsWith('undo_')) return UNDO_CFG
+  return LOG_CFG[type] ?? LOG_CFG_DEFAULT
+}
 
 function ChangeDisplay({ ev }: { ev: LogEvent }) {
   const meta = ev.metadata
   if (!meta) return null
   const eventType = (meta._type as string) || ev.type
+  // Don't render diffs for undo rows
+  if (eventType.startsWith('undo_')) return null
   const old = meta.old_value as Record<string, unknown> | undefined
   const nw  = meta.new_value as Record<string, unknown> | undefined
   if (!old && !nw) return null
 
-  const arrow    = <span className="text-white/20 mx-1.5 select-none">→</span>
-  const fmtDate  = (d: string) => { try { return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) } catch { return d } }
-  const capType  = (s: string) => (s ?? '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  const arrow   = <span className="text-white/20 mx-1.5 select-none">→</span>
+  const fmtD    = (d: string) => { try { return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) } catch { return d } }
+  const capType = (s: string) => (s ?? '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 
   switch (eventType) {
     case 'status_changed': {
@@ -2334,7 +2389,34 @@ function ChangeDisplay({ ev }: { ev: LogEvent }) {
         </div>
       )
     }
-    case 'lead_edited': {
+    case 'score_changed': {
+      const oldScore = old?.score as number | undefined
+      const newScore = nw?.score  as number | undefined
+      const oldLabel = old?.score_label as ScoreLabel | undefined
+      const newLabel = nw?.score_label  as ScoreLabel | undefined
+      if (oldScore === undefined && !oldLabel) return null
+      const oldCfg = oldLabel ? SCORE_CFG[oldLabel] : undefined
+      const newCfg = newLabel ? SCORE_CFG[newLabel] : undefined
+      return (
+        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+          {oldCfg
+            ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                style={{ color:oldCfg.color, background:oldCfg.bg, border:`1px solid ${oldCfg.border}` }}>
+                {oldScore} · {oldCfg.label}
+              </span>
+            : <span className="text-[10px] text-white/40">{oldScore}</span>}
+          {arrow}
+          {newCfg
+            ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                style={{ color:newCfg.color, background:newCfg.bg, border:`1px solid ${newCfg.border}` }}>
+                {newScore} · {newCfg.label}
+              </span>
+            : <span className="text-[10px] text-white/40">{newScore}</span>}
+        </div>
+      )
+    }
+    case 'lead_edited':
+    case 'lead_updated': {
       if (!old || !nw) return null
       const keys = Object.keys(old).filter(k => String(old[k]) !== String(nw[k]))
       if (keys.length === 0) return null
@@ -2356,20 +2438,21 @@ function ChangeDisplay({ ev }: { ev: LogEvent }) {
       if (!oldD || !newD) return null
       return (
         <div className="mt-1.5 text-[10px] text-white/45">
-          <span className="text-white/55">{fmtDate(oldD)}</span>
+          <span className="text-white/55">{fmtD(oldD)}</span>
           {arrow}
-          <span className="text-emerald-400/75">{fmtDate(newD)}</span>
+          <span className="text-emerald-400/75">{fmtD(newD)}</span>
         </div>
       )
     }
-    case 'appointment_edited': {
+    case 'appointment_edited':
+    case 'appointment_updated': {
       if (!old || !nw) return null
       if (old.scheduled_at !== nw.scheduled_at && old.scheduled_at && nw.scheduled_at) {
         return (
           <div className="mt-1.5 text-[10px] text-white/45">
-            Date: <span className="text-white/55">{fmtDate(old.scheduled_at as string)}</span>
+            Date: <span className="text-white/55">{fmtD(old.scheduled_at as string)}</span>
             {arrow}
-            <span className="text-emerald-400/75">{fmtDate(nw.scheduled_at as string)}</span>
+            <span className="text-emerald-400/75">{fmtD(nw.scheduled_at as string)}</span>
           </div>
         )
       }
@@ -2397,7 +2480,7 @@ function ChangeDisplay({ ev }: { ev: LogEvent }) {
   }
 }
 
-const LOG_PAGE = 50  // rows per page
+const LOG_PAGE = 50
 
 function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boolean) => void }) {
   const [events,        setEvents]        = useState<LogEvent[]>([])
@@ -2405,6 +2488,7 @@ function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boo
   const [error,         setError]         = useState('')
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set())
   const [visibleCount,  setVisibleCount]  = useState(LOG_PAGE)
+  const [filter,        setFilter]        = useState<LogFilter>('all')
 
   // ── Fetch ──────────────────────────────────────────────────────
   const fetchEvents = useCallback(async (silent = false) => {
@@ -2422,51 +2506,87 @@ function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boo
 
   useEffect(() => { void fetchEvents() }, [fetchEvents])
 
+  // Derive undone IDs relationally — scan undo_* events for original_event_id
+  const undoneEventIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const ev of events) {
+      const t = (ev.metadata?._type as string) || ev.type
+      if (t.startsWith('undo_')) {
+        const origId = ev.metadata?.original_event_id as string | undefined
+        if (origId) ids.add(origId)
+      }
+    }
+    return ids
+  }, [events])
+
   // ── Optimistic undo with rollback ──────────────────────────────
   async function handleUndo(ev: LogEvent) {
-    if (processingIds.has(ev.id)) return  // prevent double-click
+    if (processingIds.has(ev.id)) return
 
-    // Mark in-flight
     setProcessingIds(prev => new Set([...prev, ev.id]))
 
-    // Optimistic update: mark as undone immediately
-    const savedEvent = ev
-    setEvents(prev => prev.map(e =>
-      e.id === ev.id
-        ? { ...e, metadata: { ...(e.metadata ?? {}), undone: true, undone_at: new Date().toISOString() } }
-        : e
-    ))
+    // Optimistic: insert a synthetic undo row so isUndone triggers immediately
+    const optimisticUndoRow: LogEvent = {
+      id:          `optimistic_undo_${ev.id}`,
+      type:        `undo_${(ev.metadata?._type as string) || ev.type}`,
+      title:       `Undone: ${ev.title}`,
+      description: null,
+      created_at:  new Date().toISOString(),
+      metadata:    {
+        _type:              `undo_${(ev.metadata?._type as string) || ev.type}`,
+        actor:              (ev.metadata?.actor as string) || 'Alex Thompson',
+        undoable:           false,
+        entity_name:        ev.metadata?.entity_name,
+        original_event_id:  ev.id,
+      },
+    }
+    setEvents(prev => [optimisticUndoRow, ...prev])
 
     try {
       const res  = await fetch(`/api/activity/${ev.id}/undo`, { method: 'POST' })
       const data = await res.json() as { error?: string }
       if (!res.ok) {
-        // Rollback: restore original event
-        setEvents(prev => prev.map(e => e.id === ev.id ? savedEvent : e))
+        // Rollback: remove the optimistic row
+        setEvents(prev => prev.filter(e => e.id !== optimisticUndoRow.id))
         onToast('Undo failed', data.error ?? 'Something went wrong', false)
       } else {
-        const name = (savedEvent.metadata?.entity_name as string) || savedEvent.title
+        const name = (ev.metadata?.entity_name as string) || ev.title
         onToast('Undone', name, true)
-        // Background sync — quiet so it doesn't flash the skeleton
-        setTimeout(() => void fetchEvents(true), 900)
+        // Silent resync to replace optimistic row with real DB row
+        setTimeout(() => void fetchEvents(true), 1000)
       }
     } catch {
-      // Rollback on network error
-      setEvents(prev => prev.map(e => e.id === ev.id ? savedEvent : e))
+      setEvents(prev => prev.filter(e => e.id !== optimisticUndoRow.id))
       onToast('Undo failed', 'Network error — check your connection', false)
     }
 
     setProcessingIds(prev => { const s = new Set(prev); s.delete(ev.id); return s })
   }
 
-  const schemaWarning  = events.length > 0 && events.every(e => e.metadata === null)
-  const visibleEvents  = events.slice(0, visibleCount)
-  const remainingCount = events.length - visibleCount
+  // ── Filter + pagination ────────────────────────────────────────
+  const filteredEvents  = useMemo(
+    () => events.filter(ev => applyFilter(ev, filter, undoneEventIds)),
+    [events, filter, undoneEventIds],
+  )
+  const visibleEvents   = filteredEvents.slice(0, visibleCount)
+  const remainingCount  = filteredEvents.length - visibleCount
+  const schemaWarning   = events.length > 0 && events.every(e => e.metadata === null)
+
+  // Filter badge counts (computed from unfiltered events)
+  const filterCounts = useMemo(() => {
+    const counts: Partial<Record<LogFilter, number>> = {}
+    for (const f of FILTER_CFG) {
+      if (f.id !== 'all') counts[f.id] = events.filter(ev => applyFilter(ev, f.id, undoneEventIds)).length
+    }
+    return counts
+  }, [events, undoneEventIds])
+
+  // Reset pagination when filter changes
+  useEffect(() => { setVisibleCount(LOG_PAGE) }, [filter])
 
   // ── Loading skeleton ───────────────────────────────────────────
   if (loading) return (
     <div className="flex flex-col gap-2">
-      {/* Header skeleton */}
       <div className="flex items-center justify-between px-1 mb-1 animate-pulse">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-xl flex-shrink-0" style={{ background: 'rgba(255,255,255,0.06)' }} />
@@ -2477,8 +2597,13 @@ function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boo
         </div>
         <div className="h-7 w-20 rounded-lg" style={{ background: 'rgba(255,255,255,0.04)' }} />
       </div>
-      {/* Row skeletons */}
-      {[...Array(7)].map((_, i) => (
+      {/* Filter bar skeleton */}
+      <div className="flex items-center gap-2 px-1 mb-1 animate-pulse">
+        {[60,48,76,50,36,56].map((w, i) => (
+          <div key={i} className="h-7 rounded-full flex-shrink-0" style={{ width: w, background: 'rgba(255,255,255,0.04)' }} />
+        ))}
+      </div>
+      {[...Array(6)].map((_, i) => (
         <div key={i} className="rounded-2xl px-4 py-3.5 flex items-start gap-3 animate-pulse"
           style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.07)',
                    animationDelay: `${i * 60}ms` }}>
@@ -2507,9 +2632,7 @@ function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boo
       <AlertCircle className="w-8 h-8 text-red-400/40" />
       <p className="text-sm text-red-400">{error}</p>
       <button onClick={() => void fetchEvents()}
-        className="text-xs text-violet-400 hover:text-violet-300 transition-colors">
-        Retry
-      </button>
+        className="text-xs text-violet-400 hover:text-violet-300 transition-colors">Retry</button>
     </div>
   )
 
@@ -2519,14 +2642,14 @@ function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boo
       {/* Header */}
       <div className="flex items-center justify-between px-1 mb-1">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-xl flex items-center justify-center"
+          <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
             style={{ background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.2)' }}>
             <History className="w-4 h-4 text-violet-400" />
           </div>
           <div>
             <h2 className="text-base font-bold text-white">Audit Log</h2>
             <p className="text-xs text-white/30">
-              {events.length} {events.length === 200 ? '(max loaded)' : ''} actions — every change is tracked
+              {events.length}{events.length === 200 ? ' (max)' : ''} total — immutable history of every action
             </p>
           </div>
         </div>
@@ -2537,7 +2660,35 @@ function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boo
         </button>
       </div>
 
-      {/* Schema prerequisite warning (dev-time) */}
+      {/* Filter bar */}
+      <div className="flex items-center gap-2 flex-wrap px-0.5 mb-0.5">
+        {FILTER_CFG.map(f => {
+          const active = filter === f.id
+          const count  = f.id === 'all' ? events.length : (filterCounts[f.id] ?? 0)
+          return (
+            <button key={f.id} onClick={() => setFilter(f.id)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold transition-all"
+              style={{
+                background: active ? 'rgba(139,92,246,0.18)' : 'rgba(255,255,255,0.04)',
+                border:     active ? '1px solid rgba(139,92,246,0.35)' : '1px solid rgba(255,255,255,0.08)',
+                color:      active ? '#c4b5fd' : 'rgba(255,255,255,0.35)',
+              }}>
+              {f.label}
+              {count > 0 && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full font-bold"
+                  style={{
+                    background: active ? 'rgba(139,92,246,0.25)' : 'rgba(255,255,255,0.06)',
+                    color:      active ? '#c4b5fd' : 'rgba(255,255,255,0.25)',
+                  }}>
+                  {count}
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Schema prerequisite warning */}
       {schemaWarning && (
         <div className="flex items-start gap-3 px-4 py-3 rounded-xl"
           style={{ background: 'rgba(251,191,36,0.07)', border: '1px solid rgba(251,191,36,0.18)' }}>
@@ -2554,36 +2705,55 @@ function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boo
       )}
 
       {/* Empty state */}
-      {events.length === 0 ? (
+      {filteredEvents.length === 0 ? (
         <Card className="flex flex-col items-center justify-center py-16 gap-3">
           <History className="w-8 h-8 text-white/10" />
-          <p className="text-sm text-white/25 font-medium">No activity yet</p>
-          <p className="text-xs text-white/15">Create leads, schedule appointments — every action appears here</p>
+          {events.length === 0 ? (
+            <>
+              <p className="text-sm text-white/25 font-medium">No activity yet</p>
+              <p className="text-xs text-white/15">Create leads, schedule appointments — every action appears here</p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-white/25 font-medium">No {filter} events</p>
+              <button onClick={() => setFilter('all')} className="text-xs text-violet-400/60 hover:text-violet-400 transition-colors">
+                Clear filter
+              </button>
+            </>
+          )}
         </Card>
       ) : (
         <>
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-1.5">
             {visibleEvents.map((ev, i) => {
-              const meta        = ev.metadata ?? {}
-              const eventType   = (meta._type as string) || ev.type
-              const cfg         = LOG_CFG[eventType] ?? LOG_CFG_DEFAULT
-              const typeLabel   = LOG_TYPE_LABELS[eventType]
-                                ?? eventType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-              const entityName  = meta.entity_name as string | undefined
-              const actor       = (meta.actor as string) || 'Alex Thompson'
-              const isUndone    = !!(meta.undone)
+              const meta         = ev.metadata ?? {}
+              const eventType    = (meta._type as string) || ev.type
+              const cfg          = getLogCfg(eventType)
+              const typeLabel    = LOG_TYPE_LABELS[eventType]
+                                 ?? eventType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+              const entityName   = meta.entity_name as string | undefined
+              const actor        = (meta.actor as string) || 'Alex Thompson'
+              const isUndone     = undoneEventIds.has(ev.id) || !!(meta.undone)
+              const isUndoRow    = eventType.startsWith('undo_')
               const isProcessing = processingIds.has(ev.id)
-              // undoable: show button only when undoable, not yet undone, and not currently being processed
-              // (isProcessing check is kept for the edge case where the optimistic update hasn't batched yet)
-              const undoable    = !!(meta.undoable) && !isUndone && !isProcessing
+              const undoable     = !!(meta.undoable) && !isUndone && !isProcessing && !isUndoRow
 
               return (
                 <motion.div key={ev.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: Math.min(i * 0.015, 0.25) }}>
-                  <Card className={`px-4 py-3.5 flex items-start gap-3 transition-opacity duration-200
-                    ${isUndone ? 'opacity-40' : ''} ${isProcessing ? 'opacity-60' : ''}`}>
+                  transition={{ delay: Math.min(i * 0.012, 0.22) }}>
+                  <div
+                    className={`group rounded-2xl px-4 py-3.5 flex items-start gap-3 transition-all duration-150 cursor-default
+                      ${isUndone ? 'opacity-35' : ''}
+                      ${isProcessing ? 'opacity-60' : ''}
+                      ${isUndoRow ? 'opacity-55' : ''}`}
+                    style={{
+                      background: 'rgba(255,255,255,0.022)',
+                      border: '1px solid rgba(255,255,255,0.07)',
+                    }}
+                    onMouseEnter={e => { if (!isUndone && !isUndoRow) (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.038)' }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.022)' }}>
 
-                    {/* Event type icon */}
+                    {/* Icon */}
                     <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
                       style={{ background: cfg.bg, border: `1px solid ${cfg.color}28` }}>
                       <DataIcon icon={cfg.Icon} className="w-4 h-4" style={{ color: cfg.color }} />
@@ -2592,36 +2762,38 @@ function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boo
                     {/* Content */}
                     <div className="flex-1 min-w-0">
 
-                      {/* Line 1: type label + entity name + timestamp */}
+                      {/* Line 1: type chip + entity name + timestamp */}
                       <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1 min-w-0">
-                          <span className="text-[10px] font-black uppercase tracking-widest"
-                            style={{ color: cfg.color }}>{typeLabel}</span>
+                        <div className="flex-1 min-w-0 flex items-baseline gap-2 flex-wrap">
+                          <span className="text-[10px] font-black uppercase tracking-widest leading-none px-1.5 py-0.5 rounded"
+                            style={{ color: cfg.color, background: `${cfg.color}14` }}>
+                            {typeLabel}
+                          </span>
                           {entityName
-                            ? <span className="ml-2 text-xs font-semibold text-white/85">{entityName}</span>
-                            : <span className="ml-2 text-xs text-white/55 truncate">{ev.title}</span>}
+                            ? <span className="text-sm font-semibold text-white/90 leading-tight">{entityName}</span>
+                            : <span className="text-xs text-white/50 leading-tight truncate max-w-[14rem]">{ev.title}</span>}
                         </div>
-                        <span className="text-[10px] text-white/20 flex-shrink-0 whitespace-nowrap">
+                        <span className="text-[10px] text-white/20 flex-shrink-0 whitespace-nowrap mt-0.5">
                           {relativeTime(ev.created_at)}
                         </span>
                       </div>
 
-                      {/* Line 2: old → new value diff */}
+                      {/* Line 2: diff */}
                       <ChangeDisplay ev={ev} />
 
-                      {/* Line 3: actor + undo controls */}
+                      {/* Line 3: actor + controls */}
                       <div className="flex items-center justify-between mt-2 gap-2">
-                        <span className="text-[10px] text-white/30">{actor}</span>
+                        <span className="text-[10px] text-white/25">{actor}</span>
 
                         <div className="flex items-center gap-2 flex-shrink-0">
-                          {isUndone && (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                          {isUndone && !isUndoRow && (
+                            <motion.span initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                              className="text-[10px] font-bold px-2 py-0.5 rounded-full"
                               style={{ background:'rgba(248,113,113,0.10)', color:'#f87171', border:'1px solid rgba(248,113,113,0.18)' }}>
                               Undone
-                            </span>
+                            </motion.span>
                           )}
-                          {/* Show spinner badge while processing (brief window before optimistic update renders) */}
-                          {isProcessing && !isUndone && (
+                          {isProcessing && (
                             <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold"
                               style={{ background:'rgba(139,92,246,0.08)', border:'1px solid rgba(139,92,246,0.20)', color:'rgba(196,181,253,0.6)' }}>
                               <motion.span className="w-2.5 h-2.5 rounded-full border-2 border-violet-400/30 border-t-violet-400"
@@ -2630,8 +2802,7 @@ function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boo
                             </span>
                           )}
                           {undoable && (
-                            <button
-                              onClick={() => handleUndo(ev)}
+                            <button onClick={() => handleUndo(ev)}
                               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all hover:bg-violet-500/15 active:scale-95"
                               style={{ background:'rgba(139,92,246,0.10)', border:'1px solid rgba(139,92,246,0.28)', color:'#c4b5fd' }}>
                               <Undo2 className="w-2.5 h-2.5" /><span>Undo</span>
@@ -2641,16 +2812,18 @@ function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boo
                       </div>
 
                     </div>
-                  </Card>
+                  </div>
+                  {/* Subtle row divider */}
+                  {i < visibleEvents.length - 1 && (
+                    <div className="h-px mx-4" style={{ background: 'rgba(255,255,255,0.03)' }} />
+                  )}
                 </motion.div>
               )
             })}
           </div>
 
-          {/* Pagination: load more */}
           {remainingCount > 0 && (
-            <motion.button
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            <motion.button initial={{ opacity: 0 }} animate={{ opacity: 1 }}
               onClick={() => setVisibleCount(v => v + LOG_PAGE)}
               className="w-full py-3 rounded-xl text-xs font-semibold text-white/35 hover:text-white/60 transition-colors"
               style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
@@ -2659,7 +2832,6 @@ function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boo
             </motion.button>
           )}
 
-          {/* Bottom note when all loaded */}
           {remainingCount <= 0 && events.length >= 200 && (
             <p className="text-center text-[10px] text-white/15 py-2">
               Showing last 200 actions — older history is stored in the database

@@ -426,25 +426,21 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // (b) Overlay top-level conversation / appointment fields
+  // (b) Overlay top-level conversation fields.
+  // appointment_date is intentionally NOT mirrored here — it goes only into
+  // appointments.scheduled_at so it can never influence leads.created_at.
   if (body.full_conversation?.trim()) {
     enriched.full_conversation = body.full_conversation.trim()
   }
   if (body.message?.trim()) {
-    // Always store the initial message — used as conversation fallback in the drawer
     enriched.message = body.message.trim()
-  }
-  if (body.appointment_date) {
-    // Mirror into metadata so the drawer can show "Appointment Date" without
-    // requiring a separate join to the appointments table.
-    enriched.appointment_date = body.appointment_date
   }
 
   // (a) Top-level niche shortcuts — these WIN over any same-named key in metadata
   const SHORTCUT_FIELDS = [
     'budget', 'specification', 'preferred_contact',
     'city_or_location', 'property_type', 'priority', 'notes',
-    'ai_summary',   // pre-generated summary from Make.com — stored verbatim
+    'ai_summary',
   ] as const
   for (const field of SHORTCUT_FIELDS) {
     const val = body[field]
@@ -453,11 +449,13 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Strip any date-like keys that could interfere with leads.created_at if a
-  // DB trigger or PostgREST policy reads them from the metadata JSONB.
-  delete enriched.created_at
-  delete enriched.date
-  delete enriched.updated_at
+  // Strip every date/timestamp key from enriched — none of these must reach
+  // leads.created_at via the metadata JSONB (a DB trigger could read them).
+  const STRIPPED_META_KEYS = [
+    'created_at', 'createdAt', 'date', 'updated_at', 'updatedAt',
+    'appointment_date', 'machine_date', 'timestamp',
+  ]
+  for (const k of STRIPPED_META_KEYS) delete enriched[k]
 
   const finalMetadata = Object.keys(enriched).length > 0 ? enriched : null
 
@@ -468,9 +466,9 @@ export async function POST(req: NextRequest) {
   let leadId: string
   let isNewLead = false
 
-  // Server timestamp generated here — never sourced from the request body,
-  // transcript, email parse, or appointment date.
-  const insertedAt = new Date().toISOString()
+  // Capture the request-handling time once for updated_at on updates and
+  // activity events. INSERT payloads generate their own inline new Date() calls.
+  const nowIso = new Date().toISOString()
 
   try {
     if (email) {
@@ -484,9 +482,7 @@ export async function POST(req: NextRequest) {
         // never re-enter metadata where a trigger could read them back.
         const rawPrev = (existing.metadata as Record<string, unknown> | null) ?? {}
         const prevMeta: Record<string, unknown> = { ...rawPrev }
-        delete prevMeta.created_at
-        delete prevMeta.date
-        delete prevMeta.updated_at
+        for (const k of STRIPPED_META_KEYS) delete prevMeta[k]
         const mergedMeta = finalMetadata
           ? { ...prevMeta, ...finalMetadata }   // new keys win
           : prevMeta
@@ -495,30 +491,37 @@ export async function POST(req: NextRequest) {
           name, company, phone,
           source, interest: interest ?? undefined,
           score, score_label: scoreLabel,
-          updated_at: insertedAt,
+          updated_at: nowIso,
         }
         if (Object.keys(mergedMeta).length > 0) updatePayload.metadata = mergedMeta
         await sb.from('leads').update(updatePayload).eq('id', existing.id)
+        console.log(`[INGEST] updated lead id = ${existing.id} updated_at = ${nowIso}`)
         leadId = existing.id
       } else {
-        const { data, error } = await sb.from('leads').insert({
+        const insertPayload = {
           client_id: clientId, name, company, email, phone,
           source, interest: interest ?? undefined,
           score, score_label: scoreLabel, status: 'new',
-          created_at: insertedAt,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
           ...(finalMetadata && { metadata: finalMetadata }),
-        }).select('id').single()
+        }
+        console.log('[INGEST FINAL LEAD CREATED_AT]', name, insertPayload.created_at)
+        const { data, error } = await sb.from('leads').insert(insertPayload).select('id').single()
         if (error) throw error
         leadId = data.id; isNewLead = true
       }
     } else {
-      const { data, error } = await sb.from('leads').insert({
+      const insertPayload = {
         client_id: clientId, name, company, phone,
         source, interest: interest ?? undefined,
         score, score_label: scoreLabel, status: 'new',
-        created_at: insertedAt,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
         ...(finalMetadata && { metadata: finalMetadata }),
-      }).select('id').single()
+      }
+      console.log('[INGEST FINAL LEAD CREATED_AT]', name, insertPayload.created_at)
+      const { data, error } = await sb.from('leads').insert(insertPayload).select('id').single()
       if (error) throw error
       leadId = data.id; isNewLead = true
     }
@@ -611,7 +614,7 @@ export async function POST(req: NextRequest) {
   }
 
   /* ── 6d. Activity events ─────────────────────────────────────── */
-  const now = insertedAt
+  const now = nowIso
   const activityRows: object[] = []
 
   activityRows.push({

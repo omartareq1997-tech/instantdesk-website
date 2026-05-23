@@ -1121,7 +1121,7 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>() }
         ) : (
           <AnimatePresence initial={false}>
             {filtered.map((lead, i) => {
-              const isNew = newLeadIds.has(lead.id)
+              const isNew = newLeadIds.has(lead.id) || (Date.now() - new Date(lead.date).getTime() < 10 * 60 * 1000)
               return (
                 <motion.div key={lead.id}
                   initial={{ opacity:0, y:-8 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0 }}
@@ -1195,7 +1195,7 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>() }
                   </td>
                 </tr>
               ) : filtered.map((lead, i) => {
-                const isNew = newLeadIds.has(lead.id)
+                const isNew = newLeadIds.has(lead.id) || (Date.now() - new Date(lead.date).getTime() < 10 * 60 * 1000)
                 return (
                 <motion.tr key={lead.id}
                   initial={{ opacity:0, y:-10, scale:0.99 }} animate={{ opacity:1, y:0, scale:1 }} exit={{ opacity:0 }}

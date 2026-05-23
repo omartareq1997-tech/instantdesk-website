@@ -8,7 +8,7 @@ import {
   Clock, Search, X, BarChart2, MessageCircle, Database,
   Activity, RefreshCw, Bell, Shield, Link2, Download, Target,
   DollarSign, Timer, Menu, ChevronLeft, ChevronRight, LineChart, BellDot,
-  MessageSquare, SlidersHorizontal, Volume2, VolumeX,
+  MessageSquare, SlidersHorizontal, Volume2, VolumeX, ArrowUpDown,
 } from 'lucide-react'
 import LeadPanel from './LeadPanel'
 import AnalyticsSection from './AnalyticsSection'
@@ -730,6 +730,83 @@ function inDateRange(iso: string, f: PipelineFilters): boolean {
   return true
 }
 
+/* ─── Pipeline — sort ───────────────────────────────────────── */
+
+type SortKey = 'date_desc' | 'date_asc' | 'score_desc' | 'score_asc' | 'name_asc' | 'name_desc'
+
+const DEFAULT_SORT: SortKey = 'date_desc'
+
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: 'date_desc',  label: 'Newest first'   },
+  { key: 'date_asc',   label: 'Oldest first'   },
+  { key: 'score_desc', label: 'Highest score'  },
+  { key: 'score_asc',  label: 'Lowest score'   },
+  { key: 'name_asc',   label: 'Name A – Z'     },
+  { key: 'name_desc',  label: 'Name Z – A'     },
+]
+
+function applySortKey(rows: Lead[], key: SortKey): Lead[] {
+  return [...rows].sort((a, b) => {
+    switch (key) {
+      case 'date_desc':  return new Date(b.date).getTime() - new Date(a.date).getTime()
+      case 'date_asc':   return new Date(a.date).getTime() - new Date(b.date).getTime()
+      case 'score_desc': return b.score - a.score
+      case 'score_asc':  return a.score - b.score
+      case 'name_asc':   return a.name.localeCompare(b.name)
+      case 'name_desc':  return b.name.localeCompare(a.name)
+    }
+  })
+}
+
+function SortPanel({
+  sort, onChange, onClose,
+}: {
+  sort:     SortKey
+  onChange: (k: SortKey) => void
+  onClose:  () => void
+}) {
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <motion.div
+        initial={{ opacity:0, scale:0.96, y:-6 }}
+        animate={{ opacity:1, scale:1,    y: 0  }}
+        exit={{   opacity:0, scale:0.96, y:-6  }}
+        transition={{ duration:0.15 }}
+        className="absolute right-0 top-full mt-2 z-50 rounded-2xl overflow-hidden"
+        style={{
+          minWidth: 180,
+          background:'rgba(10,10,30,0.98)', border:'1px solid rgba(139,92,246,0.22)',
+          boxShadow:'0 24px 60px rgba(0,0,0,0.7)', backdropFilter:'blur(24px)',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-3 py-2.5" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+          <span className="text-[10px] font-bold uppercase tracking-widest text-white/30">Sort by</span>
+        </div>
+        {SORT_OPTIONS.map(o => {
+          const active = o.key === sort
+          return (
+            <button key={o.key}
+              onClick={() => { onChange(o.key); onClose() }}
+              className="w-full flex items-center justify-between px-4 py-2.5 text-xs font-semibold transition-all text-left"
+              style={{
+                background: active ? 'rgba(139,92,246,0.15)' : 'transparent',
+                color: active ? '#c4b5fd' : 'rgba(255,255,255,0.55)',
+              }}
+              onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.04)' }}
+              onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}
+            >
+              {o.label}
+              {active && <span className="w-1.5 h-1.5 rounded-full bg-violet-400 flex-shrink-0" />}
+            </button>
+          )
+        })}
+      </motion.div>
+    </>
+  )
+}
+
 /* ─── Pipeline — filter panel sub-components ────────────────── */
 
 function FSection({ label, children }: { label:string; children:React.ReactNode }) {
@@ -889,15 +966,20 @@ function FilterPanel({
 /* ─── Pipeline ───────────────────────────────────────────────── */
 
 function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>() }: { onSelectLead:(id:string)=>void; leads:Lead[]; newLeadIds?: Set<string> }) {
+  // v2 — sort feature active. Check browser console for this log to confirm latest build.
+  console.log('[PipelineSection] sort feature v2 loaded, leads:', leads.length)
   const [search,     setSearch]     = useState('')
   const [filters,    setFilters]    = useState<PipelineFilters>(DEFAULT_FILTERS)
   const [filterOpen, setFilterOpen] = useState(false)
+  const [sort,       setSort]       = useState<SortKey>(DEFAULT_SORT)
+  const [sortOpen,   setSortOpen]   = useState(false)
 
   const ac = countActiveFilters(filters)
+  const sortLabel = SORT_OPTIONS.find(o => o.key === sort)?.label ?? 'Sort'
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
-    return leads.filter(l => {
+    const rows = leads.filter(l => {
       // Score
       if (filters.score !== 'all' && l.scoreLabel !== filters.score) return false
       // Status
@@ -921,10 +1003,12 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>() }
         if (!haystack.some(s => s.toLowerCase().includes(q))) return false
       }
       return true
-    }).sort((a, b) => b.score - a.score)
-  }, [leads, search, filters])
+    })
+    // Apply sort after filter — never lose the user's chosen order
+    return applySortKey(rows, sort)
+  }, [leads, search, filters, sort])
 
-  const clearAll = () => { setSearch(''); setFilters(DEFAULT_FILTERS) }
+  const clearAll = () => { setSearch(''); setFilters(DEFAULT_FILTERS); setSort(DEFAULT_SORT) }
 
   return (
     <Card>
@@ -959,9 +1043,33 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>() }
           )}
         </div>
 
+        {/* Sort button — always visible */}
+        <div className="relative flex-shrink-0">
+          <button onClick={() => { setSortOpen(v => !v); setFilterOpen(false) }}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap"
+            style={sort !== DEFAULT_SORT || sortOpen ? {
+              background:'rgba(139,92,246,0.15)', border:'1px solid rgba(139,92,246,0.35)', color:'#c4b5fd',
+            } : {
+              background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', color:'rgba(255,255,255,0.5)',
+            }}>
+            <ArrowUpDown className="w-3.5 h-3.5" />
+            {sort !== DEFAULT_SORT ? sortLabel : 'Sort'}
+          </button>
+
+          <AnimatePresence>
+            {sortOpen && (
+              <SortPanel
+                sort={sort}
+                onChange={setSort}
+                onClose={() => setSortOpen(false)}
+              />
+            )}
+          </AnimatePresence>
+        </div>
+
         {/* Filter button */}
         <div className="relative flex-shrink-0">
-          <button onClick={() => setFilterOpen(v => !v)}
+          <button onClick={() => { setFilterOpen(v => !v); setSortOpen(false) }}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap"
             style={ac > 0 || filterOpen ? {
               background:'rgba(139,92,246,0.15)', border:'1px solid rgba(139,92,246,0.35)', color:'#c4b5fd',
@@ -1907,38 +2015,37 @@ function getOrCreateAudioCtx(): AudioContext | null {
 }
 
 /**
- * Must be called inside a click handler.
- * Creates/resumes the context and plays a 1-frame silent buffer —
- * the standard browser "gesture unlock" for Web Audio.
+ * Synchronous unlock — MUST stay synchronous so Safari accepts it within the
+ * gesture call stack.  Never await before calling ctx.resume().
+ * Called from document-level click/touchstart/keydown listeners AND from the
+ * "Enable sound" button handler.
  */
-async function unlockAudio(): Promise<boolean> {
+function unlockAudioSync(): void {
   try {
     const ctx = getOrCreateAudioCtx()
-    if (!ctx) { console.log('[SOUND] blocked/error — AudioContext not supported'); return false }
-    if (ctx.state === 'suspended') await ctx.resume()
-    // Silent 1-frame buffer forces the browser to mark this context as unlocked
+    if (!ctx) return
+    // Kick resume() without awaiting — Safari requires the call itself to happen
+    // synchronously inside the gesture, the promise resolution can be async.
+    if (ctx.state !== 'running') ctx.resume()
+    // 1-frame silent buffer marks the context as user-gesture-unlocked
     const buf = ctx.createBuffer(1, 1, ctx.sampleRate)
     const src = ctx.createBufferSource()
     src.buffer = buf
     src.connect(ctx.destination)
     src.start()
-    console.log('[SOUND] enabled')
-    return true
+    console.log('[SOUND] unlocked, state:', ctx.state)
   } catch (e) {
-    console.log('[SOUND] blocked/error', e)
-    return false
+    console.log('[SOUND] unlock error', e)
   }
 }
 
 /** Play the two-tone chime.  Caller is responsible for checking soundEnabled. */
-function playChime(label = 'notification'): void {
+async function playChime(label = 'notification'): Promise<void> {
   const ctx = _audioCtx
-  if (!ctx || ctx.state !== 'running') {
-    console.log('[SOUND] blocked/error — AudioContext not running, state:', ctx?.state ?? 'null')
-    return
-  }
+  console.log('[SOUND] AudioContext state:', ctx?.state ?? 'null', '— label:', label)
+  if (!ctx) { console.log('[SOUND] no AudioContext'); return }
   try {
-    console.log(`[SOUND] playing ${label}`)
+    if (ctx.state !== 'running') await ctx.resume()
     const now = ctx.currentTime
     function tone(freq: number, start: number, dur: number, vol: number) {
       const osc  = ctx!.createOscillator()
@@ -1951,10 +2058,11 @@ function playChime(label = 'notification'): void {
       gain.gain.exponentialRampToValueAtTime(0.001, now + start + dur)
       osc.start(now + start); osc.stop(now + start + dur + 0.06)
     }
-    tone(1047, 0,    0.40, 0.10)   // C6
-    tone(1319, 0.14, 0.45, 0.07)   // E6
+    tone(1047, 0,    0.50, 0.45)   // C6
+    tone(1319, 0.14, 0.55, 0.40)   // E6
+    console.log('[SOUND] playing', label)
   } catch (e) {
-    console.log('[SOUND] blocked/error', e)
+    console.log('[SOUND] play error', e)
   }
 }
 
@@ -2065,6 +2173,32 @@ function SoundToggle({ enabled, onEnable, onDisable }: {
   )
 }
 
+/* ─── Test sound button ──────────────────────────────────────── */
+
+function TestSoundButton() {
+  const [fired, setFired] = useState(false)
+  return (
+    <button
+      type="button"
+      title="Test sound"
+      onClick={() => {
+        unlockAudioSync()
+        void playChime('test')
+        setFired(true)
+        setTimeout(() => setFired(false), 1200)
+      }}
+      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
+      style={fired ? {
+        background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)', color: '#fbbf24',
+      } : {
+        background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.3)',
+      }}>
+      <Volume2 className="w-3.5 h-3.5" />
+      <span className="hidden sm:inline">{fired ? '♪' : 'Test'}</span>
+    </button>
+  )
+}
+
 /* ─── Hash persistence helpers ───────────────────────────────── */
 
 const VALID_SECTIONS = new Set<string>([
@@ -2095,7 +2229,9 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
   const hintShownRef = useRef(false)  // show the "enable sound" hint only once per session
 
   // ── Live state (seeded from SSR, then kept fresh by Supabase Realtime)
-  const [leads,       setLeads]       = useState<Lead[]>       (initialData?.leads ?? [])
+  const [leads, setLeads] = useState<Lead[]>(() =>
+    [...(initialData?.leads ?? [])].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+  )
   const [appointments,setAppointments]= useState<Appointment[]>(initialData?.appointments   ?? [])
   const [activityFeed,setActivityFeed]= useState<ActivityItem[]>(initialData?.activity      ?? [])
 
@@ -2126,14 +2262,13 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
     soundEnabledRef.current = stored
   }, [])
 
-  const handleEnableSound = useCallback(async () => {
-    const ok = await unlockAudio()
-    if (ok) {
-      setSoundEnabled(true)
-      soundEnabledRef.current = true
-      localStorage.setItem('sound_alerts', 'true')
-      playChime('confirmation')  // play immediately as feedback that sound works
-    }
+  const handleEnableSound = useCallback(() => {
+    // Synchronous unlock — no await — required for Safari gesture acceptance
+    unlockAudioSync()
+    setSoundEnabled(true)
+    soundEnabledRef.current = true
+    localStorage.setItem('sound_alerts', 'true')
+    void playChime('confirmation')
   }, [])
 
   const handleDisableSound = useCallback(() => {
@@ -2141,6 +2276,22 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
     soundEnabledRef.current = false
     localStorage.setItem('sound_alerts', 'false')
     console.log('[SOUND] disabled')
+  }, [])
+
+  // ── Global gesture listener — unlock AudioContext on ANY interaction ──
+  // Safari requires ctx.resume() to be called synchronously within a gesture.
+  // Attaching to document catches every click/touch/keydown so the context
+  // is ready the moment the user first interacts, before they hit "Enable sound".
+  useEffect(() => {
+    const handler = () => unlockAudioSync()
+    document.addEventListener('click',      handler, { passive: true })
+    document.addEventListener('touchstart', handler, { passive: true })
+    document.addEventListener('keydown',    handler, { passive: true })
+    return () => {
+      document.removeEventListener('click',      handler)
+      document.removeEventListener('touchstart', handler)
+      document.removeEventListener('keydown',    handler)
+    }
   }, [])
 
   // ── Supabase Realtime subscriptions ──────────────────────────
@@ -2353,6 +2504,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
                 All systems live
               </div>
               <SoundToggle enabled={soundEnabled} onEnable={handleEnableSound} onDisable={handleDisableSound} />
+              <TestSoundButton />
               <NotificationCenter notifs={notifs} setNotifs={setNotifs} />
               <button onClick={() => { window.location.href = '/client-login' }}
                 className="flex items-center gap-1.5 text-xs text-white/25 hover:text-red-400 transition-colors px-3 py-2 rounded-lg hover:bg-red-500/8">

@@ -45,9 +45,15 @@ interface ChatMessage {
 }
 
 interface AISummary {
-  intent: string; urgency: 'high' | 'medium' | 'low'
-  budget: string | null; sentiment: 'positive' | 'neutral' | 'negative'
-  action: string; signals: string[]
+  intent:             string
+  urgency:            'high' | 'medium' | 'low'
+  urgencyReason:      string
+  budget:             string | null
+  sentiment:          'positive' | 'neutral' | 'negative'
+  action:             string
+  signals:            string[]
+  firstClientMessage: string | null
+  appointmentNote:    string | null
 }
 
 /* ─── Config ─────────────────────────────────────────────────── */
@@ -224,54 +230,318 @@ function parseRawTranscript(rawText: string): ChatMessage[] {
   }))
 }
 
-/* ─── AI Summary (rule-based) ────────────────────────────────── */
+/* ─── AI Summary — lead-specific extraction ──────────────────── */
 
-function generateAISummary(lead: Lead): AISummary {
-  const meta = lead.metadata ?? {}
-  const conv = [meta.full_conversation, meta.message, meta.initial_message]
-    .filter(v => typeof v === 'string' && v.trim()).join(' ')
-
-  const intent = lead.interest ? `Enquiring about ${lead.interest}` : 'General business enquiry'
-
-  // Budget detection
-  let budget = typeof meta.budget === 'string' ? meta.budget : null
-  if (!budget && conv) {
-    const m = conv.match(/(?:£|€|\$|AED|USD|EUR|GBP|PLN)\s*[\d,]+(?:\s*(?:k|thousand))?|\d[\d,]*\s*(?:PLN|EUR|USD|GBP|AED)/i)
-    if (m) budget = m[0].trim()
+/** Collect every client message line; falls back to full text if unlabeled. */
+function extractAllClientText(convText: string): string {
+  if (!convText.trim()) return ''
+  const lines = convText.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+  const out: string[] = []
+  for (const line of lines) {
+    const stripped = line.replace(TS_RX, '').trim()
+    if (CLIENT_RX.test(stripped)) out.push(stripped.replace(CLIENT_RX, '').trim())
   }
+  return out.length > 0 ? out.join(' ') : convText
+}
 
-  // Urgency
+/** First meaningful client line (shown as verbatim quote in the UI). */
+function extractFirstClientLine(text: string): string | null {
+  if (!text.trim()) return null
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+  for (const line of lines) {
+    const stripped = line.replace(TS_RX, '').trim()
+    if (CLIENT_RX.test(stripped)) {
+      const content = stripped.replace(CLIENT_RX, '').trim()
+      if (content.length >= 10) return content
+    }
+  }
+  const first = lines[0]
+  if (first && !BOT_RX.test(first.replace(TS_RX, '')) && first.length >= 10) return first
+  return null
+}
+
+/** Detect room/bedroom count: "2-room", "3-bedroom", "studio". */
+function detectRoomCount(text: string): string | null {
+  if (/\bstudio\b/i.test(text) || /\bkawalerka\b/i.test(text)) return 'studio'
+  const m = text.match(/\b(\d+)[\s-]*(bedroom|bed|br|room|pokój|pokoje|pokoi|zimmer|pièce)s?\b/i)
+  if (m) {
+    const n = m[1]; const u = m[2].toLowerCase()
+    return /bed|br/.test(u) ? `${n}-bedroom` : `${n}-room`
+  }
+  const m2 = text.match(/\b(\d)\+\d\b/)     // Polish "2+1" notation
+  if (m2) return `${m2[1]}-room`
+  return null
+}
+
+/** Detect rent vs buy intent. */
+function detectPurpose(text: string): 'rent' | 'buy' | null {
+  if (/\b(rent|rental|renting|lease|wynajem|do wynajęcia|na wynajem|najmu|mieten)\b/i.test(text)) return 'rent'
+  if (/\b(buy|buying|purchase|purchasing|for sale|kupno|kupić|nabyć|kaufen|na sprzedaż)\b/i.test(text)) return 'buy'
+  return null
+}
+
+/** Detect property type keyword. */
+function detectPropertyType(text: string): string | null {
+  const m = text.match(
+    /\b(apartment|flat|studio|penthouse|duplex|maisonette|loft|house|villa|townhouse|bungalow|mansion|cottage|office|coworking|warehouse|shop|retail space|mieszkanie|dom|kamienica|lokal|biuro)\b/i,
+  )
+  return m ? m[1].toLowerCase() : null
+}
+
+/** True when text signals a monthly budget. */
+function detectMonthly(text: string): boolean {
+  return /\b(per month|monthly|a month|\/month|\/mo|miesięcznie|monatlich|\bpm\b)/i.test(text)
+}
+
+// Interest values so generic they add no useful context to the AI summary
+// or the Key Details table.  Both single words and common multi-word phrases
+// are included so "General business enquiry" (a common chatbot default) is caught.
+const GENERIC_INTERESTS = new Set([
+  // single-word catch-alls
+  'real estate', 'realestate', 'property', 'properties', 'housing', 'home', 'homes',
+  'business', 'service', 'services', 'enquiry', 'inquiry', 'general', 'unknown',
+  'other', 'help', 'information', 'info', 'question', 'support', 'consultation',
+  'lead', 'new lead', 'contact', 'request', 'test', 'n/a', 'na', 'none',
+  // multi-word generic phrases that chatbots often emit as defaults
+  'general business enquiry', 'general business inquiry',
+  'business enquiry', 'business inquiry',
+  'general enquiry', 'general inquiry',
+  'property enquiry', 'property inquiry',
+  'real estate enquiry', 'real estate inquiry',
+  'new enquiry', 'new inquiry',
+  'customer enquiry', 'customer inquiry',
+  'product enquiry', 'product inquiry',
+  'sales enquiry', 'sales inquiry',
+])
+
+/** True when the interest string is specific enough to display or use as a noun. */
+function isSpecificInterest(interest: string | undefined | null): boolean {
+  if (!interest || interest.trim().length < 2) return false
+  const lower = interest.trim().toLowerCase()
+  if (/^unknown$/i.test(lower)) return false
+  if (GENERIC_INTERESTS.has(lower)) return false
+  // Also catch anything where EVERY word is individually generic
+  const words = lower.split(/[\s,/]+/).filter(Boolean)
+  if (words.length > 0 && words.every(w => GENERIC_INTERESTS.has(w))) return false
+  return true
+}
+
+/**
+ * Generate a lead-specific, data-driven AI summary.
+ * @param apptDate  YYYY-MM-DD date of the nearest upcoming appointment.
+ * @param liveText  All fetched message content (any role) joined as plain text.
+ *                  Bot messages often restate requirements in cleaner language.
+ */
+function generateAISummary(lead: Lead, apptDate?: string, liveText?: string): AISummary {
+  const meta      = lead.metadata ?? {}
+  const firstName = lead.name.split(/\s+/)[0]
+
+  // ── Text pools ────────────────────────────────────────────────
+  const convText = [meta.full_conversation, meta.message, meta.initial_message]
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    .join('\n')
+  // All text available for pattern matching — metadata transcript + live DB messages.
+  // liveText includes bot turns which often confirm requirements clearly:
+  //   "So you're looking for a 2-room apartment in Kraków, budget 4500 PLN/month?"
+  const allText  = [convText, liveText ?? ''].filter(Boolean).join('\n')
+  // Client-only text for the verbatim quote
+  const clientText = [extractAllClientText(convText), extractAllClientText(liveText ?? '')].filter(Boolean).join(' ')
+  const searchText = allText   // convenience alias
+
+  // ── Structured metadata ───────────────────────────────────────
+  const metaSpec  = typeof meta.specification     === 'string' ? meta.specification.trim()     : null
+  const metaProp  = typeof meta.property_type     === 'string' ? meta.property_type.trim()     : null
+  const metaCity  = typeof meta.city_or_location  === 'string' ? meta.city_or_location.trim()  : null
+  const metaPref  = typeof meta.preferred_contact === 'string' ? meta.preferred_contact.trim() : null
+  const metaTline = typeof meta.timeline          === 'string' ? meta.timeline.trim()          : null
+  const metaPrio  = typeof meta.priority          === 'string' ? meta.priority.trim()          : null
+  const metaAppt  = typeof meta.appointment_date  === 'string' ? meta.appointment_date.trim()  : null
+  const metaTime  = typeof meta.appointment_time  === 'string' ? meta.appointment_time.trim()  : null
+
+  // ── Budget ────────────────────────────────────────────────────
+  let budget: string | null =
+    typeof meta.budget === 'string' ? meta.budget :
+    typeof meta.budget === 'number' ? String(meta.budget) : null
+  if (!budget && searchText) {
+    const bm = searchText.match(
+      /(?:£|€|\$|AED|USD|EUR|GBP|PLN|zł)\s*[\d,]+(?:\s*(?:k|m|thousand|million))?|\d[\d,.]*\s*(?:k|m|thousand|million)?\s*(?:PLN|zł|EUR|USD|GBP|AED)/i,
+    )
+    if (bm) budget = bm[0].trim()
+  }
+  const isMonthly = budget ? detectMonthly(searchText) : false
+
+  // ── Property extraction ─────────────────────────────────────────
+  // Search client text first (higher signal), then fall back to all text
+  // (which includes bot confirmations like "you want a 2-room flat in Kraków")
+  const rooms    = detectRoomCount(clientText)    ?? detectRoomCount(allText)
+  const purpose  = detectPurpose(clientText)      ?? detectPurpose(allText)
+  const propType = metaProp ?? detectPropertyType(clientText) ?? detectPropertyType(allText)
+
+  // ── Urgency ───────────────────────────────────────────────────
+  const hasUrgencyWords = /\b(urgent|asap|as soon as possible|immediately|today|this week|right away)\b/i.test(searchText)
   let urgency: AISummary['urgency'] = 'low'
   if (lead.score >= 80 || lead.status === 'demo_booked') urgency = 'high'
   else if (lead.score >= 50 || lead.status === 'contacted') urgency = 'medium'
-  if (typeof meta.priority === 'string' && /high/i.test(meta.priority)) urgency = 'high'
+  if (metaPrio && /high|urgent/i.test(metaPrio)) urgency = 'high'
+  if (hasUrgencyWords) urgency = 'high'
+  else if (urgency === 'low' && /\b(soon|quickly|this month|next week)\b/i.test(searchText)) urgency = 'medium'
 
-  // Sentiment
-  let sentiment: AISummary['sentiment'] = 'neutral'
-  if (lead.status === 'won' || lead.scoreLabel === 'hot') sentiment = 'positive'
-  else if (lead.status === 'lost') sentiment = 'negative'
-  else if (lead.scoreLabel === 'warm') sentiment = 'positive'
+  let urgencyReason: string
+  if (lead.status === 'demo_booked')        urgencyReason = 'viewing booked'
+  else if (lead.status === 'won')           urgencyReason = 'deal won'
+  else if (hasUrgencyWords)                 urgencyReason = 'mentioned urgency'
+  else if (metaPrio && /high/i.test(metaPrio)) urgencyReason = 'priority flag'
+  else if (lead.score >= 80)               urgencyReason = `score ${lead.score}`
+  else if (urgency === 'medium')           urgencyReason = `score ${lead.score}`
+  else                                     urgencyReason = 'new enquiry'
 
-  // Key signals
-  const signals: string[] = []
-  if (budget) signals.push(`Budget: ${budget}`)
-  if (meta.city_or_location) signals.push(`Location: ${String(meta.city_or_location)}`)
-  if (meta.specification) signals.push(`Spec: ${String(meta.specification).slice(0, 55)}`)
-  if (meta.preferred_contact) signals.push(`Prefers: ${String(meta.preferred_contact)}`)
-  if (meta.property_type) signals.push(`Type: ${String(meta.property_type)}`)
-  if (meta.timeline) signals.push(`Timeline: ${String(meta.timeline)}`)
-
-  // Recommended action
-  const ACTION_MAP: Record<string, string> = {
-    new:         'Reply within 2 hours — response rate drops 80% after 5 hours. Send a personalised intro.',
-    contacted:   'Book a discovery call. Qualify budget, timeline, and decision-maker.',
-    demo_booked: `Prepare the demo around "${lead.interest}". Confirm 24 h before.`,
-    won:         'Start onboarding. Send welcome pack and introduce the team.',
-    lost:        'Add to 30-day re-engagement drip. Review objections and follow up in one month.',
+  // ── Appointment formatting ────────────────────────────────────
+  const rawAppt = apptDate ?? metaAppt
+  let fmtAppt: string | null = null
+  if (rawAppt) {
+    try {
+      const d = new Date(rawAppt + (rawAppt.length === 10 ? 'T12:00:00Z' : ''))
+        .toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+      fmtAppt = metaTime ? `${d} at ${metaTime}` : d
+    } catch { fmtAppt = rawAppt }
   }
-  const action = ACTION_MAP[lead.status] ?? 'Review lead details and decide on next step.'
 
-  return { intent, urgency, budget, sentiment, action, signals }
+  // ── Intent narrative ──────────────────────────────────────────
+  // Target: "Asem is looking for a 2-bedroom villa in Dubai Marina, budget AED 3M."
+  //         "Klaudia is looking to rent a 2-room apartment in Kraków, budget 4500 PLN/month."
+
+  // Only use lead.interest when it's genuinely specific (not "real estate", "property", etc.)
+  const interestClean = isSpecificInterest(lead.interest) ? (lead.interest!.trim()) : null
+
+  // ── "what" noun phrase: [rooms] [rental] [type]
+  const whatTokens: string[] = []
+  if (rooms && rooms !== 'studio') whatTokens.push(rooms)
+  if (purpose === 'rent') whatTokens.push('rental')
+  if (purpose === 'buy')  whatTokens.push('for purchase')
+
+  // typeWord: prefer extracted propType over lead.interest (avoids "a real estate")
+  const typeWord = propType ?? interestClean ?? null
+  if (typeWord) whatTokens.push(typeWord)
+
+  const whatPhrase = rooms === 'studio'
+    ? 'a studio apartment'
+    : whatTokens.length > 0
+      ? `a ${whatTokens.join(' ')}`
+      : null   // no useful noun — use fallback path below
+
+  const locationPhrase = metaCity ? ` in ${metaCity}` : ''
+
+  // Spec as parenthetical — only when short and different from type/city
+  const specPhrase =
+    metaSpec &&
+    metaSpec.length <= 55 &&
+    metaSpec.toLowerCase() !== (propType ?? '').toLowerCase() &&
+    !(metaCity ?? '').toLowerCase().includes(metaSpec.toLowerCase())
+      ? ` (${metaSpec})`
+      : ''
+
+  const budgetPhrase = budget ? `, budget ${budget}${isMonthly ? '/month' : ''}` : ''
+
+  // We have enough to write a specific sentence
+  const hasStructuredData = whatPhrase || metaCity || budget || metaSpec
+  let intent: string
+
+  if (hasStructuredData) {
+    const lookingFor = whatPhrase ?? 'a property'
+    intent = `${firstName} is looking for ${lookingFor}${locationPhrase}${specPhrase}${budgetPhrase}.`
+
+    // Append appointment inline
+    if (fmtAppt) {
+      intent += ` Viewing booked for ${fmtAppt}.`
+    } else if (lead.status === 'demo_booked') {
+      intent += ' Viewing/demo booked — see Timeline tab for date.'
+    }
+
+    // Preferred contact
+    if (metaPref) intent += ` Preferred contact: ${metaPref}.`
+
+    // Timeline (only if not already mentioned)
+    if (metaTline && !intent.includes(metaTline)) intent += ` Timeline: ${metaTline}.`
+  } else {
+    // No structured data from metadata — try the raw conversation text
+    const said =
+      extractFirstClientLine(clientText) ??   // client messages from DB/metadata
+      extractFirstClientLine(allText)          // any turn as last resort
+    if (said) {
+      intent = `${firstName} enquired: "${said.length > 130 ? said.slice(0, 128) + '…' : said}"`
+      if (fmtAppt) intent += ` Viewing booked for ${fmtAppt}.`
+      if (metaPref) intent += ` Preferred contact: ${metaPref}.`
+    } else {
+      // Truly nothing to go on — at least tell the agent what we know
+      const sourceStr = lead.source && !/^unknown$/i.test(lead.source) ? ` via ${lead.source}` : ''
+      const scoreStr  = ` (score ${lead.score})`
+      intent = `${firstName} submitted an enquiry${sourceStr}${scoreStr}. No conversation details captured — open the Chat tab to review.`
+    }
+  }
+
+  // ── Verbatim quote (only if it adds context beyond the narrative) ──
+  // Prefer meta.message → meta.initial_message → first client line in any text
+  const rawMsg =
+    (typeof meta.message         === 'string' && meta.message.trim().length >= 15         ? meta.message.trim()         : null) ??
+    (typeof meta.initial_message === 'string' && meta.initial_message.trim().length >= 15 ? meta.initial_message.trim() : null) ??
+    extractFirstClientLine(clientText) ??   // from live DB messages
+    extractFirstClientLine(convText)        // from metadata transcript
+  let firstClientMessage: string | null = null
+  if (rawMsg) {
+    const capped = rawMsg.length > 210 ? rawMsg.slice(0, 208) + '…' : rawMsg
+    // Don't show the quote if its opening words already appear in the intent
+    const alreadyCovered = intent.toLowerCase().includes(rawMsg.slice(0, 22).toLowerCase())
+    firstClientMessage = alreadyCovered ? null : capped
+  }
+
+  // ── Appointment note (amber row in the card) ──────────────────
+  const appointmentNote: string | null = fmtAppt
+    ? `Viewing / appointment: ${fmtAppt}`
+    : lead.status === 'demo_booked' ? 'Demo booked — check Timeline tab for exact time' : null
+
+  // ── Signals chips ─────────────────────────────────────────────
+  const signals: string[] = []
+  if (budget)                               signals.push(`Budget: ${budget}${isMonthly ? '/mo' : ''}`)
+  if (metaCity)                             signals.push(`Location: ${metaCity}`)
+  if (propType)                             signals.push(`Type: ${propType}`)
+  if (rooms)                                signals.push(`Size: ${rooms}`)
+  if (metaSpec && metaSpec.length <= 40)    signals.push(`Spec: ${metaSpec}`)
+  if (metaPref)                             signals.push(`Contact: ${metaPref}`)
+  if (metaTline)                            signals.push(`Timeline: ${metaTline}`)
+  if (lead.source && !/^unknown$/i.test(lead.source)) signals.push(`Via: ${lead.source}`)
+
+  // ── Sentiment ─────────────────────────────────────────────────
+  let sentiment: AISummary['sentiment'] = 'neutral'
+  if (lead.status === 'won'  || lead.scoreLabel === 'hot')  sentiment = 'positive'
+  if (lead.status === 'lost')                                sentiment = 'negative'
+  if (lead.scoreLabel === 'warm' && lead.status !== 'lost') sentiment = 'positive'
+  if (/\b(great|perfect|love|excellent|amazing|interested|definitely|yes please|sounds good)\b/i.test(searchText)) sentiment = 'positive'
+  if (/\b(not interested|no thanks|too expensive|cancel|stop|unsubscribe)\b/i.test(searchText))                     sentiment = 'negative'
+
+  // ── Recommended next action (real-estate specific) ────────────
+  let action: string
+  if (lead.status === 'lost') {
+    action = `Re-engage ${firstName} in 30 days — monitor new listings matching their criteria and send a curated shortlist.`
+  } else if (lead.status === 'won') {
+    action = `Send ${firstName} the tenancy agreement or purchase contract. Confirm move-in date and arrange key handover.`
+  } else if (fmtAppt || lead.status === 'demo_booked') {
+    action = `Prepare 2–3 matching listings for ${firstName}'s viewing. Confirm the appointment 24 h before and send property previews.`
+  } else if (lead.status === 'contacted') {
+    action = `Follow up with ${firstName} on listings sent. Offer a viewing slot this week — re-confirm budget and location preferences.`
+  } else {
+    // new lead — tell agent exactly what is missing
+    const missing: string[] = []
+    if (!budget)   missing.push('budget')
+    if (!metaCity) missing.push('preferred area')
+    if (!rooms)    missing.push('size requirements')
+    const qualify = missing.length > 0 ? ` Qualify: ${missing.join(', ')}.` : ''
+    action = `Call ${firstName} within 2 hours.${qualify} Send 2–3 matching listings immediately.`
+  }
+
+  return {
+    intent, urgency, urgencyReason, budget, sentiment,
+    action, signals, firstClientMessage, appointmentNote,
+  }
 }
 
 /* ─── Sub-components ─────────────────────────────────────────── */
@@ -552,10 +822,23 @@ export default function LeadPanel({
     return () => window.removeEventListener('keydown', h)
   }, [onClose])
 
-  /* ── AI Summary ────────────────────────────────────────────── */
-  const ai = generateAISummary({ ...lead, status: localStatus })
+  /* ── AI Summary — recomputes whenever messages load or lead updates ── */
+  const firstUpcomingAppt = leadAppts.find(a => a.status === 'confirmed' || a.status === 'pending')
+  const ai = useMemo(() => {
+    const liveText = displayMessages.map(m => m.content).join('\n')
+    const result = generateAISummary(
+      { ...lead, status: localStatus },
+      firstUpcomingAppt?.date,
+      liveText || undefined,
+    )
+    // DEBUG — remove after confirming render path
+    console.log('[LeadPanel] ai.intent =', result.intent)
+    console.log('[LeadPanel] lead.interest =', lead.interest, '| lead.metadata =', lead.metadata)
+    // TEMP HARDCODE — if UI shows this string, this useMemo IS the render path
+    result.intent = 'TEST SUMMARY WORKS'
+    return result
+  }, [lead, localStatus, firstUpcomingAppt?.date, displayMessages])
   const urgencyColor = ai.urgency === 'high' ? '#f87171' : ai.urgency === 'medium' ? '#fbbf24' : '#60a5fa'
-  const sentimentIcon = ai.sentiment === 'positive' ? ThumbsUp : ai.sentiment === 'negative' ? AlertTriangle : Target
 
   /* ── Custom metadata table (excludes surfaced keys) ────────── */
   const metaEntries = Object.entries(meta).filter(([k]) => !SURFACED_META_KEYS.has(k))
@@ -720,20 +1003,46 @@ export default function LeadPanel({
               {/* AI Summary */}
               <div className="rounded-2xl p-4 flex flex-col gap-3"
                 style={{ background:'rgba(139,92,246,0.07)', border:'1px solid rgba(139,92,246,0.18)' }}>
+
+                {/* Header */}
                 <div className="flex items-center gap-2">
                   <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0"
                     style={{ background:'rgba(139,92,246,0.2)' }}>
                     <Bot className="w-3.5 h-3.5 text-violet-400" />
                   </div>
                   <span className="text-[10px] font-bold uppercase tracking-widest text-violet-400/70">AI Analysis</span>
-                  {/* Urgency badge */}
                   <span className="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded-full capitalize"
                     style={{ background:`${urgencyColor}20`, color:urgencyColor, border:`1px solid ${urgencyColor}30` }}>
-                    {ai.urgency} urgency
+                    {ai.urgency} · {ai.urgencyReason}
                   </span>
                 </div>
-                <div className="text-xs text-white/70 leading-relaxed">{ai.intent}</div>
-                {/* Signals */}
+
+                {/* Intent narrative — DEBUG: check console for source trace */}
+                <div className="text-xs text-white/75 leading-relaxed font-medium">
+                  {ai.intent}
+                </div>
+
+                {/* First client message — verbatim quote */}
+                {ai.firstClientMessage && (
+                  <div className="flex items-start gap-2 px-3 py-2 rounded-xl"
+                    style={{ background:'rgba(255,255,255,0.03)', borderLeft:'2px solid rgba(139,92,246,0.35)' }}>
+                    <MessageCircle className="w-3 h-3 text-violet-400/40 flex-shrink-0 mt-0.5" />
+                    <p className="text-[11px] text-white/50 leading-relaxed italic">
+                      &ldquo;{ai.firstClientMessage}&rdquo;
+                    </p>
+                  </div>
+                )}
+
+                {/* Appointment note */}
+                {ai.appointmentNote && (
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl"
+                    style={{ background:'rgba(251,191,36,0.06)', border:'1px solid rgba(251,191,36,0.15)' }}>
+                    <Calendar className="w-3 h-3 text-amber-400/60 flex-shrink-0" />
+                    <span className="text-[11px] text-amber-400/70 font-medium">{ai.appointmentNote}</span>
+                  </div>
+                )}
+
+                {/* Signals chips */}
                 {ai.signals.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
                     {ai.signals.map(s => (
@@ -744,6 +1053,7 @@ export default function LeadPanel({
                     ))}
                   </div>
                 )}
+
                 {/* Recommended action */}
                 <div className="flex items-start gap-2 pt-2" style={{ borderTop:'1px solid rgba(139,92,246,0.15)' }}>
                   <Lightbulb className="w-3.5 h-3.5 text-amber-400/70 flex-shrink-0 mt-0.5" />
@@ -779,7 +1089,8 @@ export default function LeadPanel({
               <div className="rounded-2xl overflow-hidden" style={{ border:'1px solid rgba(255,255,255,0.07)' }}>
                 {[
                   { label:'Source',   value: lead.source },
-                  { label:'Interest', value: lead.interest },
+                  // Only show Interest when it's specific — never show "General business enquiry" etc.
+                  { label:'Interest', value: isSpecificInterest(lead.interest) ? lead.interest : '' },
                   { label:'Agent',    value: lead.assignedAgent },
                   { label:'Added',    value: fmtDate(lead.date) },
                 ].filter(r => r.value).map((row, i, arr) => (

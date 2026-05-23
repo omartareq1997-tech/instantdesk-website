@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useEffect, useLayoutEffect, useCallback, type Dispatch, type SetStateAction } from 'react'
+import { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef, type Dispatch, type SetStateAction } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Zap, LayoutDashboard, Users, Calendar, Settings, LogOut,
@@ -8,7 +8,7 @@ import {
   Clock, Search, X, BarChart2, MessageCircle, Database,
   Activity, RefreshCw, Bell, Shield, Link2, Download, Target,
   DollarSign, Timer, Menu, ChevronLeft, ChevronRight, LineChart, BellDot,
-  MessageSquare, SlidersHorizontal,
+  MessageSquare, SlidersHorizontal, Volume2, VolumeX,
 } from 'lucide-react'
 import LeadPanel from './LeadPanel'
 import AnalyticsSection from './AnalyticsSection'
@@ -42,12 +42,13 @@ interface Notification { id: string; type: NotifType; text: string; sub: string;
 
 interface ToastItem {
   id:         string
-  type:       'lead' | 'appointment'
+  type:       'lead' | 'appointment' | 'hint'
   title:      string
   sub:        string
   badge:      string
   badgeColor: string
   leadId?:    string
+  duration?:  number  // ms — defaults to 5500
 }
 
 /* ─── Mock Data ──────────────────────────────────────────────── */
@@ -1885,37 +1886,76 @@ function SettingsSection() {
   )
 }
 
-/* ─── Notification helpers ───────────────────────────────────── */
+/* ─── Audio system ───────────────────────────────────────────── */
 
-/** Synthesise a soft two-tone chime using the Web Audio API. */
-function playNotifSound(): void {
+/**
+ * Persistent AudioContext singleton.  Browsers require the context to be
+ * created AND resumed inside a user gesture before any audio will play.
+ * We create it once on first "Enable sound" click, then reuse it.
+ */
+let _audioCtx: AudioContext | null = null
+
+function getOrCreateAudioCtx(): AudioContext | null {
   try {
     const Ctx =
       window.AudioContext ??
       (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-    if (!Ctx) return
-    const ctx = new Ctx()
-    const now = ctx.currentTime
+    if (!Ctx) return null
+    if (!_audioCtx) _audioCtx = new Ctx()
+    return _audioCtx
+  } catch { return null }
+}
 
-    function chime(freq: number, start: number, dur: number, vol: number) {
-      const osc  = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.connect(gain)
-      gain.connect(ctx.destination)
+/**
+ * Must be called inside a click handler.
+ * Creates/resumes the context and plays a 1-frame silent buffer —
+ * the standard browser "gesture unlock" for Web Audio.
+ */
+async function unlockAudio(): Promise<boolean> {
+  try {
+    const ctx = getOrCreateAudioCtx()
+    if (!ctx) { console.log('[SOUND] blocked/error — AudioContext not supported'); return false }
+    if (ctx.state === 'suspended') await ctx.resume()
+    // Silent 1-frame buffer forces the browser to mark this context as unlocked
+    const buf = ctx.createBuffer(1, 1, ctx.sampleRate)
+    const src = ctx.createBufferSource()
+    src.buffer = buf
+    src.connect(ctx.destination)
+    src.start()
+    console.log('[SOUND] enabled')
+    return true
+  } catch (e) {
+    console.log('[SOUND] blocked/error', e)
+    return false
+  }
+}
+
+/** Play the two-tone chime.  Caller is responsible for checking soundEnabled. */
+function playChime(label = 'notification'): void {
+  const ctx = _audioCtx
+  if (!ctx || ctx.state !== 'running') {
+    console.log('[SOUND] blocked/error — AudioContext not running, state:', ctx?.state ?? 'null')
+    return
+  }
+  try {
+    console.log(`[SOUND] playing ${label}`)
+    const now = ctx.currentTime
+    function tone(freq: number, start: number, dur: number, vol: number) {
+      const osc  = ctx!.createOscillator()
+      const gain = ctx!.createGain()
+      osc.connect(gain); gain.connect(ctx!.destination)
       osc.type = 'sine'
       osc.frequency.setValueAtTime(freq, now + start)
       gain.gain.setValueAtTime(0.001, now + start)
-      gain.gain.linearRampToValueAtTime(vol, now + start + 0.02)
+      gain.gain.linearRampToValueAtTime(vol,   now + start + 0.02)
       gain.gain.exponentialRampToValueAtTime(0.001, now + start + dur)
-      osc.start(now + start)
-      osc.stop(now + start + dur + 0.06)
+      osc.start(now + start); osc.stop(now + start + dur + 0.06)
     }
-
-    chime(1047, 0,    0.40, 0.10)   // C6
-    chime(1319, 0.14, 0.45, 0.07)   // E6
-
-    setTimeout(() => ctx.close().catch(() => {}), 1200)
-  } catch { /* AudioContext blocked or not supported */ }
+    tone(1047, 0,    0.40, 0.10)   // C6
+    tone(1319, 0.14, 0.45, 0.07)   // E6
+  } catch (e) {
+    console.log('[SOUND] blocked/error', e)
+  }
 }
 
 /** Fire a native browser notification if permission has been granted. */
@@ -1936,12 +1976,12 @@ function ToastNotification({
   onOpen?: () => void
 }) {
   useEffect(() => {
-    const t = setTimeout(onClose, 5500)
+    const t = setTimeout(onClose, toast.duration ?? 5500)
     return () => clearTimeout(t)
-  }, [onClose])
+  }, [onClose, toast.duration])
 
-  const accent = toast.type === 'lead' ? '#a78bfa' : '#34d399'
-  const Icon   = toast.type === 'lead' ? Users : Calendar
+  const accent = toast.type === 'lead' ? '#a78bfa' : toast.type === 'appointment' ? '#34d399' : '#fbbf24'
+  const Icon   = toast.type === 'lead' ? Users   : toast.type === 'appointment' ? Calendar : Volume2
 
   return (
     <motion.div
@@ -2001,6 +2041,30 @@ function ToastNotification({
   )
 }
 
+/* ─── Sound toggle button ────────────────────────────────────── */
+
+function SoundToggle({ enabled, onEnable, onDisable }: {
+  enabled:   boolean
+  onEnable:  () => void
+  onDisable: () => void
+}) {
+  return (
+    <button
+      onClick={enabled ? onDisable : onEnable}
+      title={enabled ? 'Sound alerts on — click to mute' : 'Enable sound alerts for new leads'}
+      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
+      style={enabled ? {
+        background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)', color: '#34d399',
+      } : {
+        background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.35)',
+      }}>
+      {enabled
+        ? <><Volume2  className="w-3.5 h-3.5" /><span className="hidden sm:inline">Sound on</span></>
+        : <><VolumeX className="w-3.5 h-3.5" /><span className="hidden sm:inline">Enable sound</span></>}
+    </button>
+  )
+}
+
 /* ─── Hash persistence helpers ───────────────────────────────── */
 
 const VALID_SECTIONS = new Set<string>([
@@ -2023,6 +2087,12 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
   const [notifs,         setNotifs]         = useState<Notification[]>([])   // filled by realtime only
   const [toasts,         setToasts]         = useState<ToastItem[]>([])
+  const [soundEnabled,   setSoundEnabled]   = useState(false)
+
+  // Refs so realtime callbacks (closed over stale state) always see current values
+  const soundEnabledRef  = useRef(false)
+  soundEnabledRef.current = soundEnabled
+  const hintShownRef = useRef(false)  // show the "enable sound" hint only once per session
 
   // ── Live state (seeded from SSR, then kept fresh by Supabase Realtime)
   const [leads,       setLeads]       = useState<Lead[]>       (initialData?.leads ?? [])
@@ -2048,6 +2118,30 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
     pipeline:     leads.length,
     appointments: appointments.filter(a => a.upcoming).length || undefined,
   }), [leads, appointments])
+
+  // ── Sound: restore from localStorage on mount ─────────────────
+  useEffect(() => {
+    const stored = localStorage.getItem('sound_alerts') === 'true'
+    setSoundEnabled(stored)
+    soundEnabledRef.current = stored
+  }, [])
+
+  const handleEnableSound = useCallback(async () => {
+    const ok = await unlockAudio()
+    if (ok) {
+      setSoundEnabled(true)
+      soundEnabledRef.current = true
+      localStorage.setItem('sound_alerts', 'true')
+      playChime('confirmation')  // play immediately as feedback that sound works
+    }
+  }, [])
+
+  const handleDisableSound = useCallback(() => {
+    setSoundEnabled(false)
+    soundEnabledRef.current = false
+    localStorage.setItem('sound_alerts', 'false')
+    console.log('[SOUND] disabled')
+  }, [])
 
   // ── Supabase Realtime subscriptions ──────────────────────────
   useEffect(() => {
@@ -2090,8 +2184,25 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
             time: 'Just now',
           }, ...prev.slice(0, 19)])
 
-          // Sound (only on live INSERT, not on page load)
-          playNotifSound()
+          // Sound — only after user has clicked "Enable sound"
+          if (soundEnabledRef.current) {
+            playChime('lead alert')
+          } else {
+            console.log('[SOUND] blocked — sound alerts not enabled')
+            // Show the "enable sound" hint once per session
+            if (!hintShownRef.current) {
+              hintShownRef.current = true
+              setToasts(prev => [{
+                id:         crypto.randomUUID(),
+                type:       'hint' as const,
+                title:      'Enable sound alerts',
+                sub:        'Click "Enable sound" in the header to hear live notifications',
+                badge:      'Tip',
+                badgeColor: '#fbbf24',
+                duration:   8000,
+              }, ...prev.slice(0, 3)])
+            }
+          }
 
           // Browser notification
           sendBrowserNotif(
@@ -2146,6 +2257,9 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
             read: false,
             time: 'Just now',
           }, ...prev.slice(0, 19)])
+
+          // Sound
+          if (soundEnabledRef.current) playChime('appointment alert')
 
           // Browser notification
           sendBrowserNotif(
@@ -2238,6 +2352,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                 All systems live
               </div>
+              <SoundToggle enabled={soundEnabled} onEnable={handleEnableSound} onDisable={handleDisableSound} />
               <NotificationCenter notifs={notifs} setNotifs={setNotifs} />
               <button onClick={() => { window.location.href = '/client-login' }}
                 className="flex items-center gap-1.5 text-xs text-white/25 hover:text-red-400 transition-colors px-3 py-2 rounded-lg hover:bg-red-500/8">

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   X, Bot, Lightbulb, MessageCircle, Calendar, ArrowRight,
@@ -409,10 +409,9 @@ export default function LeadPanel({
   const [convLoading, setConvLoading] = useState(true)
   const [channelLabel,setChannelLabel]= useState<string | null>(null)
   const [convId,      setConvId]      = useState<string | null>(null)
-  const [fromMetadata,setFromMetadata]= useState(false)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesEndRef = useRef<HTMLDivElement | null>(null)
 
-  // Fetch messages on mount
+  // Fetch messages on mount — never mutates state during render
   useEffect(() => {
     setConvLoading(true); setMessages([]); setChannelLabel(null); setConvId(null)
     fetch(`/api/lead-messages?lead_id=${encodeURIComponent(lead.id)}`)
@@ -421,33 +420,32 @@ export default function LeadPanel({
         setMessages(d.messages ?? [])
         setChannelLabel(d.channel ?? null)
         setConvId(d.conversation_id ?? null)
-        setFromMetadata(false)
       })
       .catch(() => {})
       .finally(() => setConvLoading(false))
   }, [lead.id])
 
-  // Fallback: parse full_conversation from metadata
-  const rawText: string | null =
-    typeof meta.full_conversation === 'string' && meta.full_conversation.trim()
-      ? meta.full_conversation
-      : typeof meta.message === 'string' && meta.message.trim()
-        ? `Client: ${meta.message}`
-        : typeof meta.initial_message === 'string' && meta.initial_message.trim()
-          ? `Client: ${meta.initial_message}`
-          : null
+  // Derive transcript from metadata — memoised pure computation, zero side-effects
+  const rawText = useMemo<string | null>(() => {
+    if (typeof meta.full_conversation === 'string' && meta.full_conversation.trim())
+      return meta.full_conversation
+    if (typeof meta.message === 'string' && meta.message.trim())
+      return `Client: ${meta.message}`
+    if (typeof meta.initial_message === 'string' && meta.initial_message.trim())
+      return `Client: ${meta.initial_message}`
+    return null
+  }, [meta])
 
-  const displayMessages: ChatMessage[] = messages.length > 0
-    ? messages
-    : rawText
-      ? (() => {
-          const parsed = parseRawTranscript(rawText)
-          if (parsed.length > 0 && messages.length === 0) setFromMetadata(true)
-          return parsed
-        })()
-      : []
+  const parsedTranscript = useMemo(
+    () => (rawText ? parseRawTranscript(rawText) : []),
+    [rawText],
+  )
 
-  // Auto-scroll on new messages
+  // DB messages take priority; fall back to parsed metadata transcript
+  const displayMessages = messages.length > 0 ? messages : parsedTranscript
+  const fromMetadata    = messages.length === 0 && parsedTranscript.length > 0
+
+  // Auto-scroll to newest message when the conversation tab is open
   useEffect(() => {
     if (activeTab === 'conversation') {
       messagesEndRef.current?.scrollIntoView({ behavior:'smooth' })
@@ -641,28 +639,31 @@ export default function LeadPanel({
 
           {/* Quick actions */}
           <div className="px-4 sm:px-6 pb-3 flex flex-col gap-2">
-            {/* Communication */}
+            {/* Communication — buttons only, never <a href>, never navigates */}
             <div className="flex gap-2">
               {lead.phone && (
-                <a href={`tel:${lead.phone}`}
+                <button type="button"
+                  onClick={e => { e.stopPropagation(); window.open(`tel:${lead.phone}`) }}
                   className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all hover:opacity-90"
                   style={{ background:'rgba(52,211,153,0.10)', border:'1px solid rgba(52,211,153,0.2)', color:'#34d399' }}>
                   <Phone className="w-3.5 h-3.5" /> Call
-                </a>
+                </button>
               )}
               {lead.email && (
-                <a href={`mailto:${lead.email}`}
+                <button type="button"
+                  onClick={e => { e.stopPropagation(); window.open(`mailto:${lead.email}`) }}
                   className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all hover:opacity-90"
                   style={{ background:'rgba(96,165,250,0.10)', border:'1px solid rgba(96,165,250,0.2)', color:'#60a5fa' }}>
                   <Mail className="w-3.5 h-3.5" /> Email
-                </a>
+                </button>
               )}
               {lead.phone && (
-                <a href={`https://wa.me/${lead.phone.replace(/\D/g,'')}`} target="_blank" rel="noreferrer"
+                <button type="button"
+                  onClick={e => { e.stopPropagation(); window.open(`https://wa.me/${lead.phone!.replace(/\D/g,'')}`, '_blank', 'noopener,noreferrer') }}
                   className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all hover:opacity-90"
                   style={{ background:'rgba(52,211,153,0.10)', border:'1px solid rgba(52,211,153,0.2)', color:'#34d399' }}>
                   <MessageSquare className="w-3.5 h-3.5" /> WhatsApp
-                </a>
+                </button>
               )}
               {!lead.phone && !lead.email && (
                 <span className="text-xs text-white/25 py-2 px-3">No contact info</span>
@@ -670,22 +671,22 @@ export default function LeadPanel({
             </div>
             {/* Status actions */}
             <div className="flex gap-2">
-              <button onClick={() => markStatus('won')} disabled={updatingStatus || localStatus === 'won'}
+              <button type="button" onClick={e => { e.stopPropagation(); markStatus('won') }} disabled={updatingStatus || localStatus === 'won'}
                 className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all disabled:opacity-40"
                 style={{ background: localStatus==='won' ? 'rgba(52,211,153,0.20)' : 'rgba(52,211,153,0.08)', border:'1px solid rgba(52,211,153,0.25)', color:'#34d399' }}>
                 <CheckCircle className="w-3.5 h-3.5" /> Won
               </button>
-              <button onClick={() => markStatus('lost')} disabled={updatingStatus || localStatus === 'lost'}
+              <button type="button" onClick={e => { e.stopPropagation(); markStatus('lost') }} disabled={updatingStatus || localStatus === 'lost'}
                 className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all disabled:opacity-40"
                 style={{ background: localStatus==='lost' ? 'rgba(248,113,113,0.20)' : 'rgba(248,113,113,0.08)', border:'1px solid rgba(248,113,113,0.25)', color:'#f87171' }}>
                 <XCircle className="w-3.5 h-3.5" /> Lost
               </button>
-              <button onClick={() => markStatus('demo_booked')} disabled={updatingStatus || localStatus === 'demo_booked'}
+              <button type="button" onClick={e => { e.stopPropagation(); markStatus('demo_booked') }} disabled={updatingStatus || localStatus === 'demo_booked'}
                 className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all disabled:opacity-40"
                 style={{ background: localStatus==='demo_booked' ? 'rgba(251,191,36,0.20)' : 'rgba(251,191,36,0.08)', border:'1px solid rgba(251,191,36,0.25)', color:'#fbbf24' }}>
                 <Calendar className="w-3.5 h-3.5" /> Demo
               </button>
-              <button onClick={() => { setActiveTab('timeline'); setShowApptForm(v => !v) }}
+              <button type="button" onClick={e => { e.stopPropagation(); setActiveTab('timeline'); setShowApptForm(v => !v) }}
                 className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-semibold transition-all"
                 style={{ background:'rgba(167,139,250,0.08)', border:'1px solid rgba(167,139,250,0.25)', color:'#a78bfa' }}>
                 <Plus className="w-3.5 h-3.5" />
@@ -750,24 +751,26 @@ export default function LeadPanel({
                 </div>
               </div>
 
-              {/* Contact info */}
+              {/* Contact info — buttons only */}
               {(lead.phone || lead.email) && (
                 <div className="flex flex-col gap-2">
                   {lead.phone && (
-                    <a href={`tel:${lead.phone}`}
-                      className="flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors hover:bg-white/5"
+                    <button type="button"
+                      onClick={e => { e.stopPropagation(); window.open(`tel:${lead.phone}`) }}
+                      className="flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors hover:bg-white/5 w-full text-left"
                       style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)' }}>
                       <Phone className="w-3.5 h-3.5 text-emerald-400/70 flex-shrink-0" />
                       <span className="text-xs font-medium text-white/65">{lead.phone}</span>
-                    </a>
+                    </button>
                   )}
                   {lead.email && (
-                    <a href={`mailto:${lead.email}`}
-                      className="flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors hover:bg-white/5"
+                    <button type="button"
+                      onClick={e => { e.stopPropagation(); window.open(`mailto:${lead.email}`) }}
+                      className="flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors hover:bg-white/5 w-full text-left"
                       style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)' }}>
                       <Mail className="w-3.5 h-3.5 text-blue-400/70 flex-shrink-0" />
                       <span className="text-xs font-medium text-white/65 truncate">{lead.email}</span>
-                    </a>
+                    </button>
                   )}
                 </div>
               )}

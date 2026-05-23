@@ -453,6 +453,12 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Strip any date-like keys that could interfere with leads.created_at if a
+  // DB trigger or PostgREST policy reads them from the metadata JSONB.
+  delete enriched.created_at
+  delete enriched.date
+  delete enriched.updated_at
+
   const finalMetadata = Object.keys(enriched).length > 0 ? enriched : null
 
   /* 6. Supabase (service role — bypasses RLS) ──────────────────── */
@@ -473,8 +479,14 @@ export async function POST(req: NextRequest) {
         .eq('client_id', clientId).eq('email', email).maybeSingle()
 
       if (existing?.id) {
-        // Merge: preserve keys that weren't sent in this call
-        const prevMeta = (existing.metadata as Record<string, unknown> | null) ?? {}
+        // Merge: preserve keys that weren't sent in this call.
+        // Strip server-managed timestamp keys from prevMeta first — they must
+        // never re-enter metadata where a trigger could read them back.
+        const rawPrev = (existing.metadata as Record<string, unknown> | null) ?? {}
+        const prevMeta: Record<string, unknown> = { ...rawPrev }
+        delete prevMeta.created_at
+        delete prevMeta.date
+        delete prevMeta.updated_at
         const mergedMeta = finalMetadata
           ? { ...prevMeta, ...finalMetadata }   // new keys win
           : prevMeta
@@ -554,26 +566,30 @@ export async function POST(req: NextRequest) {
       const apptType = body.appointment_type?.trim() || 'demo_call'
 
       // Check for an existing appointment for this lead with the same slot + type.
-      // Minute-level comparison avoids duplicates from minor ISO formatting differences.
+      // Use .limit(1) instead of .maybeSingle() — if duplicates already exist in
+      // the DB, .maybeSingle() returns an error (caught below) and we'd insert
+      // yet another duplicate. .limit(1) always succeeds and returns the first row.
       const scheduledMinute = new Date(body.appointment_date).toISOString().slice(0, 16)
-      const { data: existing } = await sb
+      const { data: apptRows } = await sb
         .from('appointments')
         .select('id')
         .eq('lead_id', leadId)
         .eq('type', apptType)
         .gte('scheduled_at', scheduledMinute + ':00Z')
         .lt('scheduled_at',  scheduledMinute + ':59Z')
-        .maybeSingle()
+        .limit(1)
 
-      if (existing?.id) {
+      const existingAppt = Array.isArray(apptRows) && apptRows.length > 0 ? apptRows[0] : null
+
+      if (existingAppt?.id) {
         // Same slot already booked — update in place, never duplicate.
         await sb.from('appointments').update({
           lead_name:    name,
           lead_company: company,
           scheduled_at: body.appointment_date,
           status:       'pending',
-        }).eq('id', existing.id)
-        appointmentId = existing.id
+        }).eq('id', existingAppt.id)
+        appointmentId = existingAppt.id
         isNewAppt     = false
       } else {
         const { data: appt, error: apptErr } = await sb.from('appointments').insert({

@@ -667,15 +667,25 @@ export default function LeadPanel({
   const scoreCfg  = SCORE_CFG[lead.scoreLabel]
   const meta      = lead.metadata ?? {}
 
-  // Filter appointments linked to this lead
-  const leadAppts = (appointments ?? [])
-    .filter(a => a.leadId === lead.id)
-    .sort((a, b) => {
-      const aA = a.status !== 'completed' && a.status !== 'cancelled'
-      const bA = b.status !== 'completed' && b.status !== 'cancelled'
-      if (aA && !bA) return -1; if (!aA && bA) return 1
-      return `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`)
-    })
+  // Filter, deduplicate, then sort appointments linked to this lead.
+  // Primary dedup key: id (UUID). Fallback: date+time+type composite.
+  const leadAppts = (() => {
+    const seen = new Set<string>()
+    return (appointments ?? [])
+      .filter(a => {
+        if (a.leadId !== lead.id) return false
+        const key = a.id || `${a.date}|${a.time}|${a.type}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+      .sort((a, b) => {
+        const aA = a.status !== 'completed' && a.status !== 'cancelled'
+        const bA = b.status !== 'completed' && b.status !== 'cancelled'
+        if (aA && !bA) return -1; if (!aA && bA) return 1
+        return `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`)
+      })
+  })()
 
   /* ── Tab ───────────────────────────────────────────────────── */
   const [activeTab, setActiveTab] = useState<TabId>('overview')

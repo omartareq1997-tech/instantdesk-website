@@ -1544,61 +1544,63 @@ function AppointmentsSection({
           </div>
         </div>
 
-        {/* ── 7-day grid — scrolls horizontally on mobile, full-width on desktop ── */}
-        <div className="overflow-x-auto -mx-4 sm:mx-0 pb-2 sm:pb-0">
-          <div className="grid grid-cols-7 gap-3 px-4 sm:px-0" style={{ minWidth: 700 }}>
-            {viewDays.map(day => {
-              const dayAppts = appointments.filter(a => a.date === day.iso)
-              return (
-                <Card key={day.iso} className={day.today ? 'ring-1 ring-violet-500/25' : ''}>
-                  {/* Day header */}
-                  <div className="flex items-center justify-between px-3 py-3"
-                    style={{
-                      borderBottom: dayAppts.length ? '1px solid rgba(255,255,255,0.07)' : 'none',
-                      background:   day.today ? 'rgba(139,92,246,0.07)' : 'transparent',
-                    }}>
-                    <div>
-                      <div className="text-xs font-black text-white/70 uppercase tracking-wide">{day.label}</div>
-                      <div className="text-[10px] text-white/35 mt-0.5 leading-tight">{day.dateNum}</div>
-                    </div>
-                    {day.today && (
-                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
-                        style={{ background:'rgba(139,92,246,0.22)', color:'#c4b5fd', border:'1px solid rgba(139,92,246,0.35)' }}>
-                        TODAY
-                      </span>
-                    )}
+        {/* ── 7-day grid
+              mobile  : 3 cols × 3 rows — each card is wide enough to read
+              tablet  : 4 cols × 2 rows
+              desktop : 7 cols × 1 row  (unchanged from previous desktop commit)
+        ── */}
+        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+          {viewDays.map(day => {
+            const dayAppts = appointments.filter(a => a.date === day.iso)
+            return (
+              <Card key={day.iso} className={day.today ? 'ring-1 ring-violet-500/25' : ''}>
+                {/* Day header */}
+                <div className="flex items-center justify-between px-3 py-3"
+                  style={{
+                    borderBottom: dayAppts.length ? '1px solid rgba(255,255,255,0.07)' : 'none',
+                    background:   day.today ? 'rgba(139,92,246,0.07)' : 'transparent',
+                  }}>
+                  <div>
+                    <div className="text-xs font-black text-white/70 uppercase tracking-wide">{day.label}</div>
+                    <div className="text-[10px] text-white/35 mt-0.5 leading-tight">{day.dateNum}</div>
                   </div>
-
-                  {/* Appointment cards / empty state */}
-                  {dayAppts.length > 0 ? (
-                    <div className="p-2 flex flex-col gap-2">
-                      {dayAppts.map(appt => {
-                        const sc = APPT_CFG[appt.status]
-                        return (
-                          <motion.button key={appt.id}
-                            whileHover={{ scale:1.02, boxShadow:`0 6px 16px ${sc.color}20` }}
-                            whileTap={{ scale:0.98 }}
-                            onClick={() => handleApptClick(appt)}
-                            className="rounded-xl p-3 w-full text-left cursor-pointer"
-                            style={{ background:`${sc.color}10`, border:`1px solid ${sc.color}28` }}>
-                            <div className="text-xs font-bold text-white/85 leading-snug truncate">{appt.name}</div>
-                            <div className="text-[10px] text-white/45 mt-1 truncate">{appt.type}</div>
-                            <div className="flex items-center gap-1.5 text-[10px] text-white/35 mt-1.5">
-                              <Clock className="w-3 h-3 flex-shrink-0" />{appt.time}
-                            </div>
-                          </motion.button>
-                        )
-                      })}
-                    </div>
-                  ) : (
-                    <div className="py-8 text-center">
-                      <div className="text-[10px] text-white/15 font-medium">Free</div>
-                    </div>
+                  {day.today && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+                      style={{ background:'rgba(139,92,246,0.22)', color:'#c4b5fd', border:'1px solid rgba(139,92,246,0.35)' }}>
+                      TODAY
+                    </span>
                   )}
-                </Card>
-              )
-            })}
-          </div>
+                </div>
+
+                {/* Appointment cards / empty state */}
+                {dayAppts.length > 0 ? (
+                  <div className="p-2 flex flex-col gap-2">
+                    {dayAppts.map(appt => {
+                      const sc = APPT_CFG[appt.status]
+                      return (
+                        <motion.button key={appt.id}
+                          whileHover={{ scale:1.02, boxShadow:`0 6px 16px ${sc.color}20` }}
+                          whileTap={{ scale:0.98 }}
+                          onClick={() => handleApptClick(appt)}
+                          className="rounded-xl p-3 w-full text-left cursor-pointer"
+                          style={{ background:`${sc.color}10`, border:`1px solid ${sc.color}28` }}>
+                          <div className="text-xs font-bold text-white/85 leading-snug truncate">{appt.name}</div>
+                          <div className="text-[10px] text-white/45 mt-1 truncate">{appt.type}</div>
+                          <div className="flex items-center gap-1.5 text-[10px] text-white/35 mt-1.5">
+                            <Clock className="w-3 h-3 flex-shrink-0" />{appt.time}
+                          </div>
+                        </motion.button>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="py-8 text-center">
+                    <div className="text-[10px] text-white/15 font-medium">Free</div>
+                  </div>
+                )}
+              </Card>
+            )
+          })}
         </div>
 
         {/* ── Upcoming list ───────────────────────────────────── */}

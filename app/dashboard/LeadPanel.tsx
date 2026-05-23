@@ -686,15 +686,16 @@ function ApptCard({
 
 export default function LeadPanel({
   lead, appointments, onClose,
-  onLeadDeleted, onLeadUpdated, onApptDeleted, onApptUpdated,
+  onLeadDeleted, onLeadUpdated, onApptDeleted, onApptUpdated, onAddAppointment,
 }: {
   lead:          Lead
   appointments?: ApptSummary[]
   onClose:       () => void
-  onLeadDeleted?: (id: string) => void
-  onLeadUpdated?: (patch: { id:string; name:string; company:string; email?:string; phone?:string; source:string; score:number }) => void
-  onApptDeleted?: (apptId: string) => void
-  onApptUpdated?: (patch: { id:string; type:string; date:string; time:string; status:ApptStatus; notes?:string; leadId?:string }) => void
+  onLeadDeleted?:    (id: string) => void
+  onLeadUpdated?:    (patch: { id:string; name:string; company:string; email?:string; phone?:string; source:string; score:number }) => void
+  onApptDeleted?:    (apptId: string) => void
+  onApptUpdated?:    (patch: { id:string; type:string; date:string; time:string; status:ApptStatus; notes?:string; leadId?:string }) => void
+  onAddAppointment?: (leadId: string) => void
 }) {
   const statusCfg = STATUS_CFG[lead.status]
   const scoreCfg  = SCORE_CFG[lead.scoreLabel]
@@ -1141,9 +1142,18 @@ export default function LeadPanel({
                 style={{ background: localStatus==='demo_booked' ? 'rgba(251,191,36,0.20)' : 'rgba(251,191,36,0.08)', border:'1px solid rgba(251,191,36,0.25)', color:'#fbbf24' }}>
                 <Calendar className="w-3.5 h-3.5" /> Demo
               </button>
-              <button type="button" onClick={e => { e.stopPropagation(); setActiveTab('timeline'); setShowApptForm(v => !v) }}
+              <button type="button"
+                onClick={e => {
+                  e.stopPropagation()
+                  if (onAddAppointment) {
+                    onAddAppointment(lead.id)
+                  } else {
+                    setActiveTab('timeline')
+                    setShowApptForm(v => !v)
+                  }
+                }}
                 className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-semibold transition-all"
-                style={{ background:'rgba(167,139,250,0.08)', border:'1px solid rgba(167,139,250,0.25)', color:'#a78bfa' }}>
+                style={{ background:'rgba(52,211,153,0.08)', border:'1px solid rgba(52,211,153,0.22)', color:'#34d399' }}>
                 <Plus className="w-3.5 h-3.5" />
               </button>
             </div>

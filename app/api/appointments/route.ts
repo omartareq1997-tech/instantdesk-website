@@ -46,11 +46,18 @@ export async function POST(req: NextRequest) {
       status,
       lead_name:    typeof body.lead_name    === 'string' ? body.lead_name.trim()    : null,
       lead_company: typeof body.lead_company === 'string' ? body.lead_company.trim() : null,
-      notes:        typeof body.notes        === 'string' ? body.notes.trim()        : null,
     }
 
+    // Only include lead_id when present — FK constraint requires a real UUID
     if (typeof body.lead_id === 'string' && body.lead_id.trim()) {
       insertPayload.lead_id = body.lead_id.trim()
+    }
+
+    // Only include notes when the column exists and the value is non-empty.
+    // The notes column is added via: ALTER TABLE appointments ADD COLUMN notes TEXT;
+    // Omitting it when empty avoids a "column does not exist" error on older schemas.
+    if (typeof body.notes === 'string' && body.notes.trim()) {
+      insertPayload.notes = body.notes.trim()
     }
 
     const sb = createAdminClient()
@@ -60,11 +67,24 @@ export async function POST(req: NextRequest) {
       .select('*')
       .single()
 
-    if (error) throw error
+    if (error) {
+      console.error('[POST /api/appointments] Supabase error:', {
+        message: error.message,
+        code:    error.code,
+        details: error.details,
+        hint:    error.hint,
+        payload: insertPayload,
+      })
+      return NextResponse.json(
+        { error: error.message || 'Failed to create appointment', code: error.code, hint: error.hint },
+        { status: 500 },
+      )
+    }
 
     return NextResponse.json({ appointment: data }, { status: 201 })
   } catch (err) {
-    console.error('[POST /api/appointments]', err)
-    return NextResponse.json({ error: 'Failed to create appointment' }, { status: 500 })
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[POST /api/appointments] Unexpected error:', msg)
+    return NextResponse.json({ error: msg || 'Failed to create appointment' }, { status: 500 })
   }
 }

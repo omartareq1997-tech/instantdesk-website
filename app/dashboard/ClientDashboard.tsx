@@ -8,9 +8,11 @@ import {
   Clock, Search, X, BarChart2, MessageCircle, Database,
   Activity, RefreshCw, Bell, Shield, Link2, Download, Target,
   DollarSign, Timer, Menu, ChevronLeft, ChevronRight, LineChart, BellDot,
-  MessageSquare, SlidersHorizontal, Volume2, VolumeX, ArrowUpDown,
+  MessageSquare, SlidersHorizontal, Volume2, VolumeX, ArrowUpDown, Plus,
 } from 'lucide-react'
 import LeadPanel from './LeadPanel'
+import AddLeadModal from './AddLeadModal'
+import AddAppointmentModal from './AddAppointmentModal'
 import AnalyticsSection from './AnalyticsSection'
 import ApptDrawer, { type DrawerAppointment } from './ApptDrawer'
 import type { DashboardData, IntegrationRow, OverviewMetrics } from './types'
@@ -972,7 +974,7 @@ function FilterPanel({
 
 /* ─── Pipeline ───────────────────────────────────────────────── */
 
-function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>() }: { onSelectLead:(id:string)=>void; leads:Lead[]; newLeadIds?: Set<string> }) {
+function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), onAddLead }: { onSelectLead:(id:string)=>void; leads:Lead[]; newLeadIds?: Set<string>; onAddLead?: () => void }) {
   // v2 — sort feature active. Check browser console for this log to confirm latest build.
   console.log('[PipelineSection] sort feature v2 loaded, leads:', leads.length)
   const [search,     setSearch]     = useState('')
@@ -1025,7 +1027,16 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>() }
         <h2 className="text-sm font-bold text-white">
           Lead Pipeline <span className="font-normal text-white/30">({filtered.length})</span>
         </h2>
-        <ExportButton />
+        <div className="flex items-center gap-2">
+          {onAddLead && (
+            <button onClick={onAddLead}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
+              style={{ background:'rgba(167,139,250,0.12)', border:'1px solid rgba(167,139,250,0.3)', color:'#c4b5fd' }}>
+              <Plus className="w-3.5 h-3.5" />Add Lead
+            </button>
+          )}
+          <ExportButton />
+        </div>
       </div>
 
       {/* Search + Filter bar */}
@@ -1553,12 +1564,13 @@ function WeekDatePicker({
 /* ─── Appointments ───────────────────────────────────────────── */
 
 function AppointmentsSection({
-  appointments, leads, onSelectLead, onApptUpdated,
+  appointments, leads, onSelectLead, onApptUpdated, onAddAppointment,
 }: {
-  appointments:   Appointment[]
-  leads:          Lead[]
-  onSelectLead:   (id: string) => void
-  onApptUpdated?: (patch: { id:string; type:string; date:string; time:string; status:ApptStatus; notes?:string; leadId?:string }) => void
+  appointments:     Appointment[]
+  leads:            Lead[]
+  onSelectLead:     (id: string) => void
+  onApptUpdated?:   (patch: { id:string; type:string; date:string; time:string; status:ApptStatus; notes?:string; leadId?:string }) => void
+  onAddAppointment?: () => void
 }) {
   const [dayOffset,    setDayOffset]    = useState(0)       // offset in days from today
   const [selectedAppt, setSelectedAppt] = useState<DrawerAppointment | null>(null)
@@ -1683,6 +1695,13 @@ function AppointmentsSection({
               style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)' }}>
               <ChevronRight className="w-4 h-4" />
             </button>
+            {onAddAppointment && (
+              <button onClick={onAddAppointment}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
+                style={{ background:'rgba(52,211,153,0.10)', border:'1px solid rgba(52,211,153,0.25)', color:'#34d399' }}>
+                <Plus className="w-3.5 h-3.5" /><span className="hidden sm:inline">Add Appointment</span><span className="sm:hidden">Add</span>
+              </button>
+            )}
             <ExportButton />
           </div>
         </div>
@@ -2313,6 +2332,29 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
       return { ...a, type:patch.type, date:patch.date, time:patch.time, status:patch.status, notes:patch.notes, upcoming:dt > new Date() }
     }))
   }, [])
+
+  // ── Manual create callbacks (optimistic — dedup guards in Realtime handlers)
+  const [showAddLead,          setShowAddLead]          = useState(false)
+  const [showAddAppt,          setShowAddAppt]          = useState(false)
+  const [addApptDefaultLeadId, setAddApptDefaultLeadId] = useState<string | undefined>()
+
+  const handleLeadCreated = useCallback((raw: Record<string, unknown>) => {
+    const lead = mapLeadRow(raw as unknown as RawLeadRow)
+    setLeads(prev => [lead, ...prev])
+    setNewLeadIds(prev => new Set([...prev, lead.id]))
+    setTimeout(() => setNewLeadIds(prev => { const s = new Set(prev); s.delete(lead.id); return s }), 4000)
+  }, [])
+
+  const handleApptCreated = useCallback((raw: Record<string, unknown>) => {
+    const appt = mapAppointmentRow(raw as unknown as RawAppointmentRow)
+    setAppointments(prev => prev.some(a => a.id === appt.id) ? prev : [appt, ...prev])
+  }, [])
+
+  const openAddAppt = useCallback((defaultLeadId?: string) => {
+    setAddApptDefaultLeadId(defaultLeadId)
+    setShowAddAppt(true)
+  }, [])
+
   // section is null pre-mount; fall back to 'overview' only for the meta title
   const meta             = SECTION_META[section ?? 'overview']
 
@@ -2374,7 +2416,8 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
         { event: 'INSERT', schema: 'public', table: 'leads', filter: `client_id=eq.${CLIENT_ID}` },
         (payload) => {
           const lead = mapLeadRow(payload.new as RawLeadRow)
-          setLeads(prev => [lead, ...prev])
+          // Guard against duplicate if optimistic update already added this lead
+          setLeads(prev => prev.some(l => l.id === lead.id) ? prev : [lead, ...prev])
           setNewLeadIds(prev => new Set([...prev, lead.id]))
           setTimeout(() => setNewLeadIds(prev => { const s = new Set(prev); s.delete(lead.id); return s }), 4000)
 
@@ -2453,7 +2496,8 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
         { event: 'INSERT', schema: 'public', table: 'appointments', filter: `client_id=eq.${CLIENT_ID}` },
         (payload) => {
           const appt = mapAppointmentRow(payload.new as RawAppointmentRow)
-          setAppointments(prev => [...prev, appt])
+          // Guard against duplicate if optimistic update already added this appointment
+          setAppointments(prev => prev.some(a => a.id === appt.id) ? prev : [...prev, appt])
 
           // Toast
           setToasts(prev => [{
@@ -2611,9 +2655,9 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
                 transition={{ duration:0.22 }}>
                 {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={leads} appointments={appointments} activity={activityFeed} overviewMetrics={overviewMetrics} />}
                 {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} />}
-                {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={leads} newLeadIds={newLeadIds} />}
+                {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={leads} newLeadIds={newLeadIds} onAddLead={() => setShowAddLead(true)} />}
                 {section==='activity'     && <ActivitySection feed={activityFeed} />}
-                {section==='appointments' && <AppointmentsSection appointments={appointments} leads={leads} onSelectLead={handleSelectLead} onApptUpdated={handleApptUpdated} />}
+                {section==='appointments' && <AppointmentsSection appointments={appointments} leads={leads} onSelectLead={handleSelectLead} onApptUpdated={handleApptUpdated} onAddAppointment={() => openAddAppt()} />}
                 {section==='automation'   && <AutomationSection leads={leads} integrations={integrations} overviewMetrics={overviewMetrics} />}
                 {section==='settings'     && <SettingsSection />}
               </motion.div>
@@ -2634,6 +2678,27 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
             onLeadUpdated={handleLeadUpdated}
             onApptDeleted={handleApptDeleted}
             onApptUpdated={handleApptUpdated}
+            onAddAppointment={(leadId) => openAddAppt(leadId)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Add Lead / Add Appointment modals */}
+      <AnimatePresence>
+        {showAddLead && (
+          <AddLeadModal
+            onClose={() => setShowAddLead(false)}
+            onCreated={handleLeadCreated}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showAddAppt && (
+          <AddAppointmentModal
+            leads={leads}
+            defaultLeadId={addApptDefaultLeadId}
+            onClose={() => setShowAddAppt(false)}
+            onCreated={handleApptCreated}
           />
         )}
       </AnimatePresence>

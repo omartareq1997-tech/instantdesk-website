@@ -202,6 +202,50 @@ function conversationSides(text: string): { hasClient: boolean; hasBot: boolean;
   return { hasClient, hasBot, labeled: hasClient || hasBot }
 }
 
+/* ── Conversation normaliser ─────────────────────────────────────────
+ *
+ * Problem: AI extraction tools (OpenAI, Claude via Make.com, etc.) often
+ * return full_conversation as one long inline string:
+ *
+ *   "Client: Hi, I need a flat. Bot: Sure! Client: Near the city centre."
+ *
+ * The balance check above splits by \n before testing each line, so an
+ * inline string only presents ONE line — meaning the Bot label in the
+ * middle of that line is invisible and the check falsely rejects the body.
+ *
+ * This function inserts a \n before every speaker label that follows
+ * non-newline content, turning the inline string into:
+ *
+ *   "Client: Hi, I need a flat.\nBot: Sure!\nClient: Near the city centre."
+ *
+ * HTML transcripts are left untouched — class-based detection handles those.
+ * Already-formatted text (has newline before a label) is returned as-is.
+ * ──────────────────────────────────────────────────────────────────── */
+
+const _ALL_SPEAKERS = /client|bot|user|visitor|assistant|ai|human|lead|customer|sender|reply|support|rep|operator|staff|agent/i
+
+function normalizeConversation(raw: string): string {
+  const text = raw.trim()
+  if (!text) return text
+
+  // HTML — don't reformat; class-based detection in LeadPanel handles it
+  if (/<[a-z][\s\S]{0,200}?>/i.test(text)) return text
+
+  // Already newline-separated — at least one label starts after a newline
+  if (/\n[ \t]*(?:client|bot|user|visitor|assistant|ai|human|lead|customer|sender|reply|support|rep|operator|staff|agent)\s*:/i.test(text)) {
+    return text
+  }
+
+  // Inline: insert \n before every speaker label that follows non-newline content.
+  // Matches: (word/punct char)(whitespace)(SpeakerLabel:) → $1\n$2
+  const normalized = text.replace(
+    /(\S)\s+((?:client|bot|user|visitor|assistant|ai|human|lead|customer|sender|reply|support|rep|operator|staff|agent)\s*:)/gi,
+    '$1\n$2',
+  )
+
+  return normalized
+}
+
 /* ── Ingest types ────────────────────────────────────────────────── */
 
 interface IngestMessage {
@@ -274,12 +318,62 @@ export async function POST(req: NextRequest) {
   if (!body.client_id || typeof body.client_id !== 'string') return err('client_id is required', 400, rid)
   if (!body.name      || typeof body.name      !== 'string') return err('name is required', 400, rid)
 
+  /* 3a. Normalise full_conversation ───────────────────────────────
+   *
+   * AI tools often produce inline transcripts:
+   *   "Client: Hi Bot: Hello Client: Bye"
+   * Split every speaker label onto its own line before any further
+   * processing so the balance check and the drawer parser both work.
+   * ─────────────────────────────────────────────────────────────── */
+  if (body.full_conversation?.trim()) {
+    const raw        = body.full_conversation.trim()
+    const normalized = normalizeConversation(raw)
+
+    if (normalized !== raw) {
+      const beforeLines = raw.split('\n').filter(l => l.trim()).length
+      const afterLines  = normalized.split('\n').filter(l => l.trim()).length
+      console.log(
+        `[ingest/lead][${rid}] full_conversation normalised: ` +
+        `${beforeLines} line(s) → ${afterLines} line(s) (inline turns split to newlines)`
+      )
+      body.full_conversation = normalized
+    }
+
+    // Verify structure: check that both Client and Bot labels are present
+    // on their own lines after normalisation.
+    const normLines   = body.full_conversation.split(/\r?\n/).filter(l => l.trim())
+    const stripped    = normLines.map(l => l.trim().replace(_TS_PFX, ''))
+    const hasClient   = stripped.some(l => _CLI_RX.test(l))
+    const hasBot      = stripped.some(l => _BOT_RX.test(l))
+    const looksLabeled = stripped.some(l => _ALL_SPEAKERS.test(l.split(':')[0] ?? ''))
+
+    if (hasClient && hasBot) {
+      console.log(
+        `[ingest/lead][${rid}] full_conversation OK — ` +
+        `${normLines.length} lines, both Client and Bot messages detected`
+      )
+    } else if (looksLabeled) {
+      console.warn(
+        `[ingest/lead][${rid}] full_conversation has speaker labels but missing ` +
+        `${!hasClient ? 'Client' : 'Bot'} messages after normalisation`
+      )
+    } else {
+      console.log(
+        `[ingest/lead][${rid}] full_conversation — no speaker labels detected ` +
+        `(unlabelled transcript, ${normLines.length} lines)`
+      )
+    }
+  }
+
   /* 3b. Conversation balance check ────────────────────────────────
    *
    * When full_conversation is provided and contains labeled messages,
    * both a Client side and a Bot side must be present.  Unlabeled
    * transcripts (no role prefixes, no HTML class clues) are allowed
    * through — we can't verify those without context.
+   *
+   * This runs AFTER normalisation (3a) so inline transcripts that have
+   * been split now pass correctly instead of being falsely rejected.
    * ─────────────────────────────────────────────────────────────── */
   if (body.full_conversation?.trim()) {
     const { hasClient, hasBot, labeled } = conversationSides(body.full_conversation)

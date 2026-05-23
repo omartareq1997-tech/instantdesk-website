@@ -319,7 +319,7 @@ export async function getClientLeads(clientId = DEMO_CLIENT_ID): Promise<Lead[]>
       .from('leads')
       .select('*')
       .eq('client_id', clientId)
-      .order('score', { ascending: false })
+      .order('created_at', { ascending: false })
     if (error) throw error
     return (data ?? []).map(r => mapLead(r as LeadRow))
   } catch {

@@ -100,7 +100,7 @@ const AUTO_STATUS_COLOR: Record<string, string> = {
 const SURFACED_META_KEYS = new Set([
   'full_conversation','message','initial_message','notes','note','tags',
   'budget','specification','preferred_contact','city_or_location',
-  'property_type','priority','appointment_date',
+  'property_type','priority','appointment_date','ai_summary',
 ])
 
 /* ─── Helpers ────────────────────────────────────────────────── */
@@ -336,6 +336,14 @@ function generateAISummary(lead: Lead, apptDate?: string, liveText?: string): AI
   const meta      = lead.metadata ?? {}
   const firstName = lead.name.split(/\s+/)[0]
 
+  // ── Use pre-generated AI summary from Make.com when available ────
+  // If Make sends ai_summary in the webhook, display it verbatim instead of
+  // running the rule-based extractor.  All other fields (signals, action,
+  // urgency) are still computed from structured metadata as normal.
+  const webhookSummary = typeof meta.ai_summary === 'string' && meta.ai_summary.trim()
+    ? meta.ai_summary.trim()
+    : null
+
   // ── Text pools ────────────────────────────────────────────────
   const convText = [meta.full_conversation, meta.message, meta.initial_message]
     .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
@@ -446,33 +454,31 @@ function generateAISummary(lead: Lead, apptDate?: string, liveText?: string): AI
   const hasStructuredData = whatPhrase || metaCity || budget || metaSpec
   let intent: string
 
-  if (hasStructuredData) {
+  if (webhookSummary) {
+    // ── Webhook-provided summary (highest priority) ───────────────
+    // Make.com already ran a real AI — use its output verbatim.
+    intent = webhookSummary
+  } else if (hasStructuredData) {
     const lookingFor = whatPhrase ?? 'a property'
     intent = `${firstName} is looking for ${lookingFor}${locationPhrase}${specPhrase}${budgetPhrase}.`
 
-    // Append appointment inline
     if (fmtAppt) {
       intent += ` Viewing booked for ${fmtAppt}.`
     } else if (lead.status === 'demo_booked') {
       intent += ' Viewing/demo booked — see Timeline tab for date.'
     }
-
-    // Preferred contact
     if (metaPref) intent += ` Preferred contact: ${metaPref}.`
-
-    // Timeline (only if not already mentioned)
     if (metaTline && !intent.includes(metaTline)) intent += ` Timeline: ${metaTline}.`
   } else {
-    // No structured data from metadata — try the raw conversation text
+    // No structured data — fall back to raw conversation text
     const said =
-      extractFirstClientLine(clientText) ??   // client messages from DB/metadata
-      extractFirstClientLine(allText)          // any turn as last resort
+      extractFirstClientLine(clientText) ??
+      extractFirstClientLine(allText)
     if (said) {
       intent = `${firstName} enquired: "${said.length > 130 ? said.slice(0, 128) + '…' : said}"`
       if (fmtAppt) intent += ` Viewing booked for ${fmtAppt}.`
       if (metaPref) intent += ` Preferred contact: ${metaPref}.`
     } else {
-      // Truly nothing to go on — at least tell the agent what we know
       const sourceStr = lead.source && !/^unknown$/i.test(lead.source) ? ` via ${lead.source}` : ''
       const scoreStr  = ` (score ${lead.score})`
       intent = `${firstName} submitted an enquiry${sourceStr}${scoreStr}. No conversation details captured — open the Chat tab to review.`
@@ -487,9 +493,9 @@ function generateAISummary(lead: Lead, apptDate?: string, liveText?: string): AI
     extractFirstClientLine(clientText) ??   // from live DB messages
     extractFirstClientLine(convText)        // from metadata transcript
   let firstClientMessage: string | null = null
-  if (rawMsg) {
+  // Suppress the quote when Make already provided a full ai_summary — no duplication needed
+  if (rawMsg && !webhookSummary) {
     const capped = rawMsg.length > 210 ? rawMsg.slice(0, 208) + '…' : rawMsg
-    // Don't show the quote if its opening words already appear in the intent
     const alreadyCovered = intent.toLowerCase().includes(rawMsg.slice(0, 22).toLowerCase())
     firstClientMessage = alreadyCovered ? null : capped
   }
@@ -824,19 +830,16 @@ export default function LeadPanel({
 
   /* ── AI Summary — recomputes whenever messages load or lead updates ── */
   const firstUpcomingAppt = leadAppts.find(a => a.status === 'confirmed' || a.status === 'pending')
+  const aiSummary = typeof meta.ai_summary === 'string' && meta.ai_summary.trim()
+    ? meta.ai_summary.trim()
+    : null
   const ai = useMemo(() => {
     const liveText = displayMessages.map(m => m.content).join('\n')
-    const result = generateAISummary(
+    return generateAISummary(
       { ...lead, status: localStatus },
       firstUpcomingAppt?.date,
       liveText || undefined,
     )
-    // DEBUG — remove after confirming render path
-    console.log('[LeadPanel] ai.intent =', result.intent)
-    console.log('[LeadPanel] lead.interest =', lead.interest, '| lead.metadata =', lead.metadata)
-    // TEMP HARDCODE — if UI shows this string, this useMemo IS the render path
-    result.intent = 'TEST SUMMARY WORKS'
-    return result
   }, [lead, localStatus, firstUpcomingAppt?.date, displayMessages])
   const urgencyColor = ai.urgency === 'high' ? '#f87171' : ai.urgency === 'medium' ? '#fbbf24' : '#60a5fa'
 
@@ -1017,13 +1020,13 @@ export default function LeadPanel({
                   </span>
                 </div>
 
-                {/* Intent narrative — DEBUG: check console for source trace */}
+                {/* Main summary — webhook ai_summary shown verbatim; fallback to rule-based intent */}
                 <div className="text-xs text-white/75 leading-relaxed font-medium">
-                  {ai.intent}
+                  {aiSummary ?? ai.intent}
                 </div>
 
-                {/* First client message — verbatim quote */}
-                {ai.firstClientMessage && (
+                {/* First client message — verbatim quote; suppressed when ai_summary is present */}
+                {!aiSummary && ai.firstClientMessage && (
                   <div className="flex items-start gap-2 px-3 py-2 rounded-xl"
                     style={{ background:'rgba(255,255,255,0.03)', borderLeft:'2px solid rgba(139,92,246,0.35)' }}>
                     <MessageCircle className="w-3 h-3 text-violet-400/40 flex-shrink-0 mt-0.5" />

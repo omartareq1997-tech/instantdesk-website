@@ -289,6 +289,7 @@ interface IngestLeadBody {
   property_type?:     string
   priority?:          string
   notes?:             string
+  ai_summary?:        string   // Pre-generated AI summary from Make.com — shown verbatim in the drawer
 
   // ── Catch-all niche fields ────────────────────────────────────
   metadata?:         Record<string, unknown>
@@ -443,6 +444,7 @@ export async function POST(req: NextRequest) {
   const SHORTCUT_FIELDS = [
     'budget', 'specification', 'preferred_contact',
     'city_or_location', 'property_type', 'priority', 'notes',
+    'ai_summary',   // pre-generated summary from Make.com — stored verbatim
   ] as const
   for (const field of SHORTCUT_FIELDS) {
     const val = body[field]
@@ -520,6 +522,7 @@ export async function POST(req: NextRequest) {
       }, { onConflict: 'id' })
 
       if (messages.length > 0) {
+        const baseMs = Date.now()
         await sb.from('messages').insert(
           messages.map((m, idx) => ({
             conversation_id:  convId!,
@@ -527,7 +530,7 @@ export async function POST(req: NextRequest) {
             from_role:        m.role,
             content:          m.content,
             response_time_ms: m.response_time_ms ?? null,
-            created_at:       m.created_at ?? new Date(Date.now() + idx * 1000).toISOString(),
+            created_at:       new Date(baseMs + idx * 1000).toISOString(),
           }))
         )
       }

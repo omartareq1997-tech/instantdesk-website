@@ -40,15 +40,17 @@ interface ActivityItem { id: string; type: ActivityType; text: string; sub: stri
 interface Appointment { id: string; name: string; company: string; type: string; date: string; time: string; status: ApptStatus; upcoming: boolean; leadId?: string; notes?: string }
 interface Notification { id: string; type: NotifType; text: string; sub: string; read: boolean; time: string }
 
-/* ─── Mock Data ──────────────────────────────────────────────── */
+interface ToastItem {
+  id:         string
+  type:       'lead' | 'appointment'
+  title:      string
+  sub:        string
+  badge:      string
+  badgeColor: string
+  leadId?:    string
+}
 
-const SEED_NOTIFS: Notification[] = [
-  { id:'1', type:'lead',    text:'New hot lead captured',         sub:'James Okafor · WhatsApp · 2 min ago',  read:false, time:'2 min ago'  },
-  { id:'2', type:'booking', text:'Demo confirmed',                sub:'Sarah Mitchell · Thu 22 May 3pm',      read:false, time:'10 min ago' },
-  { id:'3', type:'ai',      text:'Missed call recovered',         sub:'AI replied in 8s — Nina Kowalski',    read:false, time:'1 hr ago'   },
-  { id:'4', type:'alert',   text:'Tom Reynolds needs attention',  sub:'Cold lead · 4 days no response',      read:true,  time:'3 hrs ago'  },
-  { id:'5', type:'booking', text:'Discovery call booked',         sub:'Priya Sharma · Fri 23 May 2pm',       read:true,  time:'2 hrs ago'  },
-]
+/* ─── Mock Data ──────────────────────────────────────────────── */
 
 const AUTOMATIONS = [
   { id:'whatsapp', label:'WhatsApp Bot',         color:'#34d399', Icon:MessageCircle, description:'Auto-replies and lead capture via WhatsApp Business API', status:'active',    lastActivity:'2 min ago',  stat1Label:'Messages this week', stat1Value:'127', stat2Label:'Leads captured',  stat2Value:'8'        },
@@ -264,7 +266,13 @@ function NotificationCenter({ notifs, setNotifs }: { notifs:Notification[]; setN
               </button>
             </div>
             <div className="max-h-80 overflow-y-auto">
-              {notifs.map((n, i) => {
+              {notifs.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-10 gap-2">
+                  <Bell className="w-6 h-6 text-white/10" />
+                  <p className="text-xs text-white/25 font-medium">No notifications yet</p>
+                  <p className="text-[10px] text-white/15">New leads and bookings appear here</p>
+                </div>
+              ) : notifs.map((n, i) => {
                 const cfg = NOTIF_CFG[n.type]
                 return (
                   <motion.div key={n.id} initial={{ opacity:0, x:-8 }} animate={{ opacity:1, x:0 }} transition={{ delay:i*0.04 }}
@@ -1877,6 +1885,122 @@ function SettingsSection() {
   )
 }
 
+/* ─── Notification helpers ───────────────────────────────────── */
+
+/** Synthesise a soft two-tone chime using the Web Audio API. */
+function playNotifSound(): void {
+  try {
+    const Ctx =
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!Ctx) return
+    const ctx = new Ctx()
+    const now = ctx.currentTime
+
+    function chime(freq: number, start: number, dur: number, vol: number) {
+      const osc  = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(freq, now + start)
+      gain.gain.setValueAtTime(0.001, now + start)
+      gain.gain.linearRampToValueAtTime(vol, now + start + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.001, now + start + dur)
+      osc.start(now + start)
+      osc.stop(now + start + dur + 0.06)
+    }
+
+    chime(1047, 0,    0.40, 0.10)   // C6
+    chime(1319, 0.14, 0.45, 0.07)   // E6
+
+    setTimeout(() => ctx.close().catch(() => {}), 1200)
+  } catch { /* AudioContext blocked or not supported */ }
+}
+
+/** Fire a native browser notification if permission has been granted. */
+function sendBrowserNotif(title: string, body: string): void {
+  if (typeof window === 'undefined' || !('Notification' in window)) return
+  if (Notification.permission !== 'granted') return
+  try { new Notification(title, { body, icon: '/favicon.ico', silent: true }) }
+  catch { /* permission revoked mid-session */ }
+}
+
+/* ─── Toast component ────────────────────────────────────────── */
+
+function ToastNotification({
+  toast, onClose, onOpen,
+}: {
+  toast:   ToastItem
+  onClose: () => void
+  onOpen?: () => void
+}) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 5500)
+    return () => clearTimeout(t)
+  }, [onClose])
+
+  const accent = toast.type === 'lead' ? '#a78bfa' : '#34d399'
+  const Icon   = toast.type === 'lead' ? Users : Calendar
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity:0, x:56, scale:0.95 }}
+      animate={{ opacity:1, x:0,  scale:1    }}
+      exit={{   opacity:0, x:56, scale:0.95  }}
+      transition={{ type:'spring', stiffness:380, damping:34 }}
+      className="pointer-events-auto relative flex items-start gap-3 px-4 py-3.5 rounded-2xl cursor-pointer select-none overflow-hidden"
+      style={{
+        background:     'rgba(9,9,26,0.97)',
+        border:         `1px solid ${accent}28`,
+        boxShadow:      `0 16px 48px rgba(0,0,0,0.7), 0 0 0 1px ${accent}08`,
+        backdropFilter: 'blur(24px)',
+      }}
+      onClick={() => { onOpen?.(); onClose() }}
+    >
+      {/* Accent stripe */}
+      <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-2xl"
+        style={{ background:`linear-gradient(180deg,${accent},${accent}55)` }} />
+
+      {/* Icon */}
+      <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ml-1 mt-0.5"
+        style={{ background:`${accent}15`, border:`1px solid ${accent}25` }}>
+        <Icon className="w-4 h-4" style={{ color:accent }} />
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-0.5">
+          <span className="text-[11px] font-black text-white/90 truncate">{toast.title}</span>
+          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 whitespace-nowrap"
+            style={{ background:`${toast.badgeColor}22`, color:toast.badgeColor, border:`1px solid ${toast.badgeColor}30` }}>
+            {toast.badge}
+          </span>
+        </div>
+        <div className="text-[11px] text-white/40 leading-snug truncate">{toast.sub}</div>
+        {onOpen && (
+          <div className="text-[10px] font-semibold mt-1.5" style={{ color:`${accent}85` }}>
+            Tap to view →
+          </div>
+        )}
+      </div>
+
+      {/* Dismiss */}
+      <button onClick={e => { e.stopPropagation(); onClose() }}
+        className="w-6 h-6 rounded-lg flex items-center justify-center text-white/20 hover:text-white/60 transition-colors flex-shrink-0 mt-0.5">
+        <X className="w-3.5 h-3.5" />
+      </button>
+
+      {/* Countdown bar */}
+      <motion.div className="absolute bottom-0 left-0 right-0 h-[2px]"
+        style={{ background:accent, opacity:0.30, transformOrigin:'left' }}
+        initial={{ scaleX:1 }} animate={{ scaleX:0 }}
+        transition={{ duration:5.5, ease:'linear' }} />
+    </motion.div>
+  )
+}
+
 /* ─── Hash persistence helpers ───────────────────────────────── */
 
 const VALID_SECTIONS = new Set<string>([
@@ -1897,7 +2021,8 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
   const [section,        setSection]        = useState<Section | null>(null)
   const [sidebarOpen,    setSidebarOpen]    = useState(false)
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
-  const [notifs,         setNotifs]         = useState<Notification[]>(SEED_NOTIFS)
+  const [notifs,         setNotifs]         = useState<Notification[]>([])   // filled by realtime only
+  const [toasts,         setToasts]         = useState<ToastItem[]>([])
 
   // ── Live state (seeded from SSR, then kept fresh by Supabase Realtime)
   const [leads,       setLeads]       = useState<Lead[]>       (initialData?.leads ?? [])
@@ -1932,7 +2057,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
     const channel = supabase
       .channel('dashboard-live')
 
-      // ── leads: INSERT → prepend with spring animation
+      // ── leads: INSERT → prepend + toast + sound + browser notif
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'leads', filter: `client_id=eq.${CLIENT_ID}` },
         (payload) => {
@@ -1940,15 +2065,39 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
           setLeads(prev => [lead, ...prev])
           setNewLeadIds(prev => new Set([...prev, lead.id]))
           setTimeout(() => setNewLeadIds(prev => { const s = new Set(prev); s.delete(lead.id); return s }), 4000)
-          // Push a notification
+
+          const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+          const badgeColor = lead.scoreLabel === 'hot' ? '#f87171' : lead.scoreLabel === 'warm' ? '#fb923c' : '#60a5fa'
+
+          // Toast
+          setToasts(prev => [{
+            id:         crypto.randomUUID(),
+            type:       'lead',
+            title:      lead.name,
+            sub:        `${lead.source} · ${lead.company || 'No company'} · Score ${lead.score}`,
+            badge:      cap(lead.scoreLabel),
+            badgeColor,
+            leadId:     lead.id,
+          }, ...prev.slice(0, 3)])
+
+          // Bell panel
           setNotifs(prev => [{
             id:   crypto.randomUUID(),
             type: 'lead' as NotifType,
-            text: `New lead: ${lead.name}`,
-            sub:  `${lead.company} · ${lead.source} · just now`,
+            text: `New lead — ${lead.name}`,
+            sub:  `${lead.source} · ${lead.company || ''} · Just now`,
             read: false,
             time: 'Just now',
           }, ...prev.slice(0, 19)])
+
+          // Sound (only on live INSERT, not on page load)
+          playNotifSound()
+
+          // Browser notification
+          sendBrowserNotif(
+            `New lead — ${lead.name}`,
+            `${lead.source} · ${cap(lead.scoreLabel)} · Score ${lead.score}`,
+          )
         }
       )
 
@@ -1970,12 +2119,39 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
         }
       )
 
-      // ── appointments: INSERT / UPDATE
+      // ── appointments: INSERT → update list + toast + bell notif
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'appointments', filter: `client_id=eq.${CLIENT_ID}` },
         (payload) => {
           const appt = mapAppointmentRow(payload.new as RawAppointmentRow)
           setAppointments(prev => [...prev, appt])
+
+          // Toast
+          setToasts(prev => [{
+            id:         crypto.randomUUID(),
+            type:       'appointment',
+            title:      'Appointment booked',
+            sub:        `${appt.name} · ${appt.type} · ${appt.date} at ${appt.time}`,
+            badge:      appt.status.charAt(0).toUpperCase() + appt.status.slice(1),
+            badgeColor: '#34d399',
+            leadId:     appt.leadId,
+          }, ...prev.slice(0, 3)])
+
+          // Bell panel
+          setNotifs(prev => [{
+            id:   crypto.randomUUID(),
+            type: 'booking' as NotifType,
+            text: `Appointment booked — ${appt.name}`,
+            sub:  `${appt.type} · ${appt.date} at ${appt.time}`,
+            read: false,
+            time: 'Just now',
+          }, ...prev.slice(0, 19)])
+
+          // Browser notification
+          sendBrowserNotif(
+            'Appointment booked',
+            `${appt.name} · ${appt.type} · ${appt.date} at ${appt.time}`,
+          )
         }
       )
       .on('postgres_changes',
@@ -1989,6 +2165,17 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
+  }, [])
+
+  // ── Browser notification permission ──────────────────────────
+  // Requested 3 s after mount so it doesn't fire immediately on load.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission().catch(() => {})
+      }
+    }, 3000)
+    return () => clearTimeout(t)
   }, [])
 
   // ── Hash-based tab persistence ────────────────────────────────
@@ -2087,6 +2274,21 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
           <LeadPanel key={selectedLead.id} lead={selectedLead} appointments={appointments} onClose={() => setSelectedLeadId(null)} />
         )}
       </AnimatePresence>
+
+      {/* Toast notifications — fixed overlay, top-right */}
+      <div className="fixed top-4 right-4 z-[200] flex flex-col gap-2.5 pointer-events-none"
+        style={{ width: 'min(320px, calc(100vw - 2rem))' }}>
+        <AnimatePresence mode="sync">
+          {toasts.map(t => (
+            <ToastNotification
+              key={t.id}
+              toast={t}
+              onClose={() => setToasts(prev => prev.filter(x => x.id !== t.id))}
+              onOpen={t.leadId ? () => setSelectedLeadId(t.leadId!) : undefined}
+            />
+          ))}
+        </AnimatePresence>
+      </div>
     </div>
   )
 }

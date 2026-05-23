@@ -139,6 +139,12 @@ function initials(name:string) { return name.split(' ').map(n=>n[0]).join('').sl
 function agentInitials(n:string) { return n.trim().split(/[\s.]+/).filter(Boolean).map(p=>p[0]).join('').toUpperCase().slice(0,2) }
 function fmtDate(iso:string) { return new Date(iso).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) }
 function fmtApptDate(d:string) { return new Date(d).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) }
+
+/** If the appointment has a linked lead_id, return the current lead name; else fall back to stored lead_name. */
+function liveApptName(appt: Appointment, leads: Lead[]): string {
+  if (!appt.leadId) return appt.name
+  return leads.find(l => l.id === appt.leadId)?.name ?? appt.name
+}
 function relativeTime(iso: string | null): string {
   if (!iso) return 'recently'
   const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
@@ -152,10 +158,11 @@ function relativeTime(iso: string | null): string {
 
 /* ─── Shared components ──────────────────────────────────────── */
 
-function Card({ children, className='' }: { children:React.ReactNode; className?:string }) {
+function Card({ children, className='', ...rest }: { children:React.ReactNode; className?:string } & React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div className={`rounded-2xl ${className}`}
-      style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}>
+      style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}
+      {...rest}>
       {children}
     </div>
   )
@@ -606,10 +613,10 @@ function OverviewSection({
                         style={{ background:`${sc.color}08`, border:`1px solid ${sc.color}20` }}>
                         <div className="w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
                           style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
-                          {initials(appt.name)}
+                          {initials(liveApptName(appt, leads))}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="text-xs font-semibold text-white/80 truncate">{appt.name}</div>
+                          <div className="text-xs font-semibold text-white/80 truncate">{liveApptName(appt, leads)}</div>
                           <div className="text-[10px] text-white/35">{appt.type}</div>
                         </div>
                         <div className="text-right flex-shrink-0">
@@ -624,7 +631,7 @@ function OverviewSection({
                       {laterAppts.map(appt => (
                         <div key={appt.id} className="flex items-center gap-2 py-1.5">
                           <Clock className="w-3 h-3 text-white/20 flex-shrink-0" />
-                          <span className="text-xs text-white/35 truncate flex-1">{appt.name} · {appt.type}</span>
+                          <span className="text-xs text-white/35 truncate flex-1">{liveApptName(appt, leads)} · {appt.type}</span>
                           <span className="text-[10px] text-white/20 whitespace-nowrap">{fmtApptDate(appt.date)}</span>
                         </div>
                       ))}
@@ -1546,15 +1553,18 @@ function WeekDatePicker({
 /* ─── Appointments ───────────────────────────────────────────── */
 
 function AppointmentsSection({
-  appointments, leads, onSelectLead,
+  appointments, leads, onSelectLead, onApptUpdated,
 }: {
-  appointments:  Appointment[]
-  leads:         Lead[]
-  onSelectLead:  (id: string) => void
+  appointments:   Appointment[]
+  leads:          Lead[]
+  onSelectLead:   (id: string) => void
+  onApptUpdated?: (patch: { id:string; type:string; date:string; time:string; status:ApptStatus; notes?:string; leadId?:string }) => void
 }) {
   const [dayOffset,    setDayOffset]    = useState(0)       // offset in days from today
   const [selectedAppt, setSelectedAppt] = useState<DrawerAppointment | null>(null)
   const [pickerOpen,   setPickerOpen]   = useState(false)
+  const [draggingId,   setDraggingId]   = useState<string | null>(null)
+  const [dragOverDate, setDragOverDate] = useState<string | null>(null)
 
   // Open the full LeadPanel when the appointment has a linked lead; otherwise
   // fall back to the lightweight ApptDrawer for appointment-only context.
@@ -1603,6 +1613,22 @@ function AppointmentsSection({
   function toDrawer(a: Appointment): DrawerAppointment {
     return { id:a.id, name:a.name, company:a.company, type:a.type,
              date:a.date, time:a.time, status:a.status, leadId:a.leadId, notes:a.notes }
+  }
+
+  // ── Drag-drop: move appointment to a new day, preserve time ────
+  async function dropOnDate(targetDate: string) {
+    if (!draggingId || !onApptUpdated) return
+    const appt = appointments.find(a => a.id === draggingId)
+    if (!appt || appt.date === targetDate) return
+    const newScheduledAt = new Date(`${targetDate}T${appt.time}:00`).toISOString()
+    onApptUpdated({ id: appt.id, type: appt.type, date: targetDate, time: appt.time, status: appt.status, notes: appt.notes, leadId: appt.leadId })
+    try {
+      await fetch(`/api/appointments/${appt.id}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ scheduled_at: newScheduledAt }),
+      })
+    } catch { /* optimistic update already applied */ }
   }
 
   // ── Upcoming: beyond the 7-day window, not cancelled ──────────
@@ -1669,13 +1695,22 @@ function AppointmentsSection({
         <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3">
           {viewDays.map(day => {
             const dayAppts = appointments.filter(a => a.date === day.iso)
+            const isDropTarget = dragOverDate === day.iso && draggingId !== null
             return (
-              <Card key={day.iso} className={day.today ? 'ring-1 ring-violet-500/25' : ''}>
+              <Card key={day.iso}
+                className={[
+                  day.today ? 'ring-1 ring-violet-500/25' : '',
+                  isDropTarget ? 'ring-1 ring-violet-400/50' : '',
+                ].filter(Boolean).join(' ')}
+                onDragOver={(e: React.DragEvent) => { e.preventDefault(); setDragOverDate(day.iso) }}
+                onDragLeave={(e: React.DragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverDate(null) }}
+                onDrop={async (e: React.DragEvent) => { e.preventDefault(); setDragOverDate(null); await dropOnDate(day.iso) }}>
                 {/* Day header */}
                 <div className="flex items-center justify-between px-3 py-3"
                   style={{
                     borderBottom: dayAppts.length ? '1px solid rgba(255,255,255,0.07)' : 'none',
-                    background:   day.today ? 'rgba(139,92,246,0.07)' : 'transparent',
+                    background:   isDropTarget ? 'rgba(139,92,246,0.12)' : day.today ? 'rgba(139,92,246,0.07)' : 'transparent',
+                    transition:   'background 0.15s',
                   }}>
                   <div>
                     <div className="text-xs font-black text-white/70 uppercase tracking-wide">{day.label}</div>
@@ -1694,14 +1729,22 @@ function AppointmentsSection({
                   <div className="p-2 flex flex-col gap-2">
                     {dayAppts.map(appt => {
                       const sc = APPT_CFG[appt.status]
+                      const displayName = liveApptName(appt, leads)
                       return (
                         <motion.button key={appt.id}
+                          draggable
+                          onDragStart={() => setDraggingId(appt.id)}
+                          onDragEnd={() => { setDraggingId(null); setDragOverDate(null) }}
                           whileHover={{ scale:1.02, boxShadow:`0 6px 16px ${sc.color}20` }}
                           whileTap={{ scale:0.98 }}
                           onClick={() => handleApptClick(appt)}
-                          className="rounded-xl p-3 w-full text-left cursor-pointer"
-                          style={{ background:`${sc.color}10`, border:`1px solid ${sc.color}28` }}>
-                          <div className="text-xs font-bold text-white/85 leading-snug truncate">{appt.name}</div>
+                          className="rounded-xl p-3 w-full text-left cursor-grab active:cursor-grabbing"
+                          style={{
+                            background: `${sc.color}10`,
+                            border:     `1px solid ${sc.color}28`,
+                            opacity:    draggingId === appt.id ? 0.45 : 1,
+                          }}>
+                          <div className="text-xs font-bold text-white/85 leading-snug truncate">{displayName}</div>
                           <div className="text-[10px] text-white/45 mt-1 truncate">{appt.type}</div>
                           <div className="flex items-center gap-1.5 text-[10px] text-white/35 mt-1.5">
                             <Clock className="w-3 h-3 flex-shrink-0" />{appt.time}
@@ -1711,8 +1754,9 @@ function AppointmentsSection({
                     })}
                   </div>
                 ) : (
-                  <div className="py-8 text-center">
-                    <div className="text-[10px] text-white/15 font-medium">Free</div>
+                  <div className="py-8 text-center"
+                    style={{ background: isDropTarget ? 'rgba(139,92,246,0.06)' : 'transparent', transition:'background 0.15s' }}>
+                    <div className="text-[10px] text-white/15 font-medium">{isDropTarget ? 'Drop here' : 'Free'}</div>
                   </div>
                 )}
               </Card>
@@ -1745,10 +1789,10 @@ function AppointmentsSection({
                     onClick={() => handleApptClick(appt)}>
                     <div className="w-8 h-8 rounded-xl flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
                       style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.4),rgba(37,99,235,0.3))' }}>
-                      {initials(appt.name)}
+                      {initials(liveApptName(appt, leads))}
                     </div>
                     <div className="flex-1">
-                      <div className="text-sm font-semibold text-white/80">{appt.name}</div>
+                      <div className="text-sm font-semibold text-white/80">{liveApptName(appt, leads)}</div>
                       <div className="text-xs text-white/30">{appt.type} · {appt.company}</div>
                     </div>
                     <div className="text-right mr-2">
@@ -2246,6 +2290,29 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
 
   const selectedLead     = useMemo(() => leads.find(l => l.id === selectedLeadId) ?? null, [leads, selectedLeadId])
   const handleSelectLead = useCallback((id: string) => setSelectedLeadId(id), [])
+
+  // ── CRM mutation callbacks ────────────────────────────────────
+  const handleLeadDeleted = useCallback((id: string) => {
+    setLeads(prev => prev.filter(l => l.id !== id))
+    setAppointments(prev => prev.filter(a => a.leadId !== id))
+    setSelectedLeadId(null)
+  }, [])
+
+  const handleLeadUpdated = useCallback((patch: { id:string; name:string; company:string; email?:string; phone?:string; source:string; score:number }) => {
+    setLeads(prev => prev.map(l => l.id === patch.id ? { ...l, ...patch } : l))
+  }, [])
+
+  const handleApptDeleted = useCallback((apptId: string) => {
+    setAppointments(prev => prev.filter(a => a.id !== apptId))
+  }, [])
+
+  const handleApptUpdated = useCallback((patch: { id:string; type:string; date:string; time:string; status:ApptStatus; notes?:string; leadId?:string }) => {
+    setAppointments(prev => prev.map(a => {
+      if (a.id !== patch.id) return a
+      const dt = new Date(`${patch.date}T${patch.time}`)
+      return { ...a, type:patch.type, date:patch.date, time:patch.time, status:patch.status, notes:patch.notes, upcoming:dt > new Date() }
+    }))
+  }, [])
   // section is null pre-mount; fall back to 'overview' only for the meta title
   const meta             = SECTION_META[section ?? 'overview']
 
@@ -2427,6 +2494,26 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
         }
       )
 
+      // ── DELETE events (fires only when REPLICA IDENTITY FULL is set;
+      //    falls back to callback-based state updates from LeadPanel otherwise)
+      .on('postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'leads', filter: `client_id=eq.${CLIENT_ID}` },
+        (payload) => {
+          const id = (payload.old as { id?: string })?.id
+          if (id) {
+            setLeads(prev => prev.filter(l => l.id !== id))
+            setAppointments(prev => prev.filter(a => a.leadId !== id))
+          }
+        }
+      )
+      .on('postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'appointments', filter: `client_id=eq.${CLIENT_ID}` },
+        (payload) => {
+          const id = (payload.old as { id?: string })?.id
+          if (id) setAppointments(prev => prev.filter(a => a.id !== id))
+        }
+      )
+
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
@@ -2526,7 +2613,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
                 {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} />}
                 {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={leads} newLeadIds={newLeadIds} />}
                 {section==='activity'     && <ActivitySection feed={activityFeed} />}
-                {section==='appointments' && <AppointmentsSection appointments={appointments} leads={leads} onSelectLead={handleSelectLead} />}
+                {section==='appointments' && <AppointmentsSection appointments={appointments} leads={leads} onSelectLead={handleSelectLead} onApptUpdated={handleApptUpdated} />}
                 {section==='automation'   && <AutomationSection leads={leads} integrations={integrations} overviewMetrics={overviewMetrics} />}
                 {section==='settings'     && <SettingsSection />}
               </motion.div>
@@ -2538,7 +2625,16 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
       {/* Lead detail panel */}
       <AnimatePresence>
         {selectedLead && (
-          <LeadPanel key={selectedLead.id} lead={selectedLead} appointments={appointments} onClose={() => setSelectedLeadId(null)} />
+          <LeadPanel
+            key={selectedLead.id}
+            lead={selectedLead}
+            appointments={appointments}
+            onClose={() => setSelectedLeadId(null)}
+            onLeadDeleted={handleLeadDeleted}
+            onLeadUpdated={handleLeadUpdated}
+            onApptDeleted={handleApptDeleted}
+            onApptUpdated={handleApptUpdated}
+          />
         )}
       </AnimatePresence>
 

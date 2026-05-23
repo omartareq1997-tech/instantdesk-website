@@ -7,7 +7,7 @@ import {
   SlidersHorizontal, Phone, Mail, FileText, Clock, Tag as TagIcon,
   CheckCircle, XCircle, Users, Zap, Send, AlertTriangle,
   TrendingUp, DollarSign, Target, Plus, Save, ChevronDown,
-  MessageSquare, Flame, Snowflake, ThumbsUp,
+  MessageSquare, Flame, Snowflake, ThumbsUp, Trash2, Pencil,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
@@ -612,11 +612,18 @@ function ChatBubbles({ messages, endRef }: { messages: ChatMessage[]; endRef: Re
   )
 }
 
-function ApptCard({ appt }: { appt: ApptSummary }) {
+function ApptCard({
+  appt, onEdit, onDelete, deleting,
+}: {
+  appt: ApptSummary
+  onEdit?: () => void
+  onDelete?: () => void
+  deleting?: boolean
+}) {
   const sc = APPT_STATUS_CFG[appt.status]
   return (
     <div className="rounded-2xl p-4 flex flex-col gap-3"
-      style={{ background:sc.bg, border:`1px solid ${sc.border}` }}>
+      style={{ background:sc.bg, border:`1px solid ${sc.border}`, opacity: deleting ? 0.5 : 1, transition:'opacity 0.2s' }}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0"
@@ -650,6 +657,27 @@ function ApptCard({ appt }: { appt: ApptSummary }) {
           <p className="text-[11px] leading-relaxed" style={{ color:'rgba(255,255,255,0.45)' }}>{appt.notes}</p>
         </div>
       )}
+      {(onEdit || onDelete) && (
+        <div className="flex gap-2 pt-1" style={{ borderTop:`1px solid ${sc.color}12` }}>
+          {onEdit && (
+            <button type="button" onClick={onEdit} disabled={deleting}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex-1 justify-center disabled:opacity-40"
+              style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', color:'rgba(255,255,255,0.45)' }}>
+              <Pencil className="w-3 h-3" /> Edit
+            </button>
+          )}
+          {onDelete && (
+            <button type="button" onClick={onDelete} disabled={deleting}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex-1 justify-center disabled:opacity-40"
+              style={{ background:'rgba(248,113,113,0.06)', border:'1px solid rgba(248,113,113,0.18)', color:'rgba(248,113,113,0.65)' }}>
+              {deleting
+                ? <motion.span className="w-3 h-3 rounded-full border border-red-400/30 border-t-red-400"
+                    animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity, ease:'linear' }} />
+                : <><Trash2 className="w-3 h-3" />Delete</>}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -658,10 +686,15 @@ function ApptCard({ appt }: { appt: ApptSummary }) {
 
 export default function LeadPanel({
   lead, appointments, onClose,
+  onLeadDeleted, onLeadUpdated, onApptDeleted, onApptUpdated,
 }: {
   lead:          Lead
   appointments?: ApptSummary[]
   onClose:       () => void
+  onLeadDeleted?: (id: string) => void
+  onLeadUpdated?: (patch: { id:string; name:string; company:string; email?:string; phone?:string; source:string; score:number }) => void
+  onApptDeleted?: (apptId: string) => void
+  onApptUpdated?: (patch: { id:string; type:string; date:string; time:string; status:ApptStatus; notes?:string; leadId?:string }) => void
 }) {
   const statusCfg = STATUS_CFG[lead.status]
   const scoreCfg  = SCORE_CFG[lead.scoreLabel]
@@ -812,20 +845,137 @@ export default function LeadPanel({
   const [savingAppt,   setSavingAppt]   = useState(false)
   const [apptSaved,    setApptSaved]    = useState(false)
 
+  /* ── Delete lead ───────────────────────────────────────────── */
+  const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const [deletingLead,  setDeletingLead]  = useState(false)
+
+  /* ── Lead edit mode ────────────────────────────────────────── */
+  const [editMode,    setEditMode]    = useState(false)
+  const [editName,    setEditName]    = useState(lead.name)
+  const [editCompany, setEditCompany] = useState(lead.company)
+  const [editEmail,   setEditEmail]   = useState(lead.email ?? '')
+  const [editPhone,   setEditPhone]   = useState(lead.phone ?? '')
+  const [editSource,  setEditSource]  = useState(lead.source)
+  const [editScore,   setEditScore]   = useState(String(lead.score))
+  const [savingEdit,  setSavingEdit]  = useState(false)
+  const [editSaved,   setEditSaved]   = useState(false)
+
+  /* ── Appointment edit / delete ─────────────────────────────── */
+  const [editingApptId,  setEditingApptId]  = useState<string | null>(null)
+  const [apptEditDate,   setApptEditDate]   = useState('')
+  const [apptEditTime,   setApptEditTime]   = useState('')
+  const [apptEditType,   setApptEditType]   = useState('demo_call')
+  const [apptEditStatus, setApptEditStatus] = useState<ApptStatus>('pending')
+  const [apptEditNotes,  setApptEditNotes]  = useState('')
+  const [savingApptEdit, setSavingApptEdit] = useState(false)
+  const [deletingApptId, setDeletingApptId] = useState<string | null>(null)
+
   const createAppointment = useCallback(async () => {
     if (!apptDate || !apptTime) return
     setSavingAppt(true)
-    const scheduled_at = new Date(`${apptDate}T${apptTime}:00`).toISOString()
-    const CLIENT_ID = process.env.NEXT_PUBLIC_DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
-    await supabase.from('appointments').insert({
-      client_id: CLIENT_ID, lead_id: lead.id,
-      lead_name: lead.name, lead_company: lead.company,
-      type: apptType, scheduled_at, status: 'pending',
-    })
-    setApptSaved(true)
-    setTimeout(() => { setApptSaved(false); setShowApptForm(false) }, 2000)
+    try {
+      const scheduled_at = new Date(`${apptDate}T${apptTime}:00`).toISOString()
+      const CLIENT_ID = process.env.NEXT_PUBLIC_DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
+      await fetch('/api/appointments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: CLIENT_ID, lead_id: lead.id,
+          lead_name: lead.name, lead_company: lead.company,
+          type: apptType, scheduled_at, status: 'pending',
+        }),
+      })
+      setApptSaved(true)
+      setTimeout(() => { setApptSaved(false); setShowApptForm(false) }, 2000)
+    } catch { /* no-op */ }
     setSavingAppt(false)
   }, [apptDate, apptTime, apptType, lead])
+
+  /* ── Delete lead ───────────────────────────────────────────── */
+  const deleteLead = useCallback(async () => {
+    setDeletingLead(true)
+    try {
+      const res = await fetch(`/api/leads/${lead.id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('delete failed')
+      onLeadDeleted?.(lead.id)
+      onClose()
+    } catch { /* stay open on error */ }
+    setDeletingLead(false)
+  }, [lead.id, onLeadDeleted, onClose])
+
+  /* ── Save lead edits ───────────────────────────────────────── */
+  const saveLeadEdit = useCallback(async () => {
+    setSavingEdit(true)
+    try {
+      const patch = {
+        name:    editName.trim()    || lead.name,
+        company: editCompany.trim(),
+        email:   editEmail.trim()   || null,
+        phone:   editPhone.trim()   || null,
+        source:  editSource.trim()  || lead.source,
+        score:   Number(editScore)  || 0,
+      }
+      const res = await fetch(`/api/leads/${lead.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      })
+      if (!res.ok) throw new Error('update failed')
+      onLeadUpdated?.({ id: lead.id, ...patch, email: patch.email ?? undefined, phone: patch.phone ?? undefined })
+      setEditSaved(true)
+      setTimeout(() => { setEditSaved(false); setEditMode(false) }, 1800)
+    } catch { /* stay in edit mode */ }
+    setSavingEdit(false)
+  }, [lead, editName, editCompany, editEmail, editPhone, editSource, editScore, onLeadUpdated])
+
+  /* ── Appointment edit helpers ──────────────────────────────── */
+  const startEditAppt = useCallback((appt: ApptSummary) => {
+    setEditingApptId(appt.id)
+    setApptEditDate(appt.date)
+    setApptEditTime(appt.time)
+    setApptEditType(appt.type.toLowerCase().replace(/ /g, '_'))
+    setApptEditStatus(appt.status)
+    setApptEditNotes(appt.notes ?? '')
+  }, [])
+
+  const saveApptEdit = useCallback(async () => {
+    if (!editingApptId || !apptEditDate || !apptEditTime) return
+    setSavingApptEdit(true)
+    try {
+      const scheduled_at = new Date(`${apptEditDate}T${apptEditTime}:00`).toISOString()
+      const res = await fetch(`/api/appointments/${editingApptId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scheduled_at, type: apptEditType,
+          status: apptEditStatus, notes: apptEditNotes || null,
+        }),
+      })
+      if (!res.ok) throw new Error('update failed')
+      const { appointment: a } = await res.json()
+      onApptUpdated?.({
+        id:     a.id,
+        type:   a.type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+        date:   new Date(a.scheduled_at).toISOString().split('T')[0],
+        time:   new Date(a.scheduled_at).toTimeString().slice(0, 5),
+        status: a.status as ApptStatus,
+        notes:  a.notes  ?? undefined,
+        leadId: a.lead_id ?? lead.id,
+      })
+      setEditingApptId(null)
+    } catch { /* stay in edit mode */ }
+    setSavingApptEdit(false)
+  }, [editingApptId, apptEditDate, apptEditTime, apptEditType, apptEditStatus, apptEditNotes, lead, onApptUpdated])
+
+  const deleteAppt = useCallback(async (apptId: string) => {
+    setDeletingApptId(apptId)
+    try {
+      const res = await fetch(`/api/appointments/${apptId}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('delete failed')
+      onApptDeleted?.(apptId)
+    } catch { /* no-op */ }
+    setDeletingApptId(null)
+  }, [onApptDeleted])
 
   /* ── Scroll + ESC ──────────────────────────────────────────── */
   useEffect(() => {
@@ -925,12 +1075,21 @@ export default function LeadPanel({
                 </span>
               </div>
             </div>
-            <button onClick={onClose}
-              className="w-8 h-8 rounded-xl flex items-center justify-center text-white/30 hover:text-white/80 transition-all flex-shrink-0"
-              onMouseEnter={e => { e.currentTarget.style.background='rgba(255,255,255,0.08)' }}
-              onMouseLeave={e => { e.currentTarget.style.background='transparent' }}>
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <button type="button" onClick={() => setDeleteConfirm(true)} title="Delete lead"
+                className="w-8 h-8 rounded-xl flex items-center justify-center transition-all"
+                style={{ color:'rgba(248,113,113,0.4)' }}
+                onMouseEnter={e => { e.currentTarget.style.background='rgba(248,113,113,0.08)'; e.currentTarget.style.color='rgba(248,113,113,0.85)' }}
+                onMouseLeave={e => { e.currentTarget.style.background='transparent'; e.currentTarget.style.color='rgba(248,113,113,0.4)' }}>
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={onClose}
+                className="w-8 h-8 rounded-xl flex items-center justify-center text-white/30 hover:text-white/80 transition-all"
+                onMouseEnter={e => { e.currentTarget.style.background='rgba(255,255,255,0.08)' }}
+                onMouseLeave={e => { e.currentTarget.style.background='transparent' }}>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           {/* Quick actions */}
@@ -1098,22 +1257,74 @@ export default function LeadPanel({
                 </div>
               )}
 
-              {/* Key details grid */}
-              <div className="rounded-2xl overflow-hidden" style={{ border:'1px solid rgba(255,255,255,0.07)' }}>
-                {[
-                  { label:'Source',   value: lead.source },
-                  // Only show Interest when it's specific — never show "General business enquiry" etc.
-                  { label:'Interest', value: isSpecificInterest(lead.interest) ? lead.interest : '' },
-                  { label:'Agent',    value: lead.assignedAgent },
-                  { label:'Added',    value: fmtDate(lead.date) },
-                ].filter(r => r.value).map((row, i, arr) => (
-                  <div key={row.label} className="flex items-center gap-3 px-4 py-2.5"
-                    style={{ background: i%2===0 ? 'rgba(255,255,255,0.02)' : 'transparent', borderBottom: i<arr.length-1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-white/25 w-16 flex-shrink-0">{row.label}</span>
-                    <span className="text-xs text-white/65 font-medium">{row.value}</span>
+              {/* Key details grid / edit form */}
+              {editMode ? (
+                <div className="rounded-2xl p-4 flex flex-col gap-3"
+                  style={{ background:'rgba(139,92,246,0.04)', border:'1px solid rgba(139,92,246,0.18)' }}>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-violet-400/60">Edit Details</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {([
+                      { label:'Name',    val:editName,    set:setEditName,    type:'text'  },
+                      { label:'Company', val:editCompany, set:setEditCompany, type:'text'  },
+                      { label:'Email',   val:editEmail,   set:setEditEmail,   type:'email' },
+                      { label:'Phone',   val:editPhone,   set:setEditPhone,   type:'tel'   },
+                      { label:'Source',  val:editSource,  set:setEditSource,  type:'text'  },
+                      { label:'Score',   val:editScore,   set:setEditScore,   type:'number'},
+                    ] as { label:string; val:string; set:(v:string)=>void; type:string }[]).map(f => (
+                      <div key={f.label}>
+                        <div className="text-[10px] text-white/30 mb-1">{f.label}</div>
+                        <input type={f.type} value={f.val} onChange={e => f.set(e.target.value)}
+                          min={f.type==='number'?0:undefined} max={f.type==='number'?100:undefined}
+                          className="w-full px-3 py-2 rounded-lg text-xs text-white/80 outline-none"
+                          style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }}
+                          onFocus={e=>{e.currentTarget.style.border='1px solid rgba(139,92,246,0.4)'}}
+                          onBlur={e=>{e.currentTarget.style.border='1px solid rgba(255,255,255,0.1)'}} />
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                  <div className="flex gap-2">
+                    <button onClick={saveLeadEdit} disabled={savingEdit}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-all disabled:opacity-40"
+                      style={editSaved
+                        ? { background:'rgba(52,211,153,0.12)', border:'1px solid rgba(52,211,153,0.3)', color:'#34d399' }
+                        : { background:'rgba(139,92,246,0.15)', border:'1px solid rgba(139,92,246,0.3)', color:'#c4b5fd' }}>
+                      {savingEdit
+                        ? <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-violet-400/30 border-t-violet-400"
+                            animate={{rotate:360}} transition={{duration:0.7,repeat:Infinity,ease:'linear'}} />
+                        : editSaved
+                          ? <><CheckCircle className="w-3.5 h-3.5" />Saved</>
+                          : <><Save className="w-3.5 h-3.5" />Save changes</>}
+                    </button>
+                    <button onClick={()=>setEditMode(false)} disabled={savingEdit}
+                      className="px-4 py-2 rounded-xl text-xs font-semibold transition-all disabled:opacity-40"
+                      style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', color:'rgba(255,255,255,0.35)' }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="rounded-2xl overflow-hidden" style={{ border:'1px solid rgba(255,255,255,0.07)' }}>
+                    {[
+                      { label:'Source',   value: lead.source },
+                      { label:'Interest', value: isSpecificInterest(lead.interest) ? lead.interest : '' },
+                      { label:'Agent',    value: lead.assignedAgent },
+                      { label:'Added',    value: fmtDate(lead.date) },
+                    ].filter(r => r.value).map((row, i, arr) => (
+                      <div key={row.label} className="flex items-center gap-3 px-4 py-2.5"
+                        style={{ background: i%2===0 ? 'rgba(255,255,255,0.02)' : 'transparent', borderBottom: i<arr.length-1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-white/25 w-16 flex-shrink-0">{row.label}</span>
+                        <span className="text-xs text-white/65 font-medium">{row.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <button type="button" onClick={()=>setEditMode(true)}
+                    className="flex items-center gap-1.5 self-start text-[11px] font-semibold px-3 py-1.5 rounded-lg transition-all"
+                    style={{ background:'rgba(139,92,246,0.08)', border:'1px solid rgba(139,92,246,0.18)', color:'rgba(167,139,250,0.7)' }}>
+                    <Pencil className="w-3 h-3" /> Edit details
+                  </button>
+                </>
+              )}
 
               {/* Surfaced niche metadata */}
               {surfacedRows.length > 0 && (
@@ -1361,7 +1572,84 @@ export default function LeadPanel({
                   </div>
                 ) : (
                   <div className="flex flex-col gap-3">
-                    {leadAppts.map(appt => <ApptCard key={appt.id} appt={appt} />)}
+                    {leadAppts.map(appt => (
+                      <div key={appt.id}>
+                        {editingApptId === appt.id ? (
+                          /* ── Inline edit form ── */
+                          <div className="rounded-2xl p-4 flex flex-col gap-3"
+                            style={{ background:'rgba(167,139,250,0.05)', border:'1px solid rgba(167,139,250,0.2)' }}>
+                            <div className="text-xs font-bold text-violet-400/70">Edit Appointment</div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <div className="text-[10px] text-white/35 mb-1">Date</div>
+                                <input type="date" value={apptEditDate} onChange={e=>setApptEditDate(e.target.value)}
+                                  className="w-full px-3 py-2 rounded-xl text-xs text-white/70 outline-none"
+                                  style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)', colorScheme:'dark' }} />
+                              </div>
+                              <div>
+                                <div className="text-[10px] text-white/35 mb-1">Time</div>
+                                <input type="time" value={apptEditTime} onChange={e=>setApptEditTime(e.target.value)}
+                                  className="w-full px-3 py-2 rounded-xl text-xs text-white/70 outline-none"
+                                  style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }} />
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <div className="text-[10px] text-white/35 mb-1">Type</div>
+                                <select value={apptEditType} onChange={e=>setApptEditType(e.target.value)}
+                                  className="w-full px-3 py-2 rounded-xl text-xs text-white/70 outline-none"
+                                  style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }}>
+                                  <option value="demo_call">Demo Call</option>
+                                  <option value="discovery_call">Discovery Call</option>
+                                  <option value="onboarding">Onboarding</option>
+                                  <option value="follow_up">Follow-up</option>
+                                </select>
+                              </div>
+                              <div>
+                                <div className="text-[10px] text-white/35 mb-1">Status</div>
+                                <select value={apptEditStatus} onChange={e=>setApptEditStatus(e.target.value as ApptStatus)}
+                                  className="w-full px-3 py-2 rounded-xl text-xs text-white/70 outline-none"
+                                  style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }}>
+                                  <option value="pending">Pending</option>
+                                  <option value="confirmed">Confirmed</option>
+                                  <option value="completed">Completed</option>
+                                  <option value="cancelled">Cancelled</option>
+                                </select>
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] text-white/35 mb-1">Notes (optional)</div>
+                              <input type="text" value={apptEditNotes} onChange={e=>setApptEditNotes(e.target.value)}
+                                placeholder="Add a note…"
+                                className="w-full px-3 py-2 rounded-xl text-xs text-white/70 outline-none"
+                                style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }} />
+                            </div>
+                            <div className="flex gap-2">
+                              <button onClick={saveApptEdit} disabled={savingApptEdit || !apptEditDate}
+                                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold disabled:opacity-40 transition-all"
+                                style={{ background:'rgba(167,139,250,0.15)', border:'1px solid rgba(167,139,250,0.3)', color:'#c4b5fd' }}>
+                                {savingApptEdit
+                                  ? <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-violet-400/30 border-t-violet-400"
+                                      animate={{rotate:360}} transition={{duration:0.7,repeat:Infinity,ease:'linear'}} />
+                                  : <><Save className="w-3.5 h-3.5" />Save</>}
+                              </button>
+                              <button onClick={()=>setEditingApptId(null)}
+                                className="px-4 py-2 rounded-xl text-xs font-semibold transition-all"
+                                style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', color:'rgba(255,255,255,0.35)' }}>
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <ApptCard
+                            appt={appt}
+                            onEdit={() => startEditAppt(appt)}
+                            onDelete={() => deleteAppt(appt.id)}
+                            deleting={deletingApptId === appt.id}
+                          />
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -1395,6 +1683,54 @@ export default function LeadPanel({
 
         </div>
       </motion.aside>
+
+      {/* ── Delete confirmation modal ────────────────────────── */}
+      <AnimatePresence>
+        {deleteConfirm && (
+          <>
+            <motion.div key="del-bd"
+              initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}
+              className="fixed inset-0 z-[60]"
+              style={{ background:'rgba(0,0,0,0.72)' }}
+              onClick={() => !deletingLead && setDeleteConfirm(false)} />
+            <motion.div key="del-modal"
+              initial={{ opacity:0, scale:0.95, y:16 }}
+              animate={{ opacity:1, scale:1,    y:0   }}
+              exit={{   opacity:0, scale:0.95, y:16  }}
+              className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-[70] w-[min(360px,calc(100vw-2rem))] rounded-2xl p-6 flex flex-col gap-4"
+              style={{ background:'rgba(10,10,30,0.99)', border:'1px solid rgba(248,113,113,0.3)', boxShadow:'0 32px 80px rgba(0,0,0,0.8)' }}>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                  style={{ background:'rgba(248,113,113,0.12)', border:'1px solid rgba(248,113,113,0.25)' }}>
+                  <Trash2 className="w-5 h-5 text-red-400" />
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-white">Delete {lead.name}?</div>
+                  <div className="text-xs text-white/35 mt-0.5">This cannot be undone.</div>
+                </div>
+              </div>
+              <p className="text-xs text-white/45 leading-relaxed">
+                Permanently deletes this lead and all related appointments, conversations, messages, and activity logs.
+              </p>
+              <div className="flex gap-2">
+                <button onClick={deleteLead} disabled={deletingLead}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
+                  style={{ background:'rgba(248,113,113,0.15)', border:'1px solid rgba(248,113,113,0.3)', color:'#f87171' }}>
+                  {deletingLead
+                    ? <motion.span className="w-4 h-4 rounded-full border-2 border-red-400/30 border-t-red-400"
+                        animate={{rotate:360}} transition={{duration:0.7,repeat:Infinity,ease:'linear'}} />
+                    : <><Trash2 className="w-3.5 h-3.5" />Delete permanently</>}
+                </button>
+                <button onClick={() => setDeleteConfirm(false)} disabled={deletingLead}
+                  className="px-4 py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-40"
+                  style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.45)' }}>
+                  Cancel
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </AnimatePresence>
   )
 }

@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../lib/supabase-server'
+import { logEvent, ACTOR } from '../_lib/logEvent'
 
 const DEMO_CLIENT_ID = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
 
@@ -80,6 +81,19 @@ export async function POST(req: NextRequest) {
         { status: 500 },
       )
     }
+
+    void logEvent({
+      type:        'appointment_created',
+      title:       `Appointment scheduled: ${data.lead_name ?? 'Unknown'}`,
+      description: `${data.type?.replace(/_/g, ' ')} on ${new Date(data.scheduled_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`,
+      leadId:      data.lead_id ?? null,
+      meta: {
+        actor: ACTOR, undoable: true, entity_id: data.id, entity_type: 'appointment',
+        entity_name: data.lead_name ?? 'Unknown',
+        new_value:   { type: data.type, scheduled_at: data.scheduled_at, status: data.status },
+        undo_data:   { appointment_id: data.id },
+      },
+    })
 
     return NextResponse.json({ appointment: data }, { status: 201 })
   } catch (err) {

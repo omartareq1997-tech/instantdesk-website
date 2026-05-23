@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../lib/supabase-server'
+import { logEvent, ACTOR } from '../_lib/logEvent'
 
 const DEMO_CLIENT_ID = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
 
@@ -49,6 +50,22 @@ export async function POST(req: NextRequest) {
       .single()
 
     if (error) throw error
+
+    void logEvent({
+      type:        'lead_created',
+      title:       `Lead created: ${data.name}`,
+      description: data.company ? `${data.company} · via ${data.source}` : `via ${data.source}`,
+      leadId:      data.id,
+      meta: {
+        actor:       ACTOR,
+        undoable:    true,
+        entity_id:   data.id,
+        entity_type: 'lead',
+        entity_name: data.name,
+        new_value:   { name: data.name, company: data.company, status: data.status },
+        undo_data:   { lead_id: data.id },
+      },
+    })
 
     return NextResponse.json({ lead: data }, { status: 201 })
   } catch (err) {

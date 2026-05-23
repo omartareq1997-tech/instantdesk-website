@@ -7,6 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../../lib/supabase-server'
+import { logEvent, ACTOR } from '../../_lib/logEvent'
 
 type Ctx = { params: Promise<{ id: string }> }
 
@@ -52,6 +53,10 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     }
 
     const sb = createAdminClient()
+
+    // Read current state for logging
+    const { data: before } = await sb.from('appointments').select('*').eq('id', id).single()
+
     const { data, error } = await sb
       .from('appointments')
       .update(patch)
@@ -64,6 +69,51 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
         return NextResponse.json({ error: 'Not found' }, { status: 404 })
       }
       throw error
+    }
+
+    if (before) {
+      const isDrag = body._drag === true
+      if (isDrag) {
+        void logEvent({
+          type:        'appointment_moved',
+          title:       `Appointment moved: ${before.lead_name ?? 'Unknown'}`,
+          description: `Rescheduled to ${new Date(data.scheduled_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`,
+          leadId:      before.lead_id ?? null,
+          meta: {
+            actor: ACTOR, undoable: true, entity_id: id, entity_type: 'appointment',
+            entity_name: before.lead_name ?? 'Unknown',
+            old_value:   { scheduled_at: before.scheduled_at },
+            new_value:   { scheduled_at: data.scheduled_at },
+            undo_data:   { appointment_id: id, old_scheduled_at: before.scheduled_at },
+          },
+        })
+      } else {
+        void logEvent({
+          type:        'appointment_edited',
+          title:       `Appointment updated: ${before.lead_name ?? 'Unknown'}`,
+          description: before.type?.replace(/_/g, ' '),
+          leadId:      before.lead_id ?? null,
+          meta: {
+            actor: ACTOR, undoable: true, entity_id: id, entity_type: 'appointment',
+            entity_name: before.lead_name ?? 'Unknown',
+            old_value: {
+              scheduled_at: before.scheduled_at, type: before.type,
+              status: before.status, notes: before.notes,
+            },
+            new_value: {
+              scheduled_at: data.scheduled_at, type: data.type,
+              status: data.status, notes: data.notes,
+            },
+            undo_data: {
+              appointment_id:   id,
+              old_scheduled_at: before.scheduled_at,
+              old_type:         before.type,
+              old_status:       before.status,
+              old_notes:        before.notes,
+            },
+          },
+        })
+      }
     }
 
     return NextResponse.json({ appointment: data })
@@ -80,12 +130,29 @@ export async function DELETE(_req: NextRequest, { params }: Ctx) {
   try {
     const sb = createAdminClient()
 
+    // Capture snapshot before deletion
+    const { data: snap } = await sb.from('appointments').select('*').eq('id', id).single()
+
     const { error } = await sb
       .from('appointments')
       .delete()
       .eq('id', id)
 
     if (error) throw error
+
+    if (snap) {
+      void logEvent({
+        type:        'appointment_deleted',
+        title:       `Appointment deleted: ${snap.lead_name ?? 'Unknown'}`,
+        description: `${snap.type?.replace(/_/g, ' ')} on ${new Date(snap.scheduled_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`,
+        leadId:      null,
+        meta: {
+          actor: ACTOR, undoable: true, entity_id: id, entity_type: 'appointment',
+          entity_name: snap.lead_name ?? 'Unknown',
+          undo_data:   { appointment: snap },
+        },
+      })
+    }
 
     return NextResponse.json({ success: true })
   } catch (err) {

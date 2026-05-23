@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../../lib/supabase-server'
+import { logEvent, ACTOR } from '../../_lib/logEvent'
 
 type Ctx = { params: Promise<{ id: string }> }
 
@@ -65,6 +66,10 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     patch.updated_at = new Date().toISOString()
 
     const sb = createAdminClient()
+
+    // Read current state before applying the patch (for logging)
+    const { data: before } = await sb.from('leads').select('*').eq('id', id).single()
+
     const { data, error } = await sb
       .from('leads')
       .update(patch)
@@ -77,6 +82,66 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
         return NextResponse.json({ error: 'Not found' }, { status: 404 })
       }
       throw error
+    }
+
+    // Determine which log event to emit
+    if (before) {
+      const isStatusChange   = 'status' in patch && patch.status !== before.status
+      const isMetadataChange = 'metadata' in patch && !('status' in patch) &&
+        !('name' in patch) && !('company' in patch) && !('email' in patch) &&
+        !('phone' in patch) && !('source' in patch) && !('score' in patch)
+      const isCoreEdit = !isStatusChange && !isMetadataChange
+
+      if (isStatusChange) {
+        void logEvent({
+          type:        'status_changed',
+          title:       `Status changed: ${before.name}`,
+          description: `${before.status} → ${patch.status as string}`,
+          leadId:      id,
+          meta: {
+            actor: ACTOR, undoable: true, entity_id: id, entity_type: 'lead',
+            entity_name: before.name,
+            old_value:  { status: before.status },
+            new_value:  { status: patch.status },
+            undo_data:  { lead_id: id, old_status: before.status },
+          },
+        })
+      } else if (isMetadataChange) {
+        void logEvent({
+          type:        'notes_changed',
+          title:       `Notes updated: ${before.name}`,
+          leadId:      id,
+          meta: {
+            actor: ACTOR, undoable: true, entity_id: id, entity_type: 'lead',
+            entity_name: before.name,
+            undo_data: { lead_id: id, old_metadata: before.metadata },
+          },
+        })
+      } else if (isCoreEdit) {
+        const changedFields = Object.keys(patch).filter(k => k !== 'updated_at')
+        void logEvent({
+          type:        'lead_edited',
+          title:       `Lead edited: ${data.name}`,
+          description: `Changed: ${changedFields.join(', ')}`,
+          leadId:      id,
+          meta: {
+            actor: ACTOR, undoable: true, entity_id: id, entity_type: 'lead',
+            entity_name: data.name,
+            old_value: changedFields.reduce<Record<string, unknown>>((acc, k) => {
+              acc[k] = (before as Record<string, unknown>)[k]; return acc
+            }, {}),
+            new_value: changedFields.reduce<Record<string, unknown>>((acc, k) => {
+              acc[k] = patch[k]; return acc
+            }, {}),
+            undo_data: {
+              lead_id:    id,
+              old_fields: changedFields.reduce<Record<string, unknown>>((acc, k) => {
+                acc[k] = (before as Record<string, unknown>)[k]; return acc
+              }, {}),
+            },
+          },
+        })
+      }
     }
 
     return NextResponse.json({ lead: data })
@@ -93,12 +158,13 @@ export async function DELETE(_req: NextRequest, { params }: Ctx) {
   try {
     const sb = createAdminClient()
 
-    // 1. Delete activity events linked to this lead
-    const { error: actErr } = await sb
-      .from('activity_events')
-      .delete()
-      .eq('lead_id', id)
-    if (actErr) throw actErr
+    // Capture full snapshot before any deletions
+    const { data: leadSnap }  = await sb.from('leads').select('*').eq('id', id).single()
+    const { data: apptSnaps } = await sb.from('appointments').select('*').eq('lead_id', id)
+
+    // 1. Nullify lead_id on activity_events so they survive the lead deletion
+    //    (audit history is permanent — NEVER delete it)
+    await sb.from('activity_events').update({ lead_id: null }).eq('lead_id', id)
 
     // 2. Delete appointments linked to this lead
     const { error: apptErr } = await sb
@@ -135,6 +201,25 @@ export async function DELETE(_req: NextRequest, { params }: Ctx) {
       .delete()
       .eq('id', id)
     if (leadErr) throw leadErr
+
+    if (leadSnap) {
+      void logEvent({
+        type:        'lead_deleted',
+        title:       `Lead deleted: ${leadSnap.name}`,
+        description: leadSnap.company || undefined,
+        leadId:      null,
+        meta: {
+          actor: ACTOR, undoable: true, entity_id: id, entity_type: 'lead',
+          entity_name: leadSnap.name,
+          undo_data: {
+            snapshot: {
+              lead:         leadSnap,
+              appointments: apptSnaps ?? [],
+            },
+          },
+        },
+      })
+    }
 
     return NextResponse.json({ success: true })
   } catch (err) {

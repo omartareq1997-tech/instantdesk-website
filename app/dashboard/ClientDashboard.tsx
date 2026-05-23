@@ -9,6 +9,7 @@ import {
   Activity, RefreshCw, Bell, Shield, Link2, Download, Target,
   DollarSign, Timer, Menu, ChevronLeft, ChevronRight, LineChart, BellDot,
   MessageSquare, SlidersHorizontal, Volume2, VolumeX, ArrowUpDown, Plus,
+  History, ScrollText, Undo2, Pencil, Trash2, CalendarPlus, MoveRight,
 } from 'lucide-react'
 import LeadPanel from './LeadPanel'
 import AddLeadModal from './AddLeadModal'
@@ -20,7 +21,7 @@ import { supabase } from '../lib/supabase'
 
 /* ─── Types ──────────────────────────────────────────────────── */
 
-type Section      = 'overview' | 'analytics' | 'pipeline' | 'activity' | 'appointments' | 'automation' | 'settings'
+type Section      = 'overview' | 'analytics' | 'pipeline' | 'activity' | 'appointments' | 'automation' | 'settings' | 'log'
 type LeadStatus   = 'new' | 'contacted' | 'demo_booked' | 'won' | 'lost'
 type ScoreLabel   = 'hot' | 'warm' | 'cold'
 type ApptStatus   = 'confirmed' | 'pending' | 'completed' | 'cancelled'
@@ -121,6 +122,7 @@ const NAV_ITEMS: {id:Section; label:string; Icon:React.ComponentType<{className?
   { id:'pipeline',     label:'Lead Pipeline', Icon:Users,       badge:10    },
   { id:'activity',     label:'Activity Feed', Icon:Activity                 },
   { id:'appointments', label:'Appointments',  Icon:Calendar,    badge:4     },
+  { id:'log',          label:'Audit Log',     Icon:History                  },
   { id:'automation',   label:'Automation',    Icon:Zap                      },
   { id:'settings',     label:'Settings',      Icon:Settings                 },
 ]
@@ -131,6 +133,7 @@ const SECTION_META: Record<Section,{title:string;sub:string}> = {
   pipeline:     { title:'Lead Pipeline',  sub:'Click any lead to view full details'            },
   activity:     { title:'Activity Feed',  sub:'Automated events across all channels'            },
   appointments: { title:'Appointments',   sub:'Weekly schedule and upcoming bookings'           },
+  log:          { title:'Audit Log',      sub:'Full history of every action — click Undo to reverse'  },
   automation:   { title:'Automation',     sub:'Follow-up status per lead and performance'       },
   settings:     { title:'Settings',       sub:'Account and portal configuration'               },
 }
@@ -1638,7 +1641,7 @@ function AppointmentsSection({
       await fetch(`/api/appointments/${appt.id}`, {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ scheduled_at: newScheduledAt }),
+        body:    JSON.stringify({ scheduled_at: newScheduledAt, _drag: true }),
       })
     } catch { /* optimistic update already applied */ }
   }
@@ -2262,10 +2265,416 @@ function TestSoundButton() {
   )
 }
 
+/* ─── Audit Log ──────────────────────────────────────────────── */
+
+interface LogEvent {
+  id:          string
+  type:        string
+  title:       string
+  description: string | null
+  created_at:  string
+  metadata:    Record<string, unknown> | null
+}
+
+const LOG_TYPE_LABELS: Record<string, string> = {
+  lead_created:         'Lead Created',
+  lead_deleted:         'Lead Deleted',
+  lead_edited:          'Lead Edited',
+  status_changed:       'Status Changed',
+  notes_changed:        'Notes Updated',
+  appointment_created:  'Appointment Scheduled',
+  appointment_deleted:  'Appointment Deleted',
+  appointment_edited:   'Appointment Updated',
+  appointment_moved:    'Appointment Moved',
+}
+
+const LOG_CFG: Record<string, { color: string; bg: string; Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }> }> = {
+  lead_created:         { color: '#34d399', bg: 'rgba(52,211,153,0.12)',   Icon: Users         },
+  lead_deleted:         { color: '#f87171', bg: 'rgba(248,113,113,0.12)',  Icon: Trash2        },
+  lead_edited:          { color: '#a78bfa', bg: 'rgba(167,139,250,0.12)',  Icon: Pencil        },
+  status_changed:       { color: '#fbbf24', bg: 'rgba(251,191,36,0.12)',   Icon: ArrowUpDown   },
+  notes_changed:        { color: '#60a5fa', bg: 'rgba(96,165,250,0.12)',   Icon: ScrollText    },
+  appointment_created:  { color: '#34d399', bg: 'rgba(52,211,153,0.12)',   Icon: CalendarPlus  },
+  appointment_deleted:  { color: '#f87171', bg: 'rgba(248,113,113,0.12)',  Icon: Trash2        },
+  appointment_edited:   { color: '#a78bfa', bg: 'rgba(167,139,250,0.12)',  Icon: Pencil        },
+  appointment_moved:    { color: '#38bdf8', bg: 'rgba(56,189,248,0.12)',   Icon: MoveRight     },
+}
+const LOG_CFG_DEFAULT = { color: 'rgba(255,255,255,0.25)', bg: 'rgba(255,255,255,0.05)', Icon: Activity }
+
+function ChangeDisplay({ ev }: { ev: LogEvent }) {
+  const meta = ev.metadata
+  if (!meta) return null
+  const eventType = (meta._type as string) || ev.type
+  const old = meta.old_value as Record<string, unknown> | undefined
+  const nw  = meta.new_value as Record<string, unknown> | undefined
+  if (!old && !nw) return null
+
+  const arrow    = <span className="text-white/20 mx-1.5 select-none">→</span>
+  const fmtDate  = (d: string) => { try { return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) } catch { return d } }
+  const capType  = (s: string) => (s ?? '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+
+  switch (eventType) {
+    case 'status_changed': {
+      const oldS = old?.status as string | undefined
+      const newS = nw?.status  as string | undefined
+      if (!oldS || !newS) return null
+      const oldCfg = STATUS_CFG[oldS as LeadStatus]
+      const newCfg = STATUS_CFG[newS as LeadStatus]
+      return (
+        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+          {oldCfg
+            ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                style={{ color:oldCfg.color, background:oldCfg.bg, border:`1px solid ${oldCfg.border}` }}>{oldCfg.label}</span>
+            : <span className="text-[10px] text-white/40">{oldS}</span>}
+          {arrow}
+          {newCfg
+            ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                style={{ color:newCfg.color, background:newCfg.bg, border:`1px solid ${newCfg.border}` }}>{newCfg.label}</span>
+            : <span className="text-[10px] text-white/40">{newS}</span>}
+        </div>
+      )
+    }
+    case 'lead_edited': {
+      if (!old || !nw) return null
+      const keys = Object.keys(old).filter(k => String(old[k]) !== String(nw[k]))
+      if (keys.length === 0) return null
+      const k   = keys[0]
+      const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ')
+      return (
+        <div className="mt-1.5 text-[10px] text-white/45">
+          {cap(k)}:{' '}
+          <span className="text-white/55 line-through">{String(old[k])}</span>
+          {arrow}
+          <span className="text-emerald-400/75">{String(nw[k])}</span>
+          {keys.length > 1 && <span className="text-white/25 ml-1.5">+{keys.length - 1} more</span>}
+        </div>
+      )
+    }
+    case 'appointment_moved': {
+      const oldD = old?.scheduled_at as string | undefined
+      const newD = nw?.scheduled_at  as string | undefined
+      if (!oldD || !newD) return null
+      return (
+        <div className="mt-1.5 text-[10px] text-white/45">
+          <span className="text-white/55">{fmtDate(oldD)}</span>
+          {arrow}
+          <span className="text-emerald-400/75">{fmtDate(newD)}</span>
+        </div>
+      )
+    }
+    case 'appointment_edited': {
+      if (!old || !nw) return null
+      if (old.scheduled_at !== nw.scheduled_at && old.scheduled_at && nw.scheduled_at) {
+        return (
+          <div className="mt-1.5 text-[10px] text-white/45">
+            Date: <span className="text-white/55">{fmtDate(old.scheduled_at as string)}</span>
+            {arrow}
+            <span className="text-emerald-400/75">{fmtDate(nw.scheduled_at as string)}</span>
+          </div>
+        )
+      }
+      if (old.type !== nw.type && old.type && nw.type) {
+        return (
+          <div className="mt-1.5 text-[10px] text-white/45">
+            Type: <span className="text-white/55">{capType(old.type as string)}</span>
+            {arrow}
+            <span className="text-emerald-400/75">{capType(nw.type as string)}</span>
+          </div>
+        )
+      }
+      if (old.status !== nw.status && old.status && nw.status) {
+        return (
+          <div className="mt-1.5 text-[10px] text-white/45">
+            Status: <span className="text-white/55">{old.status as string}</span>
+            {arrow}
+            <span className="text-emerald-400/75">{nw.status as string}</span>
+          </div>
+        )
+      }
+      return null
+    }
+    default: return null
+  }
+}
+
+const LOG_PAGE = 50  // rows per page
+
+function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boolean) => void }) {
+  const [events,        setEvents]        = useState<LogEvent[]>([])
+  const [loading,       setLoading]       = useState(true)
+  const [error,         setError]         = useState('')
+  const [processingIds, setProcessingIds] = useState<Set<string>>(new Set())
+  const [visibleCount,  setVisibleCount]  = useState(LOG_PAGE)
+
+  // ── Fetch ──────────────────────────────────────────────────────
+  const fetchEvents = useCallback(async (silent = false) => {
+    if (!silent) { setLoading(true); setVisibleCount(LOG_PAGE) }
+    try {
+      const res = await fetch('/api/activity')
+      const d   = await res.json() as { events?: LogEvent[] }
+      setEvents(d.events ?? [])
+      setError('')
+    } catch {
+      setError('Failed to load activity log')
+    }
+    if (!silent) setLoading(false)
+  }, [])
+
+  useEffect(() => { void fetchEvents() }, [fetchEvents])
+
+  // ── Optimistic undo with rollback ──────────────────────────────
+  async function handleUndo(ev: LogEvent) {
+    if (processingIds.has(ev.id)) return  // prevent double-click
+
+    // Mark in-flight
+    setProcessingIds(prev => new Set([...prev, ev.id]))
+
+    // Optimistic update: mark as undone immediately
+    const savedEvent = ev
+    setEvents(prev => prev.map(e =>
+      e.id === ev.id
+        ? { ...e, metadata: { ...(e.metadata ?? {}), undone: true, undone_at: new Date().toISOString() } }
+        : e
+    ))
+
+    try {
+      const res  = await fetch(`/api/activity/${ev.id}/undo`, { method: 'POST' })
+      const data = await res.json() as { error?: string }
+      if (!res.ok) {
+        // Rollback: restore original event
+        setEvents(prev => prev.map(e => e.id === ev.id ? savedEvent : e))
+        onToast('Undo failed', data.error ?? 'Something went wrong', false)
+      } else {
+        const name = (savedEvent.metadata?.entity_name as string) || savedEvent.title
+        onToast('Undone', name, true)
+        // Background sync — quiet so it doesn't flash the skeleton
+        setTimeout(() => void fetchEvents(true), 900)
+      }
+    } catch {
+      // Rollback on network error
+      setEvents(prev => prev.map(e => e.id === ev.id ? savedEvent : e))
+      onToast('Undo failed', 'Network error — check your connection', false)
+    }
+
+    setProcessingIds(prev => { const s = new Set(prev); s.delete(ev.id); return s })
+  }
+
+  const schemaWarning  = events.length > 0 && events.every(e => e.metadata === null)
+  const visibleEvents  = events.slice(0, visibleCount)
+  const remainingCount = events.length - visibleCount
+
+  // ── Loading skeleton ───────────────────────────────────────────
+  if (loading) return (
+    <div className="flex flex-col gap-2">
+      {/* Header skeleton */}
+      <div className="flex items-center justify-between px-1 mb-1 animate-pulse">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-xl flex-shrink-0" style={{ background: 'rgba(255,255,255,0.06)' }} />
+          <div className="flex flex-col gap-1.5">
+            <div className="h-3 w-24 rounded-full" style={{ background: 'rgba(255,255,255,0.07)' }} />
+            <div className="h-2 w-40 rounded-full" style={{ background: 'rgba(255,255,255,0.04)' }} />
+          </div>
+        </div>
+        <div className="h-7 w-20 rounded-lg" style={{ background: 'rgba(255,255,255,0.04)' }} />
+      </div>
+      {/* Row skeletons */}
+      {[...Array(7)].map((_, i) => (
+        <div key={i} className="rounded-2xl px-4 py-3.5 flex items-start gap-3 animate-pulse"
+          style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.07)',
+                   animationDelay: `${i * 60}ms` }}>
+          <div className="w-9 h-9 rounded-xl flex-shrink-0" style={{ background: 'rgba(255,255,255,0.05)' }} />
+          <div className="flex-1 flex flex-col gap-2 pt-0.5">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <div className="h-2 rounded-full w-20" style={{ background: 'rgba(255,255,255,0.07)' }} />
+                <div className="h-2.5 rounded-full w-28" style={{ background: 'rgba(255,255,255,0.05)' }} />
+              </div>
+              <div className="h-2 rounded-full w-14" style={{ background: 'rgba(255,255,255,0.04)' }} />
+            </div>
+            <div className="h-2 rounded-full w-2/5" style={{ background: 'rgba(255,255,255,0.04)' }} />
+            <div className="flex items-center justify-between gap-4 mt-0.5">
+              <div className="h-2 rounded-full w-24" style={{ background: 'rgba(255,255,255,0.035)' }} />
+              <div className="h-5 w-14 rounded-lg" style={{ background: 'rgba(255,255,255,0.04)' }} />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+
+  if (error) return (
+    <div className="flex flex-col items-center gap-3 py-16">
+      <AlertCircle className="w-8 h-8 text-red-400/40" />
+      <p className="text-sm text-red-400">{error}</p>
+      <button onClick={() => void fetchEvents()}
+        className="text-xs text-violet-400 hover:text-violet-300 transition-colors">
+        Retry
+      </button>
+    </div>
+  )
+
+  return (
+    <div className="flex flex-col gap-3">
+
+      {/* Header */}
+      <div className="flex items-center justify-between px-1 mb-1">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-xl flex items-center justify-center"
+            style={{ background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.2)' }}>
+            <History className="w-4 h-4 text-violet-400" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold text-white">Audit Log</h2>
+            <p className="text-xs text-white/30">
+              {events.length} {events.length === 200 ? '(max loaded)' : ''} actions — every change is tracked
+            </p>
+          </div>
+        </div>
+        <button onClick={() => void fetchEvents()}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-white/30 hover:text-white/60 transition-colors"
+          style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+          <RefreshCw className="w-3.5 h-3.5" />Refresh
+        </button>
+      </div>
+
+      {/* Schema prerequisite warning (dev-time) */}
+      {schemaWarning && (
+        <div className="flex items-start gap-3 px-4 py-3 rounded-xl"
+          style={{ background: 'rgba(251,191,36,0.07)', border: '1px solid rgba(251,191,36,0.18)' }}>
+          <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-xs font-semibold text-amber-300">Undo disabled — SQL prerequisites not yet run</p>
+            <p className="text-[10px] text-amber-300/60 mt-1">Run in Supabase SQL editor:</p>
+            <code className="text-[10px] text-amber-200/55 mt-0.5 block leading-relaxed">
+              ALTER TABLE activity_events DROP CONSTRAINT IF EXISTS activity_events_type_check;<br />
+              ALTER TABLE activity_events ADD COLUMN IF NOT EXISTS metadata JSONB;
+            </code>
+          </div>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {events.length === 0 ? (
+        <Card className="flex flex-col items-center justify-center py-16 gap-3">
+          <History className="w-8 h-8 text-white/10" />
+          <p className="text-sm text-white/25 font-medium">No activity yet</p>
+          <p className="text-xs text-white/15">Create leads, schedule appointments — every action appears here</p>
+        </Card>
+      ) : (
+        <>
+          <div className="flex flex-col gap-2">
+            {visibleEvents.map((ev, i) => {
+              const meta        = ev.metadata ?? {}
+              const eventType   = (meta._type as string) || ev.type
+              const cfg         = LOG_CFG[eventType] ?? LOG_CFG_DEFAULT
+              const typeLabel   = LOG_TYPE_LABELS[eventType]
+                                ?? eventType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+              const entityName  = meta.entity_name as string | undefined
+              const actor       = (meta.actor as string) || 'Alex Thompson'
+              const isUndone    = !!(meta.undone)
+              const isProcessing = processingIds.has(ev.id)
+              // undoable: show button only when undoable, not yet undone, and not currently being processed
+              // (isProcessing check is kept for the edge case where the optimistic update hasn't batched yet)
+              const undoable    = !!(meta.undoable) && !isUndone && !isProcessing
+
+              return (
+                <motion.div key={ev.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: Math.min(i * 0.015, 0.25) }}>
+                  <Card className={`px-4 py-3.5 flex items-start gap-3 transition-opacity duration-200
+                    ${isUndone ? 'opacity-40' : ''} ${isProcessing ? 'opacity-60' : ''}`}>
+
+                    {/* Event type icon */}
+                    <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
+                      style={{ background: cfg.bg, border: `1px solid ${cfg.color}28` }}>
+                      <DataIcon icon={cfg.Icon} className="w-4 h-4" style={{ color: cfg.color }} />
+                    </div>
+
+                    {/* Content */}
+                    <div className="flex-1 min-w-0">
+
+                      {/* Line 1: type label + entity name + timestamp */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <span className="text-[10px] font-black uppercase tracking-widest"
+                            style={{ color: cfg.color }}>{typeLabel}</span>
+                          {entityName
+                            ? <span className="ml-2 text-xs font-semibold text-white/85">{entityName}</span>
+                            : <span className="ml-2 text-xs text-white/55 truncate">{ev.title}</span>}
+                        </div>
+                        <span className="text-[10px] text-white/20 flex-shrink-0 whitespace-nowrap">
+                          {relativeTime(ev.created_at)}
+                        </span>
+                      </div>
+
+                      {/* Line 2: old → new value diff */}
+                      <ChangeDisplay ev={ev} />
+
+                      {/* Line 3: actor + undo controls */}
+                      <div className="flex items-center justify-between mt-2 gap-2">
+                        <span className="text-[10px] text-white/30">{actor}</span>
+
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          {isUndone && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                              style={{ background:'rgba(248,113,113,0.10)', color:'#f87171', border:'1px solid rgba(248,113,113,0.18)' }}>
+                              Undone
+                            </span>
+                          )}
+                          {/* Show spinner badge while processing (brief window before optimistic update renders) */}
+                          {isProcessing && !isUndone && (
+                            <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold"
+                              style={{ background:'rgba(139,92,246,0.08)', border:'1px solid rgba(139,92,246,0.20)', color:'rgba(196,181,253,0.6)' }}>
+                              <motion.span className="w-2.5 h-2.5 rounded-full border-2 border-violet-400/30 border-t-violet-400"
+                                animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity, ease:'linear' }} />
+                              Undoing…
+                            </span>
+                          )}
+                          {undoable && (
+                            <button
+                              onClick={() => handleUndo(ev)}
+                              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all hover:bg-violet-500/15 active:scale-95"
+                              style={{ background:'rgba(139,92,246,0.10)', border:'1px solid rgba(139,92,246,0.28)', color:'#c4b5fd' }}>
+                              <Undo2 className="w-2.5 h-2.5" /><span>Undo</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                    </div>
+                  </Card>
+                </motion.div>
+              )
+            })}
+          </div>
+
+          {/* Pagination: load more */}
+          {remainingCount > 0 && (
+            <motion.button
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+              onClick={() => setVisibleCount(v => v + LOG_PAGE)}
+              className="w-full py-3 rounded-xl text-xs font-semibold text-white/35 hover:text-white/60 transition-colors"
+              style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+              Load {Math.min(LOG_PAGE, remainingCount)} more
+              <span className="ml-1.5 text-white/20">({remainingCount} remaining)</span>
+            </motion.button>
+          )}
+
+          {/* Bottom note when all loaded */}
+          {remainingCount <= 0 && events.length >= 200 && (
+            <p className="text-center text-[10px] text-white/15 py-2">
+              Showing last 200 actions — older history is stored in the database
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 /* ─── Hash persistence helpers ───────────────────────────────── */
 
 const VALID_SECTIONS = new Set<string>([
-  'overview','analytics','pipeline','activity','appointments','automation','settings',
+  'overview','analytics','pipeline','activity','appointments','log','automation','settings',
 ])
 
 function getInitialSectionFromHash(): Section {
@@ -2658,6 +3067,13 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
                 {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={leads} newLeadIds={newLeadIds} onAddLead={() => setShowAddLead(true)} />}
                 {section==='activity'     && <ActivitySection feed={activityFeed} />}
                 {section==='appointments' && <AppointmentsSection appointments={appointments} leads={leads} onSelectLead={handleSelectLead} onApptUpdated={handleApptUpdated} onAddAppointment={() => openAddAppt()} />}
+                {section==='log'          && <LogSection onToast={(title, sub, ok) =>
+                  setToasts(prev => [{
+                    id: crypto.randomUUID(), type: 'hint' as const,
+                    title, sub, badge: ok ? 'Done' : 'Error',
+                    badgeColor: ok ? '#34d399' : '#f87171', duration: 4000,
+                  }, ...prev.slice(0, 3)])
+                } />}
                 {section==='automation'   && <AutomationSection leads={leads} integrations={integrations} overviewMetrics={overviewMetrics} />}
                 {section==='settings'     && <SettingsSection />}
               </motion.div>

@@ -808,11 +808,15 @@ export default function LeadPanel({
     setSavingNotes(true)
     try {
       const merged = { ...meta, notes: notesText, tags }
-      await supabase.from('leads').update({ metadata: merged }).eq('id', lead.id)
+      await fetch(`/api/leads/${lead.id}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ metadata: merged }),
+      })
       setNotesDirty(false)
       setNotesSaved(true)
       setTimeout(() => setNotesSaved(false), 2500)
-    } catch { /* silently ignore — no network disruption handling needed */ }
+    } catch { /* silently ignore */ }
     setSavingNotes(false)
   }, [lead.id, meta, notesText, tags])
 
@@ -834,7 +838,13 @@ export default function LeadPanel({
   const markStatus = useCallback(async (status: LeadStatus) => {
     setLocalStatus(status)
     setUpdatingStatus(true)
-    await supabase.from('leads').update({ status, updated_at: new Date().toISOString() }).eq('id', lead.id)
+    try {
+      await fetch(`/api/leads/${lead.id}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ status }),
+      })
+    } catch { /* optimistic update already applied */ }
     setUpdatingStatus(false)
   }, [lead.id])
 

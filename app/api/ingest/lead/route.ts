@@ -462,6 +462,10 @@ export async function POST(req: NextRequest) {
   let leadId: string
   let isNewLead = false
 
+  // Server timestamp generated here — never sourced from the request body,
+  // transcript, email parse, or appointment date.
+  const insertedAt = new Date().toISOString()
+
   try {
     if (email) {
       const { data: existing } = await sb
@@ -479,7 +483,7 @@ export async function POST(req: NextRequest) {
           name, company, phone,
           source, interest: interest ?? undefined,
           score, score_label: scoreLabel,
-          updated_at: new Date().toISOString(),
+          updated_at: insertedAt,
         }
         if (Object.keys(mergedMeta).length > 0) updatePayload.metadata = mergedMeta
         await sb.from('leads').update(updatePayload).eq('id', existing.id)
@@ -489,6 +493,7 @@ export async function POST(req: NextRequest) {
           client_id: clientId, name, company, email, phone,
           source, interest: interest ?? undefined,
           score, score_label: scoreLabel, status: 'new',
+          created_at: insertedAt,
           ...(finalMetadata && { metadata: finalMetadata }),
         }).select('id').single()
         if (error) throw error
@@ -499,6 +504,7 @@ export async function POST(req: NextRequest) {
         client_id: clientId, name, company, phone,
         source, interest: interest ?? undefined,
         score, score_label: scoreLabel, status: 'new',
+        created_at: insertedAt,
         ...(finalMetadata && { metadata: finalMetadata }),
       }).select('id').single()
       if (error) throw error
@@ -541,27 +547,55 @@ export async function POST(req: NextRequest) {
 
   /* ── 6c. Appointment ─────────────────────────────────────────── */
   let appointmentId: string | undefined
+  let isNewAppt    = false
 
   if (body.appointment_date) {
     try {
-      const { data: appt, error: apptErr } = await sb.from('appointments').insert({
-        client_id:    clientId,
-        lead_id:      leadId,
-        lead_name:    name,
-        lead_company: company,
-        type:         body.appointment_type?.trim() || 'demo_call',
-        scheduled_at: body.appointment_date,
-        status:       'pending',
-      }).select('id').single()
-      if (apptErr) throw apptErr
-      appointmentId = appt.id
+      const apptType = body.appointment_type?.trim() || 'demo_call'
+
+      // Check for an existing appointment for this lead with the same slot + type.
+      // Minute-level comparison avoids duplicates from minor ISO formatting differences.
+      const scheduledMinute = new Date(body.appointment_date).toISOString().slice(0, 16)
+      const { data: existing } = await sb
+        .from('appointments')
+        .select('id')
+        .eq('lead_id', leadId)
+        .eq('type', apptType)
+        .gte('scheduled_at', scheduledMinute + ':00Z')
+        .lt('scheduled_at',  scheduledMinute + ':59Z')
+        .maybeSingle()
+
+      if (existing?.id) {
+        // Same slot already booked — update in place, never duplicate.
+        await sb.from('appointments').update({
+          lead_name:    name,
+          lead_company: company,
+          scheduled_at: body.appointment_date,
+          status:       'pending',
+        }).eq('id', existing.id)
+        appointmentId = existing.id
+        isNewAppt     = false
+      } else {
+        const { data: appt, error: apptErr } = await sb.from('appointments').insert({
+          client_id:    clientId,
+          lead_id:      leadId,
+          lead_name:    name,
+          lead_company: company,
+          type:         apptType,
+          scheduled_at: body.appointment_date,
+          status:       'pending',
+        }).select('id').single()
+        if (apptErr) throw apptErr
+        appointmentId = appt.id
+        isNewAppt     = true
+      }
     } catch (e) {
-      console.warn(`[ingest/lead][${rid}] Appointment insert failed:`, e)
+      console.warn(`[ingest/lead][${rid}] Appointment upsert failed:`, e)
     }
   }
 
   /* ── 6d. Activity events ─────────────────────────────────────── */
-  const now = new Date().toISOString()
+  const now = insertedAt
   const activityRows: object[] = []
 
   activityRows.push({
@@ -582,7 +616,7 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  if (appointmentId && body.appointment_date) {
+  if (isNewAppt && appointmentId && body.appointment_date) {
     const apptLabel = new Date(body.appointment_date).toLocaleString('en-GB', {
       weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit',
     })

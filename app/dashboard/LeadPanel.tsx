@@ -1,12 +1,15 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  X, Bot, Lightbulb,
-  MessageCircle, Calendar, ArrowRight,
-  SlidersHorizontal, Phone, Mail, FileText, Clock, Tag,
+  X, Bot, Lightbulb, MessageCircle, Calendar, ArrowRight,
+  SlidersHorizontal, Phone, Mail, FileText, Clock, Tag as TagIcon,
+  CheckCircle, XCircle, Users, Zap, Send, AlertTriangle,
+  TrendingUp, DollarSign, Target, Plus, Save, ChevronDown,
+  MessageSquare, Flame, Snowflake, ThumbsUp,
 } from 'lucide-react'
+import { supabase } from '../lib/supabase'
 
 /* ─── Types ──────────────────────────────────────────────────── */
 
@@ -14,64 +17,94 @@ type ScoreLabel = 'hot' | 'warm' | 'cold'
 type LeadStatus = 'new' | 'contacted' | 'demo_booked' | 'won' | 'lost'
 type ApptStatus = 'confirmed' | 'pending' | 'completed' | 'cancelled'
 type FromRole   = 'user' | 'ai' | 'agent'
+type TabId      = 'overview' | 'conversation' | 'notes' | 'timeline'
 
 interface Lead {
   id: string; name: string; company: string
   email?: string; phone?: string
   source: string; interest: string; assignedAgent: string
   score: number; scoreLabel: ScoreLabel; status: LeadStatus; date: string
+  auto: AutoState
   metadata?: Record<string, unknown>
 }
 
-// Minimal appointment shape — matches Appointment from types.ts
+interface AutoState {
+  aiSms: string; emailSeq: string; nurture: string
+  smartAssign: string; autoCall: string
+}
+
 interface ApptSummary {
-  id:      string
-  type:    string
-  date:    string    // YYYY-MM-DD
-  time:    string    // HH:MM
-  status:  ApptStatus
-  name:    string
-  company: string
-  notes?:  string
-  leadId?: string
+  id: string; type: string; date: string; time: string
+  status: ApptStatus; name: string; company: string
+  notes?: string; leadId?: string
 }
 
 interface ChatMessage {
-  id:              string
-  from:            FromRole
-  content:         string
-  response_time_ms: number | null
-  created_at:      string
+  id: string; from: FromRole; content: string
+  response_time_ms: number | null; created_at: string
 }
 
-/* ─── Metadata helpers ───────────────────────────────────────── */
-
-function formatMetaKey(key: string): string {
-  return key
-    .replace(/_/g, ' ')
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/\b\w/g, c => c.toUpperCase())
+interface AISummary {
+  intent: string; urgency: 'high' | 'medium' | 'low'
+  budget: string | null; sentiment: 'positive' | 'neutral' | 'negative'
+  action: string; signals: string[]
 }
 
-function formatMetaValue(v: unknown): string {
-  if (v === null || v === undefined) return '—'
-  if (typeof v === 'boolean')        return v ? 'Yes' : 'No'
-  if (typeof v === 'string')         return v
-  if (typeof v === 'number')         return v.toLocaleString()
-  if (Array.isArray(v))              return v.join(', ')
-  return JSON.stringify(v)
+/* ─── Config ─────────────────────────────────────────────────── */
+
+const STATUS_CFG: Record<LeadStatus, { label: string; color: string; bg: string; border: string }> = {
+  new:         { label:'New',         color:'#a78bfa', bg:'rgba(167,139,250,0.10)', border:'rgba(167,139,250,0.25)' },
+  contacted:   { label:'Contacted',   color:'#60a5fa', bg:'rgba(96,165,250,0.10)',  border:'rgba(96,165,250,0.25)'  },
+  demo_booked: { label:'Demo Booked', color:'#fbbf24', bg:'rgba(251,191,36,0.10)',  border:'rgba(251,191,36,0.25)'  },
+  won:         { label:'Won',         color:'#34d399', bg:'rgba(52,211,153,0.10)',  border:'rgba(52,211,153,0.25)'  },
+  lost:        { label:'Lost',        color:'#f87171', bg:'rgba(248,113,113,0.10)', border:'rgba(248,113,113,0.25)' },
 }
 
-// Keys rendered separately — excluded from the generic metadata table
+const SCORE_CFG: Record<ScoreLabel, { color: string; label: string; bg: string }> = {
+  hot:  { color:'#f87171', label:'Hot',  bg:'rgba(248,113,113,0.12)' },
+  warm: { color:'#fb923c', label:'Warm', bg:'rgba(251,146,60,0.12)'  },
+  cold: { color:'#60a5fa', label:'Cold', bg:'rgba(96,165,250,0.12)'  },
+}
+
+const APPT_STATUS_CFG: Record<ApptStatus, { label: string; color: string; bg: string; border: string }> = {
+  confirmed: { label:'Confirmed', color:'#34d399', bg:'rgba(52,211,153,0.07)',  border:'rgba(52,211,153,0.22)'  },
+  pending:   { label:'Pending',   color:'#fbbf24', bg:'rgba(251,191,36,0.07)',  border:'rgba(251,191,36,0.22)'  },
+  completed: { label:'Completed', color:'#60a5fa', bg:'rgba(96,165,250,0.07)',  border:'rgba(96,165,250,0.22)'  },
+  cancelled: { label:'Cancelled', color:'#f87171', bg:'rgba(248,113,113,0.07)', border:'rgba(248,113,113,0.22)' },
+}
+
+const CHANNEL_LABEL: Record<string, string> = {
+  whatsapp:'WhatsApp', website:'Website Chat', email:'Email', instagram:'Instagram DM',
+}
+
+const AUTO_ROWS: { key: keyof AutoState; label: string }[] = [
+  { key:'aiSms',       label:'AI SMS'         },
+  { key:'emailSeq',    label:'Email Sequence'  },
+  { key:'nurture',     label:'Nurture Flow'    },
+  { key:'smartAssign', label:'Smart Assign'    },
+  { key:'autoCall',    label:'Auto-call'       },
+]
+
+const AUTO_STATUS_COLOR: Record<string, string> = {
+  sent:'#34d399', active:'#34d399', completed:'#34d399', assigned:'#34d399',
+  scheduled:'#fbbf24', not_started:'rgba(255,255,255,0.2)',
+  paused:'rgba(255,255,255,0.2)', off:'rgba(255,255,255,0.12)', unassigned:'rgba(255,255,255,0.15)',
+}
+
 const SURFACED_META_KEYS = new Set([
-  'full_conversation', 'message', 'initial_message', 'notes', 'note',
+  'full_conversation','message','initial_message','notes','note','tags',
+  'budget','specification','preferred_contact','city_or_location',
+  'property_type','priority','appointment_date',
 ])
 
-/* ─── Conversation helpers ───────────────────────────────────── */
+/* ─── Helpers ────────────────────────────────────────────────── */
+
+function initials(name: string) {
+  return name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
+}
 
 function fmtTime(iso: string): string {
   if (!iso) return ''
-  // iso may be a bare "HH:MM" time string from a transcript, or a full ISO datetime
   if (/^\d{1,2}:\d{2}/.test(iso)) return iso.slice(0, 5)
   try { return new Date(iso).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) }
   catch { return '' }
@@ -87,7 +120,6 @@ function fmtDate(iso: string): string {
   catch { return iso }
 }
 
-/** Full weekday date: "Thursday 5 June 2026" */
 function fmtApptFull(date: string): string {
   try {
     return new Date(date + 'T12:00:00Z').toLocaleDateString('en-GB', {
@@ -96,178 +128,161 @@ function fmtApptFull(date: string): string {
   } catch { return date }
 }
 
-/**
- * Role label regexes.
- * CLIENT_RX: the human side — Visitor, Client, User, Customer, Lead, You, Human, Reply
- * BOT_RX:    the bot side   — Bot, AI, Assistant, Agent, System, InstantDesk, Support, Chatbot, Rep
- * TS_RX:     optional timestamp prefix — [14:32], (14:32:05), "14:32 - "
- */
+function formatMetaKey(key: string): string {
+  return key.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\b\w/g, c => c.toUpperCase())
+}
+
+function formatMetaValue(v: unknown): string {
+  if (v === null || v === undefined) return '—'
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No'
+  if (typeof v === 'string')  return v
+  if (typeof v === 'number')  return v.toLocaleString()
+  if (Array.isArray(v))       return v.join(', ')
+  return JSON.stringify(v)
+}
+
+/* ─── Conversation parsing ───────────────────────────────────── */
+
 const CLIENT_RX = /^(?:client|user|customer|human|lead|visitor|you|reply|sender|guest)\s*[:\-]\s*/i
 const BOT_RX    = /^(?:bot|ai|assistant|agent|system|instantdesk|support|rep|help|chatbot|operator|staff)\s*[:\-]\s*/i
 const TS_RX     = /^[\[(]?\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?[\])]?\s*[-–|]?\s*/i
 
-/**
- * Parse an HTML conversation transcript from a chat widget.
- * Detects speaker by CSS classes, inline styles, or parent element classes.
- * Returns [] if the HTML structure can't be mapped to roles.
- */
 function parseHtmlConversation(html: string): ChatMessage[] {
   if (typeof document === 'undefined') return []
   const wrap = document.createElement('div')
   wrap.innerHTML = html
   const msgs: ChatMessage[] = []
-
-  // Identify role from element + parent classes / inline style
   function detectRole(el: Element): FromRole | null {
     const check = (cls: string): FromRole | null => {
-      // Client: right-side, outgoing, blue, visitor, user, etc.
       if (/\b(visitor|client|user[-_]?msg|from[-_]?user|outgoing|sent|right|you|human|lead|customer|blue|own|mine)\b/.test(cls)) return 'user'
-      // Bot: left-side, incoming, white, bot, ai, assistant, etc.
       if (/\b(bot|ai|assistant|agent|incoming|received|left|support|chatbot|white|other|operator)\b/.test(cls)) return 'ai'
       return null
     }
     const cls = (el.getAttribute('class') ?? '').toLowerCase()
     const role = check(cls)
     if (role) return role
-    // Check inline style for alignment clues
     const style = (el.getAttribute('style') ?? '').toLowerCase()
     if (/text-align\s*:\s*right|float\s*:\s*right|margin-left\s*:\s*auto/.test(style)) return 'user'
     if (/text-align\s*:\s*left|float\s*:\s*left|margin-right\s*:\s*auto/.test(style))  return 'ai'
-    // Check parent
     if (el.parentElement) {
       const parentRole = check((el.parentElement.getAttribute('class') ?? '').toLowerCase())
       if (parentRole) return parentRole
     }
     return null
   }
-
-  // Walk DOM, collect leaf-ish message elements
   function walk(el: Element, depth: number) {
     if (depth > 10) return
     const blockKids = Array.from(el.children).filter(c =>
       /^(div|p|li|section|article|blockquote)$/i.test(c.tagName)
     )
-    if (blockKids.length > 0) {
-      blockKids.forEach(c => walk(c, depth + 1))
-      return
-    }
+    if (blockKids.length > 0) { blockKids.forEach(c => walk(c, depth + 1)); return }
     const text = (el.textContent ?? '').trim()
     if (!text) return
     const role = detectRole(el)
-    if (role) {
-      msgs.push({ id:`h${msgs.length}`, from:role, content:text, response_time_ms:null, created_at:'' })
-    }
+    if (role) msgs.push({ id:`h${msgs.length}`, from:role, content:text, response_time_ms:null, created_at:'' })
   }
-
   Array.from(wrap.children).forEach(c => walk(c, 0))
   return msgs
 }
 
-/**
- * Parse a raw text or HTML conversation transcript into ChatMessage[].
- *
- * Priority:
- * 1. HTML → class/style-based role detection
- * 2. Prefixed lines: "Client: …" / "Bot: …" (with optional timestamp prefix)
- *    Continuation lines (no recognisable label) are appended to the previous message.
- * 3. Fallback: alternate user / ai by line index
- */
 function parseRawTranscript(rawText: string): ChatMessage[] {
   const text = rawText.trim()
   if (!text) return []
-
-  // ── 1. HTML input ─────────────────────────────────────────────
   if (/<[a-z][\s\S]*?>/i.test(text)) {
     const htmlMsgs = parseHtmlConversation(text)
     if (htmlMsgs.length > 0) return htmlMsgs
-    // Strip tags and reparse as plain text
     const stripped = text.replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').trim()
     return parseRawTranscript(stripped)
   }
-
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
-
-  // ── 2. Prefixed lines ─────────────────────────────────────────
   const hasPfx = lines.some(l => {
     const stripped = l.replace(TS_RX, '')
     return CLIENT_RX.test(stripped) || BOT_RX.test(stripped)
   })
-
   if (hasPfx) {
     const msgs: ChatMessage[] = []
     let cur: ChatMessage | null = null
-
     for (let i = 0; i < lines.length; i++) {
       const raw  = lines[i]
-      // Extract optional timestamp
       const tsM  = raw.match(/^[\[(]?(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?)[\])]?/i)
       const time = tsM ? tsM[1].trim() : ''
       const line = raw.replace(TS_RX, '').trim()
-
       if (CLIENT_RX.test(line)) {
         if (cur) msgs.push(cur)
         cur = { id:`p${i}`, from:'user', content:line.replace(CLIENT_RX, '').trim(), response_time_ms:null, created_at:time }
       } else if (BOT_RX.test(line)) {
         if (cur) msgs.push(cur)
         cur = { id:`p${i}`, from:'ai', content:line.replace(BOT_RX, '').trim(), response_time_ms:null, created_at:time }
-      } else if (cur) {
-        // Continuation — append to the current speaker's message
-        cur.content += '\n' + line
-      }
-      // else: header/separator line before any speaker — skip
+      } else if (cur) { cur.content += '\n' + line }
     }
     if (cur) msgs.push(cur)
-    // Filter out blank-content messages
     return msgs.filter(m => m.content.trim().length > 0)
   }
-
-  // ── 3. No labels — alternate user / ai by line index ──────────
   return lines.map((line, i) => ({
-    id: `p${i}`, from: (i % 2 === 0 ? 'user' : 'ai') as FromRole,
-    content: line, response_time_ms: null, created_at: '',
+    id:`p${i}`, from:(i%2===0?'user':'ai') as FromRole,
+    content:line, response_time_ms:null, created_at:'',
   }))
 }
 
-/* ─── Config ─────────────────────────────────────────────────── */
+/* ─── AI Summary (rule-based) ────────────────────────────────── */
 
-const STATUS_CFG: Record<LeadStatus, { label:string; color:string; bg:string }> = {
-  new:         { label:'New',         color:'#a78bfa', bg:'rgba(167,139,250,0.10)' },
-  contacted:   { label:'Contacted',   color:'#60a5fa', bg:'rgba(96,165,250,0.10)'  },
-  demo_booked: { label:'Demo Booked', color:'#fbbf24', bg:'rgba(251,191,36,0.10)'  },
-  won:         { label:'Won',         color:'#34d399', bg:'rgba(52,211,153,0.10)'  },
-  lost:        { label:'Lost',        color:'#f87171', bg:'rgba(248,113,113,0.10)' },
+function generateAISummary(lead: Lead): AISummary {
+  const meta = lead.metadata ?? {}
+  const conv = [meta.full_conversation, meta.message, meta.initial_message]
+    .filter(v => typeof v === 'string' && v.trim()).join(' ')
+
+  const intent = lead.interest ? `Enquiring about ${lead.interest}` : 'General business enquiry'
+
+  // Budget detection
+  let budget = typeof meta.budget === 'string' ? meta.budget : null
+  if (!budget && conv) {
+    const m = conv.match(/(?:£|€|\$|AED|USD|EUR|GBP|PLN)\s*[\d,]+(?:\s*(?:k|thousand))?|\d[\d,]*\s*(?:PLN|EUR|USD|GBP|AED)/i)
+    if (m) budget = m[0].trim()
+  }
+
+  // Urgency
+  let urgency: AISummary['urgency'] = 'low'
+  if (lead.score >= 80 || lead.status === 'demo_booked') urgency = 'high'
+  else if (lead.score >= 50 || lead.status === 'contacted') urgency = 'medium'
+  if (typeof meta.priority === 'string' && /high/i.test(meta.priority)) urgency = 'high'
+
+  // Sentiment
+  let sentiment: AISummary['sentiment'] = 'neutral'
+  if (lead.status === 'won' || lead.scoreLabel === 'hot') sentiment = 'positive'
+  else if (lead.status === 'lost') sentiment = 'negative'
+  else if (lead.scoreLabel === 'warm') sentiment = 'positive'
+
+  // Key signals
+  const signals: string[] = []
+  if (budget) signals.push(`Budget: ${budget}`)
+  if (meta.city_or_location) signals.push(`Location: ${String(meta.city_or_location)}`)
+  if (meta.specification) signals.push(`Spec: ${String(meta.specification).slice(0, 55)}`)
+  if (meta.preferred_contact) signals.push(`Prefers: ${String(meta.preferred_contact)}`)
+  if (meta.property_type) signals.push(`Type: ${String(meta.property_type)}`)
+  if (meta.timeline) signals.push(`Timeline: ${String(meta.timeline)}`)
+
+  // Recommended action
+  const ACTION_MAP: Record<string, string> = {
+    new:         'Reply within 2 hours — response rate drops 80% after 5 hours. Send a personalised intro.',
+    contacted:   'Book a discovery call. Qualify budget, timeline, and decision-maker.',
+    demo_booked: `Prepare the demo around "${lead.interest}". Confirm 24 h before.`,
+    won:         'Start onboarding. Send welcome pack and introduce the team.',
+    lost:        'Add to 30-day re-engagement drip. Review objections and follow up in one month.',
+  }
+  const action = ACTION_MAP[lead.status] ?? 'Review lead details and decide on next step.'
+
+  return { intent, urgency, budget, sentiment, action, signals }
 }
 
-const SCORE_CFG: Record<ScoreLabel, { color:string; label:string }> = {
-  hot:  { color:'#f87171', label:'Hot'  },
-  warm: { color:'#fb923c', label:'Warm' },
-  cold: { color:'#60a5fa', label:'Cold' },
-}
-
-const APPT_STATUS_CFG: Record<ApptStatus, { label:string; color:string; bg:string; border:string }> = {
-  confirmed: { label:'Confirmed', color:'#34d399', bg:'rgba(52,211,153,0.07)',  border:'rgba(52,211,153,0.22)'  },
-  pending:   { label:'Pending',   color:'#fbbf24', bg:'rgba(251,191,36,0.07)',  border:'rgba(251,191,36,0.22)'  },
-  completed: { label:'Completed', color:'#60a5fa', bg:'rgba(96,165,250,0.07)',  border:'rgba(96,165,250,0.22)'  },
-  cancelled: { label:'Cancelled', color:'#f87171', bg:'rgba(248,113,113,0.07)', border:'rgba(248,113,113,0.22)' },
-}
-
-const CHANNEL_LABEL: Record<string, string> = {
-  whatsapp:'WhatsApp', website:'Website Chat', email:'Email', instagram:'Instagram DM',
-}
-
-function initials(name: string) {
-  return name.split(' ').map(n => n[0]).join('').slice(0,2).toUpperCase()
-}
-
-/* ─── Skeleton ───────────────────────────────────────────────── */
+/* ─── Sub-components ─────────────────────────────────────────── */
 
 function ConvSkeleton() {
   return (
-    <div className="flex flex-col gap-3">
-      {[85, 65, 75, 55].map((w, i) => (
+    <div className="flex flex-col gap-3 px-1">
+      {[85, 65, 75, 55, 70].map((w, i) => (
         <div key={i} className={`flex ${i%2===0?'justify-end':'justify-start'}`}>
           <div className="rounded-2xl animate-pulse"
-            style={{ width:`${w}%`, height:34,
+            style={{ width:`${w}%`, height:36,
               background: i%2===0 ? 'rgba(255,255,255,0.05)' : 'rgba(139,92,246,0.08)' }} />
         </div>
       ))}
@@ -275,14 +290,12 @@ function ConvSkeleton() {
   )
 }
 
-/* ─── Chat bubbles ───────────────────────────────────────────── */
-
-function ChatBubbles({ messages }: { messages: ChatMessage[] }) {
+function ChatBubbles({ messages, endRef }: { messages: ChatMessage[]; endRef: React.RefObject<HTMLDivElement | null> }) {
   return (
     <div className="flex flex-col gap-3">
       {messages.map((msg, i) => (
         <motion.div key={msg.id}
-          initial={{ opacity:0, y:8 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.04 }}
+          initial={{ opacity:0, y:10 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.03 }}
           className={`flex ${msg.from==='user'?'justify-end':'justify-start'}`}
         >
           <div className="max-w-[85%]">
@@ -296,17 +309,17 @@ function ChatBubbles({ messages }: { messages: ChatMessage[] }) {
                   {msg.from==='agent'?'Agent':'InstantDesk AI'}
                 </span>
                 {fmtSpeed(msg.response_time_ms) && (
-                  <span className="text-[9px] text-white/20">· replied in {fmtSpeed(msg.response_time_ms)}</span>
+                  <span className="text-[9px] text-white/20">· {fmtSpeed(msg.response_time_ms)}</span>
                 )}
               </div>
             )}
-            <div className="rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed"
+            <div className="rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed whitespace-pre-wrap"
               style={msg.from!=='user' ? {
                 background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.2)',
-                color:'rgba(255,255,255,0.75)', borderTopLeftRadius:4,
+                color:'rgba(255,255,255,0.78)', borderTopLeftRadius:4,
               } : {
                 background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.1)',
-                color:'rgba(255,255,255,0.65)', borderTopRightRadius:4,
+                color:'rgba(255,255,255,0.68)', borderTopRightRadius:4,
               }}>
               {msg.content}
             </div>
@@ -318,27 +331,23 @@ function ChatBubbles({ messages }: { messages: ChatMessage[] }) {
           </div>
         </motion.div>
       ))}
+      <div ref={endRef} />
     </div>
   )
 }
 
-/* ─── Appointment card ───────────────────────────────────────── */
-
-function AppointmentCard({ appt }: { appt: ApptSummary }) {
+function ApptCard({ appt }: { appt: ApptSummary }) {
   const sc = APPT_STATUS_CFG[appt.status]
   return (
     <div className="rounded-2xl p-4 flex flex-col gap-3"
       style={{ background:sc.bg, border:`1px solid ${sc.border}` }}>
-
-      {/* Header row: label + status badge */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0"
             style={{ background:`${sc.color}20` }}>
             <Calendar className="w-3.5 h-3.5" style={{ color:sc.color }} />
           </div>
-          <span className="text-[10px] font-bold uppercase tracking-widest"
-            style={{ color:`${sc.color}90` }}>
+          <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color:`${sc.color}90` }}>
             Appointment
           </span>
         </div>
@@ -348,11 +357,7 @@ function AppointmentCard({ appt }: { appt: ApptSummary }) {
           {sc.label}
         </span>
       </div>
-
-      {/* Type */}
       <div className="text-sm font-bold text-white/85">{appt.type}</div>
-
-      {/* Date + Time */}
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2 text-xs text-white/55">
           <Calendar className="w-3 h-3 text-white/25 flex-shrink-0" />
@@ -363,88 +368,182 @@ function AppointmentCard({ appt }: { appt: ApptSummary }) {
           <span>{appt.time}</span>
         </div>
       </div>
-
-      {/* Lead + Company */}
-      {(appt.name || appt.company) && (
-        <div className="flex items-center gap-2 text-xs text-white/40">
-          <div className="w-5 h-5 rounded-md flex items-center justify-center text-[8px] font-black text-white flex-shrink-0"
-            style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.45),rgba(37,99,235,0.35))' }}>
-            {initials(appt.name || '?')}
-          </div>
-          <span>{appt.name}{appt.company ? ` · ${appt.company}` : ''}</span>
-        </div>
-      )}
-
-      {/* Notes / location */}
       {appt.notes && (
-        <div className="flex items-start gap-2 pt-2.5" style={{ borderTop:`1px solid ${sc.color}18` }}>
-          <Tag className="w-3 h-3 mt-0.5 flex-shrink-0" style={{ color:`${sc.color}60` }} />
-          <p className="text-[11px] leading-relaxed" style={{ color:'rgba(255,255,255,0.45)' }}>
-            {appt.notes}
-          </p>
+        <div className="flex items-start gap-2 pt-2" style={{ borderTop:`1px solid ${sc.color}18` }}>
+          <TagIcon className="w-3 h-3 mt-0.5 flex-shrink-0" style={{ color:`${sc.color}60` }} />
+          <p className="text-[11px] leading-relaxed" style={{ color:'rgba(255,255,255,0.45)' }}>{appt.notes}</p>
         </div>
       )}
     </div>
   )
 }
 
-/* ─── Main component ─────────────────────────────────────────── */
+/* ─── Main panel ─────────────────────────────────────────────── */
 
 export default function LeadPanel({
-  lead,
-  appointments,
-  onClose,
+  lead, appointments, onClose,
 }: {
-  lead:         Lead
+  lead:          Lead
   appointments?: ApptSummary[]
-  onClose:      () => void
+  onClose:       () => void
 }) {
   const statusCfg = STATUS_CFG[lead.status]
   const scoreCfg  = SCORE_CFG[lead.scoreLabel]
+  const meta      = lead.metadata ?? {}
 
-  // Find all appointments linked to this lead, upcoming first
+  // Filter appointments linked to this lead
   const leadAppts = (appointments ?? [])
     .filter(a => a.leadId === lead.id)
     .sort((a, b) => {
-      const aActive = a.status !== 'completed' && a.status !== 'cancelled'
-      const bActive = b.status !== 'completed' && b.status !== 'cancelled'
-      if (aActive && !bActive) return -1
-      if (!aActive && bActive) return 1
+      const aA = a.status !== 'completed' && a.status !== 'cancelled'
+      const bA = b.status !== 'completed' && b.status !== 'cancelled'
+      if (aA && !bA) return -1; if (!aA && bA) return 1
       return `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`)
     })
 
-  /* ── Conversation fetch ──────────────────────────────────────── */
+  /* ── Tab ───────────────────────────────────────────────────── */
+  const [activeTab, setActiveTab] = useState<TabId>('overview')
+
+  /* ── Conversation ──────────────────────────────────────────── */
   const [messages,    setMessages]    = useState<ChatMessage[]>([])
   const [convLoading, setConvLoading] = useState(true)
-  const [channel,     setChannel]     = useState<string | null>(null)
+  const [channelLabel,setChannelLabel]= useState<string | null>(null)
+  const [convId,      setConvId]      = useState<string | null>(null)
+  const [fromMetadata,setFromMetadata]= useState(false)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
 
+  // Fetch messages on mount
   useEffect(() => {
-    setConvLoading(true); setMessages([]); setChannel(null)
+    setConvLoading(true); setMessages([]); setChannelLabel(null); setConvId(null)
     fetch(`/api/lead-messages?lead_id=${encodeURIComponent(lead.id)}`)
       .then(r => r.json())
-      .then((d: { messages?: ChatMessage[]; channel?: string | null }) => {
+      .then((d: { messages?: ChatMessage[]; channel?: string | null; conversation_id?: string | null }) => {
         setMessages(d.messages ?? [])
-        setChannel(d.channel ?? null)
+        setChannelLabel(d.channel ?? null)
+        setConvId(d.conversation_id ?? null)
+        setFromMetadata(false)
       })
       .catch(() => {})
       .finally(() => setConvLoading(false))
   }, [lead.id])
 
-  // Fallback chain: DB messages → full_conversation → message → initial_message
+  // Fallback: parse full_conversation from metadata
   const rawText: string | null =
-    typeof lead.metadata?.full_conversation === 'string' && lead.metadata.full_conversation.trim()
-      ? lead.metadata.full_conversation
-      : typeof lead.metadata?.message === 'string' && lead.metadata.message.trim()
-        ? `User: ${lead.metadata.message}`
-        : typeof lead.metadata?.initial_message === 'string' && lead.metadata.initial_message.trim()
-          ? `User: ${lead.metadata.initial_message}`
+    typeof meta.full_conversation === 'string' && meta.full_conversation.trim()
+      ? meta.full_conversation
+      : typeof meta.message === 'string' && meta.message.trim()
+        ? `Client: ${meta.message}`
+        : typeof meta.initial_message === 'string' && meta.initial_message.trim()
+          ? `Client: ${meta.initial_message}`
           : null
 
-  const displayMessages: ChatMessage[] =
-    messages.length > 0 ? messages : rawText ? parseRawTranscript(rawText) : []
-  const fromMetadata = messages.length === 0 && displayMessages.length > 0
+  const displayMessages: ChatMessage[] = messages.length > 0
+    ? messages
+    : rawText
+      ? (() => {
+          const parsed = parseRawTranscript(rawText)
+          if (parsed.length > 0 && messages.length === 0) setFromMetadata(true)
+          return parsed
+        })()
+      : []
 
-  /* ── Scroll lock + ESC ───────────────────────────────────────── */
+  // Auto-scroll on new messages
+  useEffect(() => {
+    if (activeTab === 'conversation') {
+      messagesEndRef.current?.scrollIntoView({ behavior:'smooth' })
+    }
+  }, [displayMessages.length, activeTab])
+
+  // Realtime: subscribe to new messages for this conversation
+  useEffect(() => {
+    if (!convId) return
+    const ch = supabase
+      .channel(`lead-msgs-${convId}`)
+      .on('postgres_changes',
+        { event:'INSERT', schema:'public', table:'messages', filter:`conversation_id=eq.${convId}` },
+        (payload) => {
+          const r = payload.new as { id:string; from_role:string; content:string; response_time_ms:number|null; created_at:string }
+          setMessages(prev => [...prev, {
+            id: r.id, from: r.from_role as FromRole,
+            content: r.content, response_time_ms: r.response_time_ms, created_at: r.created_at,
+          }])
+        }
+      )
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [convId])
+
+  /* ── Notes + Tags ──────────────────────────────────────────── */
+  const [notesText,   setNotesText]   = useState(() =>
+    typeof meta.notes === 'string' ? meta.notes :
+    typeof meta.note  === 'string' ? meta.note  : ''
+  )
+  const [notesDirty,  setNotesDirty]  = useState(false)
+  const [savingNotes, setSavingNotes] = useState(false)
+  const [notesSaved,  setNotesSaved]  = useState(false)
+
+  const [tags,    setTags]    = useState<string[]>(() => Array.isArray(meta.tags) ? meta.tags as string[] : [])
+  const [newTag,  setNewTag]  = useState('')
+  const [savingTags, setSavingTags] = useState(false)
+
+  const saveNotesAndTags = useCallback(async () => {
+    setSavingNotes(true)
+    try {
+      const merged = { ...meta, notes: notesText, tags }
+      await supabase.from('leads').update({ metadata: merged }).eq('id', lead.id)
+      setNotesDirty(false)
+      setNotesSaved(true)
+      setTimeout(() => setNotesSaved(false), 2500)
+    } catch { /* silently ignore — no network disruption handling needed */ }
+    setSavingNotes(false)
+  }, [lead.id, meta, notesText, tags])
+
+  const addTag = useCallback(() => {
+    const t = newTag.trim().toLowerCase()
+    if (t && !tags.includes(t)) { setTags(prev => [...prev, t]); setNotesDirty(true) }
+    setNewTag('')
+  }, [newTag, tags])
+
+  const removeTag = useCallback((t: string) => {
+    setTags(prev => prev.filter(x => x !== t))
+    setNotesDirty(true)
+  }, [])
+
+  /* ── Status actions ────────────────────────────────────────── */
+  const [localStatus,    setLocalStatus]    = useState<LeadStatus>(lead.status)
+  const [updatingStatus, setUpdatingStatus] = useState(false)
+
+  const markStatus = useCallback(async (status: LeadStatus) => {
+    setLocalStatus(status)
+    setUpdatingStatus(true)
+    await supabase.from('leads').update({ status, updated_at: new Date().toISOString() }).eq('id', lead.id)
+    setUpdatingStatus(false)
+  }, [lead.id])
+
+  /* ── Create appointment form ───────────────────────────────── */
+  const [showApptForm, setShowApptForm] = useState(false)
+  const [apptDate,     setApptDate]     = useState('')
+  const [apptTime,     setApptTime]     = useState('10:00')
+  const [apptType,     setApptType]     = useState('demo_call')
+  const [savingAppt,   setSavingAppt]   = useState(false)
+  const [apptSaved,    setApptSaved]    = useState(false)
+
+  const createAppointment = useCallback(async () => {
+    if (!apptDate || !apptTime) return
+    setSavingAppt(true)
+    const scheduled_at = new Date(`${apptDate}T${apptTime}:00`).toISOString()
+    const CLIENT_ID = process.env.NEXT_PUBLIC_DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
+    await supabase.from('appointments').insert({
+      client_id: CLIENT_ID, lead_id: lead.id,
+      lead_name: lead.name, lead_company: lead.company,
+      type: apptType, scheduled_at, status: 'pending',
+    })
+    setApptSaved(true)
+    setTimeout(() => { setApptSaved(false); setShowApptForm(false) }, 2000)
+    setSavingAppt(false)
+  }, [apptDate, apptTime, apptType, lead])
+
+  /* ── Scroll + ESC ──────────────────────────────────────────── */
   useEffect(() => {
     document.body.style.overflow = 'hidden'
     return () => { document.body.style.overflow = '' }
@@ -455,23 +554,33 @@ export default function LeadPanel({
     return () => window.removeEventListener('keydown', h)
   }, [onClose])
 
-  /* ── Metadata sections ───────────────────────────────────────── */
-  const notesText =
-    typeof lead.metadata?.notes === 'string' ? lead.metadata.notes
-    : typeof lead.metadata?.note  === 'string' ? lead.metadata.note
-    : null
+  /* ── AI Summary ────────────────────────────────────────────── */
+  const ai = generateAISummary({ ...lead, status: localStatus })
+  const urgencyColor = ai.urgency === 'high' ? '#f87171' : ai.urgency === 'medium' ? '#fbbf24' : '#60a5fa'
+  const sentimentIcon = ai.sentiment === 'positive' ? ThumbsUp : ai.sentiment === 'negative' ? AlertTriangle : Target
 
-  const metaEntries = lead.metadata
-    ? Object.entries(lead.metadata).filter(([k]) => !SURFACED_META_KEYS.has(k))
-    : []
+  /* ── Custom metadata table (excludes surfaced keys) ────────── */
+  const metaEntries = Object.entries(meta).filter(([k]) => !SURFACED_META_KEYS.has(k))
 
-  /* ── Lead info rows ──────────────────────────────────────────── */
-  const detailRows = [
-    { label:'Interest', value: lead.interest     || null },
-    { label:'Agent',    value: lead.assignedAgent || null },
-    { label:'Source',   value: lead.source        || null },
-    { label:'Added',    value: lead.date ? fmtDate(lead.date) : null },
-  ].filter(r => r.value) as { label:string; value:string }[]
+  /* ── Surfaced metadata rows (budget, city, spec, etc.) ─────── */
+  const surfacedRows: { label: string; value: string }[] = [
+    { label:'Budget',    value: typeof meta.budget === 'string'             ? meta.budget             : '' },
+    { label:'Location',  value: typeof meta.city_or_location === 'string'   ? meta.city_or_location   : '' },
+    { label:'Property',  value: typeof meta.property_type === 'string'      ? meta.property_type      : '' },
+    { label:'Spec',      value: typeof meta.specification === 'string'      ? meta.specification      : '' },
+    { label:'Contact',   value: typeof meta.preferred_contact === 'string'  ? meta.preferred_contact  : '' },
+    { label:'Priority',  value: typeof meta.priority === 'string'           ? meta.priority           : '' },
+  ].filter(r => r.value)
+
+  const currentStatusCfg = STATUS_CFG[localStatus]
+
+  /* ── Tab definitions ───────────────────────────────────────── */
+  const TABS: { id: TabId; label: string }[] = [
+    { id:'overview',     label:'Overview'     },
+    { id:'conversation', label:'Chat'         },
+    { id:'notes',        label:'Notes'        },
+    { id:'timeline',     label:'Timeline'     },
+  ]
 
   return (
     <AnimatePresence>
@@ -487,222 +596,475 @@ export default function LeadPanel({
       <motion.aside key="panel"
         initial={{ x:'100%', opacity:0 }} animate={{ x:0, opacity:1 }} exit={{ x:'100%', opacity:0 }}
         transition={{ type:'spring', stiffness:300, damping:30 }}
-        className="fixed right-0 top-0 bottom-0 z-50 w-full max-w-md overflow-y-auto"
+        className="fixed right-0 top-0 bottom-0 z-50 w-full max-w-lg overflow-y-auto"
         style={{
-          background:'rgba(7,7,25,0.97)', backdropFilter:'blur(24px)',
+          background:'rgba(7,7,25,0.98)', backdropFilter:'blur(24px)',
           borderLeft:'1px solid rgba(139,92,246,0.18)',
           boxShadow:'-32px 0 80px rgba(0,0,0,0.6)',
         }}
       >
-        {/* ── Header ───────────────────────────────────────────── */}
-        <div className="flex items-start gap-4 px-4 sm:px-6 py-4 sm:py-5 sticky top-0 z-10"
-          style={{ background:'rgba(7,7,25,0.97)', borderBottom:'1px solid rgba(255,255,255,0.07)' }}>
-          <div className="w-11 h-11 rounded-xl flex items-center justify-center text-sm font-black text-white flex-shrink-0"
-            style={{ background:'linear-gradient(135deg,#7c3aed,#2563eb)' }}>
-            {initials(lead.name)}
-          </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="text-base font-bold text-white leading-tight">{lead.name}</h2>
-            {lead.company && <p className="text-xs text-white/40 mt-0.5">{lead.company}</p>}
-          </div>
-          <button onClick={onClose}
-            className="w-8 h-8 rounded-xl flex items-center justify-center text-white/30 hover:text-white/80 transition-all flex-shrink-0"
-            onMouseEnter={e => { e.currentTarget.style.background='rgba(255,255,255,0.08)' }}
-            onMouseLeave={e => { e.currentTarget.style.background='transparent' }}>
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        {/* ── Sticky header block ─────────────────────────────── */}
+        <div className="sticky top-0 z-10"
+          style={{ background:'rgba(7,7,25,0.98)', borderBottom:'1px solid rgba(255,255,255,0.07)' }}>
 
-        <div className="px-4 sm:px-6 py-5 flex flex-col gap-5">
+          {/* Identity row */}
+          <div className="flex items-start gap-4 px-4 sm:px-6 py-4">
+            <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-sm font-black text-white flex-shrink-0"
+              style={{ background:'linear-gradient(135deg,#7c3aed,#2563eb)' }}>
+              {initials(lead.name)}
+            </div>
+            <div className="flex-1 min-w-0">
+              <h2 className="text-base font-black text-white leading-tight truncate">{lead.name}</h2>
+              {lead.company && <p className="text-xs text-white/40 mt-0.5 truncate">{lead.company}</p>}
+              <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                {/* Status badge */}
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                  style={{ color:currentStatusCfg.color, background:currentStatusCfg.bg, border:`1px solid ${currentStatusCfg.border}` }}>
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background:currentStatusCfg.color }} />
+                  {currentStatusCfg.label}
+                </span>
+                {/* Score */}
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                  style={{ color:scoreCfg.color, background:scoreCfg.bg }}>
+                  {scoreCfg.label === 'Hot' ? <Flame className="w-3 h-3" /> : scoreCfg.label === 'Cold' ? <Snowflake className="w-3 h-3" /> : null}
+                  {lead.score} · {scoreCfg.label}
+                </span>
+              </div>
+            </div>
+            <button onClick={onClose}
+              className="w-8 h-8 rounded-xl flex items-center justify-center text-white/30 hover:text-white/80 transition-all flex-shrink-0"
+              onMouseEnter={e => { e.currentTarget.style.background='rgba(255,255,255,0.08)' }}
+              onMouseLeave={e => { e.currentTarget.style.background='transparent' }}>
+              <X className="w-4 h-4" />
+            </button>
+          </div>
 
-          {/* ── Contact info ─────────────────────────────────── */}
-          {(lead.phone || lead.email) && (
-            <div className="flex flex-col gap-2">
+          {/* Quick actions */}
+          <div className="px-4 sm:px-6 pb-3 flex flex-col gap-2">
+            {/* Communication */}
+            <div className="flex gap-2">
               {lead.phone && (
                 <a href={`tel:${lead.phone}`}
-                  className="flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors hover:bg-white/5"
-                  style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)' }}>
-                  <Phone className="w-3.5 h-3.5 text-emerald-400/70 flex-shrink-0" />
-                  <span className="text-xs font-medium text-white/65">{lead.phone}</span>
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all hover:opacity-90"
+                  style={{ background:'rgba(52,211,153,0.10)', border:'1px solid rgba(52,211,153,0.2)', color:'#34d399' }}>
+                  <Phone className="w-3.5 h-3.5" /> Call
                 </a>
               )}
               {lead.email && (
                 <a href={`mailto:${lead.email}`}
-                  className="flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors hover:bg-white/5"
-                  style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)' }}>
-                  <Mail className="w-3.5 h-3.5 text-blue-400/70 flex-shrink-0" />
-                  <span className="text-xs font-medium text-white/65 truncate">{lead.email}</span>
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all hover:opacity-90"
+                  style={{ background:'rgba(96,165,250,0.10)', border:'1px solid rgba(96,165,250,0.2)', color:'#60a5fa' }}>
+                  <Mail className="w-3.5 h-3.5" /> Email
                 </a>
               )}
+              {lead.phone && (
+                <a href={`https://wa.me/${lead.phone.replace(/\D/g,'')}`} target="_blank" rel="noreferrer"
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all hover:opacity-90"
+                  style={{ background:'rgba(52,211,153,0.10)', border:'1px solid rgba(52,211,153,0.2)', color:'#34d399' }}>
+                  <MessageSquare className="w-3.5 h-3.5" /> WhatsApp
+                </a>
+              )}
+              {!lead.phone && !lead.email && (
+                <span className="text-xs text-white/25 py-2 px-3">No contact info</span>
+              )}
             </div>
-          )}
-
-          {/* ── Booked appointments ───────────────────────────── */}
-          {leadAppts.length > 0 && (
-            <div className="flex flex-col gap-2">
-              {leadAppts.map(appt => (
-                <AppointmentCard key={appt.id} appt={appt} />
-              ))}
-            </div>
-          )}
-
-          {/* ── Score / Status / Source ───────────────────────── */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="rounded-xl p-3 flex flex-col gap-1.5"
-              style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)' }}>
-              <div className="text-[9px] font-bold uppercase tracking-widest text-white/25">Score</div>
-              <div className="flex items-center gap-1.5">
-                <span className="font-black text-sm" style={{ color:scoreCfg.color }}>{lead.score}</span>
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
-                  style={{ color:scoreCfg.color, background:`${scoreCfg.color}18` }}>
-                  {scoreCfg.label}
-                </span>
-              </div>
-            </div>
-            <div className="rounded-xl p-3 flex flex-col gap-1.5"
-              style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)' }}>
-              <div className="text-[9px] font-bold uppercase tracking-widest text-white/25">Status</div>
-              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full self-start"
-                style={{ color:statusCfg.color, background:statusCfg.bg }}>
-                {statusCfg.label}
-              </span>
-            </div>
-            <div className="rounded-xl p-3 flex flex-col gap-1.5"
-              style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)' }}>
-              <div className="text-[9px] font-bold uppercase tracking-widest text-white/25">Source</div>
-              <span className="text-xs text-white/55 font-medium leading-tight">{lead.source}</span>
+            {/* Status actions */}
+            <div className="flex gap-2">
+              <button onClick={() => markStatus('won')} disabled={updatingStatus || localStatus === 'won'}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all disabled:opacity-40"
+                style={{ background: localStatus==='won' ? 'rgba(52,211,153,0.20)' : 'rgba(52,211,153,0.08)', border:'1px solid rgba(52,211,153,0.25)', color:'#34d399' }}>
+                <CheckCircle className="w-3.5 h-3.5" /> Won
+              </button>
+              <button onClick={() => markStatus('lost')} disabled={updatingStatus || localStatus === 'lost'}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all disabled:opacity-40"
+                style={{ background: localStatus==='lost' ? 'rgba(248,113,113,0.20)' : 'rgba(248,113,113,0.08)', border:'1px solid rgba(248,113,113,0.25)', color:'#f87171' }}>
+                <XCircle className="w-3.5 h-3.5" /> Lost
+              </button>
+              <button onClick={() => markStatus('demo_booked')} disabled={updatingStatus || localStatus === 'demo_booked'}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all disabled:opacity-40"
+                style={{ background: localStatus==='demo_booked' ? 'rgba(251,191,36,0.20)' : 'rgba(251,191,36,0.08)', border:'1px solid rgba(251,191,36,0.25)', color:'#fbbf24' }}>
+                <Calendar className="w-3.5 h-3.5" /> Demo
+              </button>
+              <button onClick={() => { setActiveTab('timeline'); setShowApptForm(v => !v) }}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-semibold transition-all"
+                style={{ background:'rgba(167,139,250,0.08)', border:'1px solid rgba(167,139,250,0.25)', color:'#a78bfa' }}>
+                <Plus className="w-3.5 h-3.5" />
+              </button>
             </div>
           </div>
 
-          {/* ── Lead detail rows ──────────────────────────────── */}
-          {detailRows.length > 0 && (
-            <div className="rounded-2xl overflow-hidden"
-              style={{ border:'1px solid rgba(255,255,255,0.07)' }}>
-              {detailRows.map((row, i) => (
-                <div key={row.label}
-                  className="flex items-center gap-3 px-4 py-2.5"
-                  style={{
-                    background:   i%2===0 ? 'rgba(255,255,255,0.02)' : 'transparent',
-                    borderBottom: i<detailRows.length-1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
-                  }}>
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-white/25 w-16 flex-shrink-0">
-                    {row.label}
+          {/* Tabs */}
+          <div className="flex px-4 sm:px-6">
+            {TABS.map(t => (
+              <button key={t.id} onClick={() => setActiveTab(t.id)}
+                className="flex-1 py-2.5 text-xs font-bold transition-all relative"
+                style={{ color: activeTab===t.id ? '#c4b5fd' : 'rgba(255,255,255,0.30)' }}>
+                {t.label}
+                {activeTab===t.id && (
+                  <motion.div layoutId="tab-line"
+                    className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full"
+                    style={{ background:'linear-gradient(90deg,#7c3aed,#2563eb)' }} />
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* ── Tab content ─────────────────────────────────────── */}
+        <div className="px-4 sm:px-6 py-5 flex flex-col gap-5">
+
+          {/* ═══ OVERVIEW TAB ═══ */}
+          {activeTab === 'overview' && (
+            <>
+              {/* AI Summary */}
+              <div className="rounded-2xl p-4 flex flex-col gap-3"
+                style={{ background:'rgba(139,92,246,0.07)', border:'1px solid rgba(139,92,246,0.18)' }}>
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0"
+                    style={{ background:'rgba(139,92,246,0.2)' }}>
+                    <Bot className="w-3.5 h-3.5 text-violet-400" />
+                  </div>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-violet-400/70">AI Analysis</span>
+                  {/* Urgency badge */}
+                  <span className="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded-full capitalize"
+                    style={{ background:`${urgencyColor}20`, color:urgencyColor, border:`1px solid ${urgencyColor}30` }}>
+                    {ai.urgency} urgency
                   </span>
-                  <span className="text-xs text-white/65 font-medium">{row.value}</span>
                 </div>
-              ))}
-            </div>
-          )}
-
-          {/* ── Notes from metadata ───────────────────────────── */}
-          {notesText && (
-            <div className="rounded-2xl p-4 flex flex-col gap-2.5"
-              style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}>
-              <div className="flex items-center gap-1.5">
-                <FileText className="w-3 h-3 text-white/25" />
-                <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">Notes</span>
+                <div className="text-xs text-white/70 leading-relaxed">{ai.intent}</div>
+                {/* Signals */}
+                {ai.signals.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {ai.signals.map(s => (
+                      <span key={s} className="text-[10px] px-2 py-0.5 rounded-full"
+                        style={{ background:'rgba(255,255,255,0.05)', color:'rgba(255,255,255,0.50)', border:'1px solid rgba(255,255,255,0.08)' }}>
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {/* Recommended action */}
+                <div className="flex items-start gap-2 pt-2" style={{ borderTop:'1px solid rgba(139,92,246,0.15)' }}>
+                  <Lightbulb className="w-3.5 h-3.5 text-amber-400/70 flex-shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-amber-400/80 leading-relaxed">{ai.action}</p>
+                </div>
               </div>
-              <p className="text-xs text-white/55 leading-relaxed whitespace-pre-wrap">{notesText}</p>
-            </div>
-          )}
 
-          {/* ── Custom metadata table ─────────────────────────── */}
-          {metaEntries.length > 0 && (
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center gap-1.5">
-                <SlidersHorizontal className="w-3 h-3 text-white/25" />
-                <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">Custom Details</span>
-              </div>
-              <div className="rounded-2xl overflow-hidden"
-                style={{ border:'1px solid rgba(255,255,255,0.07)' }}>
-                {metaEntries.map(([key, value], i) => (
-                  <div key={key}
-                    className="flex items-start justify-between gap-4 px-4 py-2.5"
-                    style={{
-                      background:   i%2===0 ? 'rgba(255,255,255,0.015)' : 'transparent',
-                      borderBottom: i<metaEntries.length-1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
-                    }}>
-                    <span className="text-[11px] font-semibold text-white/35 flex-shrink-0">
-                      {formatMetaKey(key)}
-                    </span>
-                    <span className="text-[11px] font-medium text-white/65 text-right break-all">
-                      {formatMetaValue(value)}
-                    </span>
+              {/* Contact info */}
+              {(lead.phone || lead.email) && (
+                <div className="flex flex-col gap-2">
+                  {lead.phone && (
+                    <a href={`tel:${lead.phone}`}
+                      className="flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors hover:bg-white/5"
+                      style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)' }}>
+                      <Phone className="w-3.5 h-3.5 text-emerald-400/70 flex-shrink-0" />
+                      <span className="text-xs font-medium text-white/65">{lead.phone}</span>
+                    </a>
+                  )}
+                  {lead.email && (
+                    <a href={`mailto:${lead.email}`}
+                      className="flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors hover:bg-white/5"
+                      style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)' }}>
+                      <Mail className="w-3.5 h-3.5 text-blue-400/70 flex-shrink-0" />
+                      <span className="text-xs font-medium text-white/65 truncate">{lead.email}</span>
+                    </a>
+                  )}
+                </div>
+              )}
+
+              {/* Key details grid */}
+              <div className="rounded-2xl overflow-hidden" style={{ border:'1px solid rgba(255,255,255,0.07)' }}>
+                {[
+                  { label:'Source',   value: lead.source },
+                  { label:'Interest', value: lead.interest },
+                  { label:'Agent',    value: lead.assignedAgent },
+                  { label:'Added',    value: fmtDate(lead.date) },
+                ].filter(r => r.value).map((row, i, arr) => (
+                  <div key={row.label} className="flex items-center gap-3 px-4 py-2.5"
+                    style={{ background: i%2===0 ? 'rgba(255,255,255,0.02)' : 'transparent', borderBottom: i<arr.length-1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-white/25 w-16 flex-shrink-0">{row.label}</span>
+                    <span className="text-xs text-white/65 font-medium">{row.value}</span>
                   </div>
                 ))}
               </div>
+
+              {/* Surfaced niche metadata */}
+              {surfacedRows.length > 0 && (
+                <div className="rounded-2xl overflow-hidden" style={{ border:'1px solid rgba(255,255,255,0.07)' }}>
+                  {surfacedRows.map((row, i) => (
+                    <div key={row.label} className="flex items-start justify-between gap-4 px-4 py-2.5"
+                      style={{ background: i%2===0 ? 'rgba(255,255,255,0.02)' : 'transparent', borderBottom: i<surfacedRows.length-1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-white/25 flex-shrink-0 w-16">{row.label}</span>
+                      <span className="text-[11px] font-medium text-white/65 text-right break-words">{row.value}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Extra metadata */}
+              {metaEntries.length > 0 && (
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <SlidersHorizontal className="w-3 h-3 text-white/25" />
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">Custom Details</span>
+                  </div>
+                  <div className="rounded-2xl overflow-hidden" style={{ border:'1px solid rgba(255,255,255,0.07)' }}>
+                    {metaEntries.map(([key, value], i) => (
+                      <div key={key} className="flex items-start justify-between gap-4 px-4 py-2.5"
+                        style={{ background: i%2===0 ? 'rgba(255,255,255,0.015)' : 'transparent', borderBottom: i<metaEntries.length-1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                        <span className="text-[11px] font-semibold text-white/35 flex-shrink-0">{formatMetaKey(key)}</span>
+                        <span className="text-[11px] font-medium text-white/65 text-right break-all">{formatMetaValue(value)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ═══ CONVERSATION TAB ═══ */}
+          {activeTab === 'conversation' && (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <MessageCircle className="w-3.5 h-3.5 text-white/25" />
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">
+                    Conversation
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {channelLabel && (
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                      style={{ background:'rgba(255,255,255,0.06)', color:'rgba(255,255,255,0.35)' }}>
+                      {CHANNEL_LABEL[channelLabel] ?? channelLabel}
+                    </span>
+                  )}
+                  {fromMetadata && (
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                      style={{ background:'rgba(251,191,36,0.08)', color:'rgba(251,191,36,0.6)' }}>
+                      transcript
+                    </span>
+                  )}
+                  {convId && (
+                    <span className="flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                      style={{ background:'rgba(52,211,153,0.08)', color:'#34d399' }}>
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />Live
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {convLoading ? (
+                <ConvSkeleton />
+              ) : displayMessages.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 gap-2 rounded-2xl"
+                  style={{ background:'rgba(255,255,255,0.02)', border:'1px dashed rgba(255,255,255,0.07)' }}>
+                  <MessageCircle className="w-7 h-7 text-white/10" />
+                  <p className="text-sm text-white/25 font-medium">No conversation recorded</p>
+                  <p className="text-xs text-white/15">Messages appear once the lead chats</p>
+                </div>
+              ) : (
+                <ChatBubbles messages={displayMessages} endRef={messagesEndRef} />
+              )}
             </div>
           )}
 
-          {/* ── Conversation ──────────────────────────────────── */}
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-1.5">
-                <MessageCircle className="w-3.5 h-3.5 text-white/25" />
-                <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">Conversation</span>
+          {/* ═══ NOTES TAB ═══ */}
+          {activeTab === 'notes' && (
+            <div className="flex flex-col gap-5">
+              {/* Internal notes */}
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5 text-white/25" />
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">Internal Notes</span>
+                  {notesDirty && (
+                    <span className="ml-auto text-[10px] text-amber-400/60">unsaved changes</span>
+                  )}
+                </div>
+                <textarea
+                  value={notesText}
+                  onChange={e => { setNotesText(e.target.value); setNotesDirty(true); setNotesSaved(false) }}
+                  placeholder="Add private notes about this lead — visible only to your team..."
+                  rows={6}
+                  className="w-full rounded-xl px-4 py-3 text-xs text-white/70 placeholder-white/20 outline-none resize-none leading-relaxed"
+                  style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)' }}
+                  onFocus={e => { e.currentTarget.style.border='1px solid rgba(139,92,246,0.35)' }}
+                  onBlur={e  => { e.currentTarget.style.border='1px solid rgba(255,255,255,0.08)' }}
+                />
+                <button onClick={saveNotesAndTags} disabled={savingNotes || (!notesDirty && !savingNotes)}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition-all self-end disabled:opacity-40"
+                  style={notesSaved
+                    ? { background:'rgba(52,211,153,0.12)', border:'1px solid rgba(52,211,153,0.25)', color:'#34d399' }
+                    : { background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.25)', color:'#c4b5fd' }}>
+                  {savingNotes ? (
+                    <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-violet-400/30 border-t-violet-400"
+                      animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity, ease:'linear' }} />
+                  ) : notesSaved ? (
+                    <><CheckCircle className="w-3.5 h-3.5" />Saved</>
+                  ) : (
+                    <><Save className="w-3.5 h-3.5" />Save notes</>
+                  )}
+                </button>
               </div>
-              {!convLoading && channel && (
-                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
-                  style={{ background:'rgba(255,255,255,0.06)', color:'rgba(255,255,255,0.35)' }}>
-                  {CHANNEL_LABEL[channel] ?? channel}
-                </span>
-              )}
-              {!convLoading && fromMetadata && (
-                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
-                  style={{ background:'rgba(251,191,36,0.08)', color:'rgba(251,191,36,0.6)' }}>
-                  from transcript
-                </span>
-              )}
-            </div>
 
-            {convLoading ? (
-              <ConvSkeleton />
-            ) : displayMessages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-10 gap-2 rounded-2xl"
-                style={{ background:'rgba(255,255,255,0.02)', border:'1px dashed rgba(255,255,255,0.07)' }}>
-                <MessageCircle className="w-7 h-7 text-white/10" />
-                <p className="text-sm text-white/25 font-medium">No conversation recorded</p>
-                <p className="text-xs text-white/15">Messages appear once the lead chats</p>
+              {/* Tags */}
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-1.5">
+                  <TagIcon className="w-3.5 h-3.5 text-white/25" />
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">Tags</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {tags.map(t => (
+                    <motion.span key={t} layout
+                      initial={{ scale:0 }} animate={{ scale:1 }}
+                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold cursor-pointer group"
+                      style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.22)', color:'#c4b5fd' }}
+                      onClick={() => removeTag(t)}>
+                      {t}
+                      <X className="w-2.5 h-2.5 opacity-50 group-hover:opacity-100 transition-opacity" />
+                    </motion.span>
+                  ))}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={newTag}
+                      onChange={e => setNewTag(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTag() } }}
+                      placeholder="Add tag…"
+                      className="px-2.5 py-1 rounded-full text-[11px] outline-none w-24"
+                      style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', color:'rgba(255,255,255,0.5)' }}
+                    />
+                    <button onClick={addTag}
+                      className="w-6 h-6 rounded-full flex items-center justify-center transition-all"
+                      style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.22)', color:'#c4b5fd' }}>
+                      <Plus className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+                {(tags.length > 0 || notesDirty) && (
+                  <button onClick={saveNotesAndTags} disabled={savingNotes}
+                    className="flex items-center gap-1.5 text-[10px] font-semibold self-start"
+                    style={{ color: savingTags ? '#34d399' : 'rgba(139,92,246,0.7)' }}>
+                    {savingNotes ? <><CheckCircle className="w-3 h-3" />Saved</> : <><Save className="w-3 h-3" />Save tags</>}
+                  </button>
+                )}
               </div>
-            ) : (
-              <ChatBubbles messages={displayMessages} />
-            )}
-          </div>
-
-          {/* ── AI Summary ────────────────────────────────────── */}
-          <div className="rounded-2xl p-4 flex flex-col gap-3"
-            style={{ background:'rgba(139,92,246,0.07)', border:'1px solid rgba(139,92,246,0.18)' }}>
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0"
-                style={{ background:'rgba(139,92,246,0.2)' }}>
-                <Bot className="w-3.5 h-3.5 text-violet-400" />
-              </div>
-              <span className="text-[10px] font-bold uppercase tracking-widest text-violet-400/70">AI Summary</span>
             </div>
-            <p className="text-xs text-white/45 leading-relaxed italic">
-              AI-generated summaries coming soon. Review the conversation and custom details above for full context.
-            </p>
-          </div>
+          )}
 
-          {/* ── Recommended Action ───────────────────────────── */}
-          <div className="rounded-2xl p-4 flex flex-col gap-3"
-            style={{ background:'rgba(251,191,36,0.06)', border:'1px solid rgba(251,191,36,0.18)' }}>
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0"
-                style={{ background:'rgba(251,191,36,0.15)' }}>
-                <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
+          {/* ═══ TIMELINE TAB ═══ */}
+          {activeTab === 'timeline' && (
+            <div className="flex flex-col gap-5">
+              {/* Appointments */}
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-white/25" />
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">Appointments</span>
+                  </div>
+                  <button onClick={() => setShowApptForm(v => !v)}
+                    className="flex items-center gap-1 text-[10px] font-semibold px-2.5 py-1 rounded-lg transition-all"
+                    style={{ background:'rgba(167,139,250,0.08)', border:'1px solid rgba(167,139,250,0.2)', color:'#a78bfa' }}>
+                    <Plus className="w-3 h-3" /> New
+                  </button>
+                </div>
+
+                {/* Create appointment form */}
+                <AnimatePresence>
+                  {showApptForm && (
+                    <motion.div initial={{ opacity:0, height:0 }} animate={{ opacity:1, height:'auto' }} exit={{ opacity:0, height:0 }}
+                      className="overflow-hidden">
+                      <div className="rounded-2xl p-4 flex flex-col gap-3"
+                        style={{ background:'rgba(167,139,250,0.05)', border:'1px solid rgba(167,139,250,0.18)' }}>
+                        <div className="text-xs font-bold text-violet-400/70">Create Appointment</div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <div className="text-[10px] text-white/35 mb-1">Date</div>
+                            <input type="date" value={apptDate} onChange={e => setApptDate(e.target.value)}
+                              className="w-full px-3 py-2 rounded-xl text-xs text-white/70 outline-none"
+                              style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }} />
+                          </div>
+                          <div>
+                            <div className="text-[10px] text-white/35 mb-1">Time</div>
+                            <input type="time" value={apptTime} onChange={e => setApptTime(e.target.value)}
+                              className="w-full px-3 py-2 rounded-xl text-xs text-white/70 outline-none"
+                              style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }} />
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-white/35 mb-1">Type</div>
+                          <select value={apptType} onChange={e => setApptType(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl text-xs text-white/70 outline-none"
+                            style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }}>
+                            <option value="demo_call">Demo Call</option>
+                            <option value="discovery_call">Discovery Call</option>
+                            <option value="onboarding">Onboarding</option>
+                            <option value="follow_up">Follow-up</option>
+                          </select>
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={createAppointment} disabled={savingAppt || !apptDate}
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold disabled:opacity-40 transition-all"
+                            style={{ background:'rgba(167,139,250,0.15)', border:'1px solid rgba(167,139,250,0.3)', color:'#c4b5fd' }}>
+                            {savingAppt ? (
+                              <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-violet-400/30 border-t-violet-400"
+                                animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity, ease:'linear' }} />
+                            ) : apptSaved ? (
+                              <><CheckCircle className="w-3.5 h-3.5" />Booked!</>
+                            ) : (
+                              <><Send className="w-3.5 h-3.5" />Book</>
+                            )}
+                          </button>
+                          <button onClick={() => setShowApptForm(false)}
+                            className="px-4 py-2 rounded-xl text-xs font-semibold transition-all"
+                            style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', color:'rgba(255,255,255,0.35)' }}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {leadAppts.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-8 gap-2 rounded-2xl"
+                    style={{ background:'rgba(255,255,255,0.02)', border:'1px dashed rgba(255,255,255,0.07)' }}>
+                    <Calendar className="w-6 h-6 text-white/10" />
+                    <p className="text-xs text-white/25 font-medium">No appointments yet</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {leadAppts.map(appt => <ApptCard key={appt.id} appt={appt} />)}
+                  </div>
+                )}
               </div>
-              <span className="text-[10px] font-bold uppercase tracking-widest text-amber-400/70">
-                Recommended Action
-              </span>
+
+              {/* Follow-up automation status */}
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5 text-white/25" />
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">Automation Status</span>
+                </div>
+                <div className="rounded-2xl overflow-hidden" style={{ border:'1px solid rgba(255,255,255,0.07)' }}>
+                  {AUTO_ROWS.map(({ key, label }, i) => {
+                    const status = lead.auto?.[key] ?? 'off'
+                    const color  = AUTO_STATUS_COLOR[status] ?? 'rgba(255,255,255,0.15)'
+                    const isActive = ['sent','active','completed','assigned'].includes(status)
+                    return (
+                      <div key={key} className="flex items-center justify-between px-4 py-3"
+                        style={{ background: i%2===0 ? 'rgba(255,255,255,0.02)' : 'transparent', borderBottom: i<AUTO_ROWS.length-1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                        <span className="text-xs text-white/55">{label}</span>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full capitalize"
+                          style={{ background:`${color}18`, color, border:`1px solid ${color}30` }}>
+                          {status.replace(/_/g, ' ')}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
             </div>
-            <p className="text-xs text-white/45 leading-relaxed italic">
-              Review conversation, qualify budget &amp; timeline, then send a personalised follow-up.
-            </p>
-            <button className="flex items-center gap-1.5 text-xs font-semibold text-amber-400/80 hover:text-amber-300 transition-colors self-start">
-              Take action <ArrowRight className="w-3 h-3" />
-            </button>
-          </div>
+          )}
 
         </div>
       </motion.aside>

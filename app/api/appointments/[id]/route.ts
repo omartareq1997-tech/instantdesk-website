@@ -8,6 +8,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../../lib/supabase-server'
 import { logEvent, ACTOR } from '../../_lib/logEvent'
+import { getActorRole } from '../../../lib/getActorRole'
+import { getPermissions } from '../../../lib/permissions'
 
 type Ctx = { params: Promise<{ id: string }> }
 
@@ -19,6 +21,11 @@ const VALID_TYPES    = new Set(['demo_call', 'discovery_call', 'onboarding', 'fo
 export async function PATCH(req: NextRequest, { params }: Ctx) {
   const { id } = await params
   try {
+    const { role } = await getActorRole(req)
+    if (!getPermissions(role).canEditAppt) {
+      return NextResponse.json({ error: 'Insufficient permissions to edit appointments' }, { status: 403 })
+    }
+
     const body = await req.json()
     const patch: Record<string, unknown> = {}
 
@@ -125,9 +132,14 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
 /* ── DELETE ───────────────────────────────────────────────────────── */
 
-export async function DELETE(_req: NextRequest, { params }: Ctx) {
+export async function DELETE(req: NextRequest, { params }: Ctx) {
   const { id } = await params
   try {
+    const { role } = await getActorRole(req)
+    if (!getPermissions(role).canDeleteAppt) {
+      return NextResponse.json({ error: 'Insufficient permissions to delete appointments' }, { status: 403 })
+    }
+
     const sb = createAdminClient()
 
     // Capture snapshot before deletion

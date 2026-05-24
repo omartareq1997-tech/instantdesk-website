@@ -10,14 +10,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../../../lib/supabase-server'
 import { logEvent, ACTOR } from '../../../_lib/logEvent'
+import { getActorRole } from '../../../../lib/getActorRole'
+import { getPermissions } from '../../../../lib/permissions'
 
 type Ctx = { params: Promise<{ id: string }> }
 
 const CLIENT_ID = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
 
-export async function POST(_req: NextRequest, { params }: Ctx) {
+export async function POST(req: NextRequest, { params }: Ctx) {
   const { id } = await params
   try {
+    const { role } = await getActorRole(req)
+    if (!getPermissions(role).canUndoActions) {
+      return NextResponse.json({ error: 'Insufficient permissions to undo actions' }, { status: 403 })
+    }
+
     const sb = createAdminClient()
 
     // 1. Fetch the event

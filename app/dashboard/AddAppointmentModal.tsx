@@ -32,12 +32,13 @@ function blurDefault(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>
 }
 
 export default function AddAppointmentModal({
-  leads, defaultLeadId, onClose, onCreated,
+  leads, defaultLeadId, onClose, onCreated, actorName = 'Alex Thompson',
 }: {
   leads:          { id: string; name: string; company: string }[]
   defaultLeadId?: string
   onClose:        () => void
   onCreated:      (raw: Record<string, unknown>) => void
+  actorName?:     string
 }) {
   const defaultLead = leads.find(l => l.id === defaultLeadId)
 
@@ -106,7 +107,7 @@ export default function AddAppointmentModal({
 
       const res  = await fetch('/api/appointments', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Actor-Name': actorName },
         body:    JSON.stringify(payload),
       })
       const data = await res.json()

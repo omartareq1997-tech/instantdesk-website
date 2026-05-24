@@ -6,6 +6,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../../lib/supabase-server'
 import { logEvent, ACTOR } from '../../_lib/logEvent'
+import { getActorRole } from '../../../lib/getActorRole'
+import { getPermissions } from '../../../lib/permissions'
+import { PROTECTED_OWNER_ID } from '../route'
 
 type Ctx = { params: Promise<{ id: string }> }
 
@@ -17,6 +20,16 @@ const VALID_STATUSES = new Set(['active', 'invited'])
 export async function PATCH(req: NextRequest, { params }: Ctx) {
   const { id } = await params
   try {
+    if (id === PROTECTED_OWNER_ID) {
+      return NextResponse.json({ error: 'Cannot modify the primary owner account' }, { status: 403 })
+    }
+
+    const { role: actorRole } = await getActorRole(req)
+    const can = getPermissions(actorRole)
+    if (!can.canChangeRole) {
+      return NextResponse.json({ error: 'Insufficient permissions to update team members' }, { status: 403 })
+    }
+
     const body  = await req.json()
     const patch: Record<string, unknown> = {}
 
@@ -29,6 +42,15 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     }
 
     const sb = createAdminClient()
+
+    // Team leaders cannot modify owner-role members
+    if (actorRole === 'team_leader') {
+      const { data: target } = await sb.from('team_members').select('role').eq('id', id).maybeSingle()
+      if (target?.role === 'owner') {
+        return NextResponse.json({ error: 'Team leaders cannot modify owner accounts' }, { status: 403 })
+      }
+    }
+
     const { data, error } = await sb
       .from('team_members')
       .update(patch)
@@ -50,12 +72,26 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
 /* ── DELETE ──────────────────────────────────────────────────── */
 
-export async function DELETE(_req: NextRequest, { params }: Ctx) {
+export async function DELETE(req: NextRequest, { params }: Ctx) {
   const { id } = await params
   try {
+    if (id === PROTECTED_OWNER_ID) {
+      return NextResponse.json({ error: 'Cannot remove the primary owner account' }, { status: 403 })
+    }
+
+    const { role: actorRole } = await getActorRole(req)
+    if (!getPermissions(actorRole).canRemoveMember) {
+      return NextResponse.json({ error: 'Insufficient permissions to remove team members' }, { status: 403 })
+    }
+
     const sb = createAdminClient()
 
     const { data: snap } = await sb.from('team_members').select('*').eq('id', id).single()
+
+    // Team leaders cannot remove owners
+    if (actorRole === 'team_leader' && snap?.role === 'owner') {
+      return NextResponse.json({ error: 'Team leaders cannot remove owner accounts' }, { status: 403 })
+    }
 
     const { error } = await sb.from('team_members').delete().eq('id', id)
     if (error) throw error

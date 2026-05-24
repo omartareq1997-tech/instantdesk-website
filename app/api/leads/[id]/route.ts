@@ -11,6 +11,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../../lib/supabase-server'
 import { logEvent, ACTOR } from '../../_lib/logEvent'
+import { getActorRole } from '../../../lib/getActorRole'
+import { getPermissions } from '../../../lib/permissions'
 
 type Ctx = { params: Promise<{ id: string }> }
 
@@ -52,6 +54,12 @@ const ALLOWED_LEAD_FIELDS = new Set([
 export async function PATCH(req: NextRequest, { params }: Ctx) {
   const { id } = await params
   try {
+    const { name: actorName, role } = await getActorRole(req)
+    const can = getPermissions(role)
+    if (!can.canEditLead) {
+      return NextResponse.json({ error: 'Insufficient permissions to edit leads' }, { status: 403 })
+    }
+
     const body = await req.json()
 
     const patch: Record<string, unknown> = {}
@@ -67,8 +75,13 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
     const sb = createAdminClient()
 
-    // Read current state before applying the patch (for logging)
+    // Read current state before applying the patch (for logging + agent scope check)
     const { data: before } = await sb.from('leads').select('*').eq('id', id).single()
+
+    // Agents may only edit leads assigned to them
+    if (can.scopedToOwnLeads && before?.assigned_agent !== actorName) {
+      return NextResponse.json({ error: 'Agents can only edit their own assigned leads' }, { status: 403 })
+    }
 
     const { data, error } = await sb
       .from('leads')
@@ -191,9 +204,14 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
 /* ── DELETE ───────────────────────────────────────────────────────── */
 
-export async function DELETE(_req: NextRequest, { params }: Ctx) {
+export async function DELETE(req: NextRequest, { params }: Ctx) {
   const { id } = await params
   try {
+    const { role } = await getActorRole(req)
+    if (!getPermissions(role).canDeleteLead) {
+      return NextResponse.json({ error: 'Insufficient permissions to delete leads' }, { status: 403 })
+    }
+
     const sb = createAdminClient()
 
     // Capture full snapshot before any deletions

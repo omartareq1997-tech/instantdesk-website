@@ -9,9 +9,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../lib/supabase-server'
 import { logEvent, ACTOR } from '../_lib/logEvent'
+import { getActorRole } from '../../lib/getActorRole'
+import { getPermissions } from '../../lib/permissions'
 
 const CLIENT_ID   = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
 const VALID_ROLES = new Set(['owner', 'team_leader', 'agent', 'viewer'])
+
+/** Sentinel ID for the always-present Alex Thompson seed row (never in the DB). */
+export const PROTECTED_OWNER_ID = '00000000-0000-0000-0000-000000000000'
+
+const SEED_OWNER = {
+  id:           PROTECTED_OWNER_ID,
+  client_id:    CLIENT_ID,
+  name:         'Alex Thompson',
+  email:        'alex@instantdesk.io',
+  role:         'owner',
+  status:       'active',
+  invited_by:   null,
+  invite_token: null,
+  created_at:   '2024-01-01T00:00:00.000Z',
+}
 
 /* ── GET ─────────────────────────────────────────────────────── */
 
@@ -25,11 +42,16 @@ export async function GET() {
       .order('created_at', { ascending: true })
 
     if (error) {
-      if (error.code === '42P01') return NextResponse.json({ members: [] })
+      if (error.code === '42P01') return NextResponse.json({ members: [SEED_OWNER] })
       throw error
     }
 
-    return NextResponse.json({ members: data ?? [] })
+    // Always prepend the seed owner if no real row for Alex Thompson exists
+    const rows = data ?? []
+    const hasAlexRow = rows.some(m => m.name === 'Alex Thompson' && m.role === 'owner')
+    const members = hasAlexRow ? rows : [SEED_OWNER, ...rows]
+
+    return NextResponse.json({ members })
   } catch (err) {
     console.error('[GET /api/team]', err)
     return NextResponse.json({ error: 'Failed to fetch team members' }, { status: 500 })
@@ -40,10 +62,20 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
+    const { role: actorRole } = await getActorRole(req)
+    if (!getPermissions(actorRole).canInviteMember) {
+      return NextResponse.json({ error: 'Insufficient permissions to invite team members' }, { status: 403 })
+    }
+
     const body = await req.json()
     const name  = typeof body.name  === 'string' ? body.name.trim()  : ''
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
-    const role  = typeof body.role  === 'string' && VALID_ROLES.has(body.role) ? body.role : 'agent'
+    const inviteRole  = typeof body.role  === 'string' && VALID_ROLES.has(body.role) ? body.role : 'agent'
+
+    // Team leaders may only invite agents and viewers
+    if (actorRole === 'team_leader' && (inviteRole === 'owner' || inviteRole === 'team_leader')) {
+      return NextResponse.json({ error: 'Team leaders can only invite agents and viewers' }, { status: 403 })
+    }
 
     if (!name)  return NextResponse.json({ error: 'name is required' },  { status: 400 })
     if (!email) return NextResponse.json({ error: 'email is required' }, { status: 400 })
@@ -56,7 +88,7 @@ export async function POST(req: NextRequest) {
         client_id:  CLIENT_ID,
         name,
         email,
-        role,
+        role:       inviteRole,
         status:     'invited',
         invited_by: typeof body.invited_by === 'string' ? body.invited_by : 'Alex Thompson',
       })

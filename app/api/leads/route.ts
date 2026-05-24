@@ -7,11 +7,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../lib/supabase-server'
 import { logEvent, ACTOR } from '../_lib/logEvent'
+import { getActorRole } from '../../lib/getActorRole'
+import { getPermissions } from '../../lib/permissions'
 
 const DEMO_CLIENT_ID = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
 
 export async function POST(req: NextRequest) {
   try {
+    const { role } = await getActorRole(req)
+    if (!getPermissions(role).canAddLead) {
+      return NextResponse.json({ error: 'Insufficient permissions to create leads' }, { status: 403 })
+    }
+
     const body = await req.json()
 
     const name: string | undefined = typeof body.name === 'string' ? body.name.trim() : undefined

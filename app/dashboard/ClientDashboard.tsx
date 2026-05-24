@@ -7,7 +7,7 @@ import {
   TrendingUp, TrendingDown, Mail, Phone, CheckCircle, AlertCircle,
   Clock, Search, X, BarChart2, MessageCircle, Database,
   Activity, RefreshCw, Bell, Shield, Link2, Download, Target,
-  DollarSign, Timer, Menu, ChevronLeft, ChevronRight, LineChart, BellDot,
+  DollarSign, Timer, Menu, ChevronLeft, ChevronRight, ChevronDown, LineChart, BellDot,
   MessageSquare, SlidersHorizontal, Volume2, VolumeX, ArrowUpDown, Plus,
   History, ScrollText, Undo2, Pencil, Trash2, CalendarPlus, MoveRight,
   UserPlus, Copy, Check, UserCog, Crown, Eye,
@@ -19,6 +19,7 @@ import AnalyticsSection from './AnalyticsSection'
 import ApptDrawer, { type DrawerAppointment } from './ApptDrawer'
 import type { DashboardData, IntegrationRow, OverviewMetrics, TeamMember, Role } from './types'
 import { supabase } from '../lib/supabase'
+import { getPermissions, type Permissions } from '../lib/permissions'
 
 /* ─── Types ──────────────────────────────────────────────────── */
 
@@ -1589,13 +1590,14 @@ function WeekDatePicker({
 /* ─── Appointments ───────────────────────────────────────────── */
 
 function AppointmentsSection({
-  appointments, leads, onSelectLead, onApptUpdated, onAddAppointment,
+  appointments, leads, onSelectLead, onApptUpdated, onAddAppointment, actorName = 'Alex Thompson',
 }: {
   appointments:     Appointment[]
   leads:            Lead[]
   onSelectLead:     (id: string) => void
   onApptUpdated?:   (patch: { id:string; type:string; date:string; time:string; status:ApptStatus; notes?:string; leadId?:string }) => void
   onAddAppointment?: () => void
+  actorName?:        string
 }) {
   const [dayOffset,    setDayOffset]    = useState(0)       // offset in days from today
   const [selectedAppt, setSelectedAppt] = useState<DrawerAppointment | null>(null)
@@ -1662,7 +1664,7 @@ function AppointmentsSection({
     try {
       await fetch(`/api/appointments/${appt.id}`, {
         method:  'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Actor-Name': actorName },
         body:    JSON.stringify({ scheduled_at: newScheduledAt, _drag: true }),
       })
     } catch { /* optimistic update already applied */ }
@@ -2504,7 +2506,7 @@ function ChangeDisplay({ ev }: { ev: LogEvent }) {
 
 const LOG_PAGE = 50
 
-function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boolean) => void }) {
+function LogSection({ onToast, can, actorName = 'Alex Thompson' }: { onToast: (title: string, sub: string, ok: boolean) => void; can?: Permissions; actorName?: string }) {
   const [events,        setEvents]        = useState<LogEvent[]>([])
   const [loading,       setLoading]       = useState(true)
   const [error,         setError]         = useState('')
@@ -2565,7 +2567,7 @@ function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boo
     setEvents(prev => [optimisticUndoRow, ...prev])
 
     try {
-      const res  = await fetch(`/api/activity/${ev.id}/undo`, { method: 'POST' })
+      const res  = await fetch(`/api/activity/${ev.id}/undo`, { method: 'POST', headers: { 'X-Actor-Name': actorName } })
       const data = await res.json() as { error?: string }
       if (!res.ok) {
         // Rollback: remove the optimistic row
@@ -2758,7 +2760,7 @@ function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boo
               const isUndone     = undoneEventIds.has(ev.id) || !!(meta.undone)
               const isUndoRow    = eventType.startsWith('undo_')
               const isProcessing = processingIds.has(ev.id)
-              const undoable     = !!(meta.undoable) && !isUndone && !isProcessing && !isUndoRow
+              const undoable     = !!(meta.undoable) && !isUndone && !isProcessing && !isUndoRow && (can?.canUndoActions ?? true)
 
               return (
                 <motion.div key={ev.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
@@ -2865,6 +2867,73 @@ function LogSection({ onToast }: { onToast: (title: string, sub: string, ok: boo
   )
 }
 
+/* ─── Role-based permission UI ───────────────────────────────── */
+
+type CurrentUser = { name: string; role: Role }
+const DEMO_OWNER: CurrentUser = { name: 'Alex Thompson', role: 'owner' }
+
+function ViewAsSelector({
+  currentUser, teamMembers, onChange,
+}: {
+  currentUser: CurrentUser
+  teamMembers: TeamMember[]
+  onChange:    (u: CurrentUser) => void
+}) {
+  const [open, setOpen] = useState(false)
+
+  const rolePalette: Record<Role, { label: string; color: string }> = {
+    owner:       { label:'Owner',       color:'#fbbf24' },
+    team_leader: { label:'Team Leader', color:'#a78bfa' },
+    agent:       { label:'Agent',       color:'#60a5fa' },
+    viewer:      { label:'Viewer',      color:'rgba(255,255,255,0.5)' },
+  }
+
+  const options: CurrentUser[] = [
+    DEMO_OWNER,
+    ...teamMembers
+      .filter(m => m.name !== DEMO_OWNER.name)
+      .map(m => ({ name: m.name, role: m.role })),
+  ]
+
+  const pal = rolePalette[currentUser.role]
+
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen(v => !v)}
+        title="Switch role (demo)"
+        className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all hover:opacity-80"
+        style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)' }}>
+        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: pal.color }} />
+        <span style={{ color: pal.color }}>{pal.label}</span>
+        <ChevronDown className="w-3 h-3 text-white/25" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1.5 z-50 rounded-xl overflow-hidden min-w-[180px]"
+            style={{ background:'#0e0e1e', border:'1px solid rgba(255,255,255,0.1)', boxShadow:'0 8px 32px rgba(0,0,0,0.5)' }}>
+            <div className="px-3 pt-2.5 pb-1 text-[9px] font-black uppercase tracking-widest text-white/25">View as (demo)</div>
+            {options.map(opt => {
+              const oc = rolePalette[opt.role]
+              const active = opt.name === currentUser.name
+              return (
+                <button key={opt.name} onClick={() => { onChange(opt); setOpen(false) }}
+                  className="w-full text-left px-3 py-2 flex items-center gap-2 transition-colors hover:bg-white/5"
+                  style={{ background: active ? 'rgba(255,255,255,0.04)' : 'transparent' }}>
+                  <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: oc.color }} />
+                  <span className="text-xs text-white/65 truncate flex-1">{opt.name}</span>
+                  <span className="text-[10px] font-bold" style={{ color: oc.color }}>{oc.label}</span>
+                  {active && <Check className="w-3 h-3 ml-1" style={{ color: oc.color }} />}
+                </button>
+              )
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 /* ─── Team ───────────────────────────────────────────────────── */
 
 const ROLE_CFG: Record<Role, { label: string; color: string; bg: string; border: string; desc: string }> = {
@@ -2885,11 +2954,14 @@ function RoleBadge({ role }: { role: Role }) {
 }
 
 function TeamSection({
-  members, onRefresh, onToast,
+  members, onRefresh, onToast, can, currentUserRole = 'owner', actorName = 'Alex Thompson',
 }: {
-  members:   TeamMember[]
-  onRefresh: () => void
-  onToast:   (title: string, sub: string, ok: boolean) => void
+  members:          TeamMember[]
+  onRefresh:        () => void
+  onToast:          (title: string, sub: string, ok: boolean) => void
+  can?:             Permissions
+  currentUserRole?: Role
+  actorName?:       string
 }) {
   const [showInvite, setShowInvite] = useState(false)
   const [form,       setForm]       = useState({ name:'', email:'', role:'agent' as Role })
@@ -2904,7 +2976,7 @@ function TeamSection({
     setInviting(true); setInviteErr('')
     try {
       const res  = await fetch('/api/team', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Actor-Name': actorName },
         body: JSON.stringify(form),
       })
       const data = await res.json() as { error?: string }
@@ -2920,7 +2992,7 @@ function TeamSection({
   async function handleRemove(member: TeamMember) {
     setRemovingId(member.id)
     try {
-      await fetch(`/api/team/${member.id}`, { method: 'DELETE' })
+      await fetch(`/api/team/${member.id}`, { method: 'DELETE', headers: { 'X-Actor-Name': actorName } })
       onRefresh()
       onToast('Removed', member.name, true)
     } catch { onToast('Error', 'Failed to remove member', false) }
@@ -2931,7 +3003,7 @@ function TeamSection({
     setEditRoleId(null)
     try {
       await fetch(`/api/team/${id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Actor-Name': actorName },
         body: JSON.stringify({ role }),
       })
       onRefresh()
@@ -2958,11 +3030,20 @@ function TeamSection({
               {members.length} member{members.length !== 1 ? 's' : ''} · manage access and lead assignments
             </p>
           </div>
-          <button onClick={() => { setShowInvite(v => !v); setInviteErr('') }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
-            style={{ background:'rgba(167,139,250,0.12)', border:'1px solid rgba(167,139,250,0.3)', color:'#c4b5fd' }}>
-            <UserPlus className="w-3.5 h-3.5" />{showInvite ? 'Cancel' : 'Invite Member'}
-          </button>
+          {(can?.canInviteMember ?? true) && (
+            <button onClick={() => {
+                setShowInvite(v => !v)
+                setInviteErr('')
+                // Ensure form role is valid for team_leader (only agent/viewer allowed)
+                if (currentUserRole === 'team_leader' && (form.role === 'owner' || form.role === 'team_leader')) {
+                  setForm(f => ({ ...f, role: 'agent' }))
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
+              style={{ background:'rgba(167,139,250,0.12)', border:'1px solid rgba(167,139,250,0.3)', color:'#c4b5fd' }}>
+              <UserPlus className="w-3.5 h-3.5" />{showInvite ? 'Cancel' : 'Invite Member'}
+            </button>
+          )}
         </div>
       </Card>
 
@@ -2989,8 +3070,8 @@ function TeamSection({
                 <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value as Role }))}
                   className="px-3 py-2 rounded-xl text-sm outline-none appearance-none"
                   style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.7)', colorScheme:'dark' }}>
-                  <option value="owner">Owner</option>
-                  <option value="team_leader">Team Leader</option>
+                  {currentUserRole !== 'team_leader' && <option value="owner">Owner</option>}
+                  {currentUserRole !== 'team_leader' && <option value="team_leader">Team Leader</option>}
                   <option value="agent">Agent</option>
                   <option value="viewer">Viewer</option>
                 </select>
@@ -3056,8 +3137,9 @@ function TeamSection({
       ) : (
         <div className="flex flex-col gap-2">
           {members.map(member => {
-            const isCopied   = copiedId   === member.id
-            const isRemoving = removingId === member.id
+            const isCopied    = copiedId   === member.id
+            const isRemoving  = removingId === member.id
+            const isProtected = member.id  === '00000000-0000-0000-0000-000000000000'
             return (
               <Card key={member.id} className="px-4 py-4 flex items-center gap-4 flex-wrap sm:flex-nowrap">
                 {/* Avatar */}
@@ -3090,29 +3172,31 @@ function TeamSection({
                   )}
                 </div>
 
-                {/* Role change */}
-                <div className="relative flex-shrink-0">
-                  {editRoleId === member.id ? (
-                    <select
-                      autoFocus
-                      defaultValue={member.role}
-                      onChange={e => void handleRoleChange(member.id, e.target.value as Role)}
-                      onBlur={() => setEditRoleId(null)}
-                      className="px-2 py-1 rounded-lg text-xs outline-none appearance-none"
-                      style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.3)', color:'#c4b5fd', colorScheme:'dark' }}>
-                      <option value="owner">Owner</option>
-                      <option value="team_leader">Team Leader</option>
-                      <option value="agent">Agent</option>
-                      <option value="viewer">Viewer</option>
-                    </select>
-                  ) : (
-                    <button onClick={() => setEditRoleId(member.id)}
-                      className="text-[10px] text-white/25 hover:text-white/55 transition-colors px-2 py-1 rounded-lg"
-                      style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)' }}>
-                      Change role
-                    </button>
-                  )}
-                </div>
+                {/* Role change — hidden for viewers/agents, team_leader can't touch owners, seed row is immutable */}
+                {!isProtected && (can?.canChangeRole ?? true) && !(currentUserRole === 'team_leader' && member.role === 'owner') && (
+                  <div className="relative flex-shrink-0">
+                    {editRoleId === member.id ? (
+                      <select
+                        autoFocus
+                        defaultValue={member.role}
+                        onChange={e => void handleRoleChange(member.id, e.target.value as Role)}
+                        onBlur={() => setEditRoleId(null)}
+                        className="px-2 py-1 rounded-lg text-xs outline-none appearance-none"
+                        style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.3)', color:'#c4b5fd', colorScheme:'dark' }}>
+                        {currentUserRole !== 'team_leader' && <option value="owner">Owner</option>}
+                        <option value="team_leader">Team Leader</option>
+                        <option value="agent">Agent</option>
+                        <option value="viewer">Viewer</option>
+                      </select>
+                    ) : (
+                      <button onClick={() => setEditRoleId(member.id)}
+                        className="text-[10px] text-white/25 hover:text-white/55 transition-colors px-2 py-1 rounded-lg"
+                        style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)' }}>
+                        Change role
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {/* Actions */}
                 <div className="flex items-center gap-2 flex-shrink-0">
@@ -3125,14 +3209,16 @@ function TeamSection({
                         : <><Copy className="w-3 h-3" />Copy link</>}
                     </button>
                   )}
-                  <button onClick={() => void handleRemove(member)} disabled={isRemoving}
-                    className="p-1.5 rounded-lg transition-all hover:bg-red-500/10"
-                    style={{ color: isRemoving ? 'rgba(248,113,113,0.2)' : 'rgba(248,113,113,0.4)' }}>
-                    {isRemoving
-                      ? <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-red-400/20 border-t-red-400 block"
-                          animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity, ease:'linear' }} />
-                      : <Trash2 className="w-3.5 h-3.5" />}
-                  </button>
+                  {!isProtected && (can?.canRemoveMember ?? true) && !(currentUserRole === 'team_leader' && member.role === 'owner') && (
+                    <button onClick={() => void handleRemove(member)} disabled={isRemoving}
+                      className="p-1.5 rounded-lg transition-all hover:bg-red-500/10"
+                      style={{ color: isRemoving ? 'rgba(248,113,113,0.2)' : 'rgba(248,113,113,0.4)' }}>
+                      {isRemoving
+                        ? <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-red-400/20 border-t-red-400 block"
+                            animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity, ease:'linear' }} />
+                        : <Trash2 className="w-3.5 h-3.5" />}
+                    </button>
+                  )}
                 </div>
               </Card>
             )
@@ -3197,6 +3283,31 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
   }, [])
 
   useEffect(() => { void fetchTeamMembers() }, [fetchTeamMembers])
+
+  // ── Current user / role-based permissions ──────────────────────
+  const [currentUser, setCurrentUser] = useState<CurrentUser>(DEMO_OWNER)
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('demo_current_user')
+      if (stored) setCurrentUser(JSON.parse(stored) as CurrentUser)
+    } catch { /* ignore */ }
+  }, [])
+
+  const handleUserChange = useCallback((u: CurrentUser) => {
+    setCurrentUser(u)
+    localStorage.setItem('demo_current_user', JSON.stringify(u))
+  }, [])
+
+  const can = useMemo(() => getPermissions(currentUser.role), [currentUser.role])
+
+  // Scope visible leads to assigned agent when role requires it
+  const visibleLeads = useMemo(
+    () => can.scopedToOwnLeads
+      ? leads.filter(l => l.assignedAgent === currentUser.name)
+      : leads,
+    [leads, can.scopedToOwnLeads, currentUser.name],
+  )
 
   // Tracks IDs of leads that just arrived via realtime (cleared after 4 s)
   const [newLeadIds, setNewLeadIds] = useState<Set<string>>(new Set())
@@ -3528,6 +3639,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                 All systems live
               </div>
+              <ViewAsSelector currentUser={currentUser} teamMembers={teamMembers} onChange={handleUserChange} />
               <SoundToggle enabled={soundEnabled} onEnable={handleEnableSound} onDisable={handleDisableSound} />
               <TestSoundButton />
               <NotificationCenter notifs={notifs} setNotifs={setNotifs} />
@@ -3540,26 +3652,26 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
           </div>
         </div>
 
-        {/* Content — only rendered once section is resolved from hash */}
-        <div className="px-4 sm:px-8 py-6">
+        {/* Content — pb-28 clears the floating chat widget (≈80px) on every section */}
+        <div className="px-4 sm:px-8 py-6 pb-28">
           <AnimatePresence mode="wait">
             {section && (
               <motion.div key={section}
                 initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-8 }}
                 transition={{ duration:0.22 }}>
-                {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={leads} appointments={appointments} activity={activityFeed} overviewMetrics={overviewMetrics} />}
+                {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={visibleLeads} appointments={appointments} activity={activityFeed} overviewMetrics={overviewMetrics} />}
                 {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} />}
-                {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={leads} newLeadIds={newLeadIds} onAddLead={() => setShowAddLead(true)} teamMembers={teamMembers} />}
+                {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={visibleLeads} newLeadIds={newLeadIds} onAddLead={can.canAddLead ? () => setShowAddLead(true) : undefined} teamMembers={teamMembers} />}
                 {section==='activity'     && <ActivitySection feed={activityFeed} />}
-                {section==='appointments' && <AppointmentsSection appointments={appointments} leads={leads} onSelectLead={handleSelectLead} onApptUpdated={handleApptUpdated} onAddAppointment={() => openAddAppt()} />}
-                {section==='log'          && <LogSection onToast={(title, sub, ok) =>
+                {section==='appointments' && <AppointmentsSection appointments={appointments} leads={visibleLeads} onSelectLead={handleSelectLead} onApptUpdated={handleApptUpdated} onAddAppointment={can.canAddAppt ? () => openAddAppt() : undefined} actorName={currentUser.name} />}
+                {section==='log'          && <LogSection can={can} actorName={currentUser.name} onToast={(title, sub, ok) =>
                   setToasts(prev => [{
                     id: crypto.randomUUID(), type: 'hint' as const,
                     title, sub, badge: ok ? 'Done' : 'Error',
                     badgeColor: ok ? '#34d399' : '#f87171', duration: 4000,
                   }, ...prev.slice(0, 3)])
                 } />}
-                {section==='team'         && <TeamSection members={teamMembers} onRefresh={fetchTeamMembers} onToast={(title, sub, ok) =>
+                {section==='team'         && <TeamSection members={teamMembers} onRefresh={fetchTeamMembers} can={can} currentUserRole={currentUser.role} actorName={currentUser.name} onToast={(title, sub, ok) =>
                   setToasts(prev => [{
                     id: crypto.randomUUID(), type: 'hint' as const,
                     title, sub, badge: ok ? 'Done' : 'Error',
@@ -3588,6 +3700,8 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
             onApptUpdated={handleApptUpdated}
             onAddAppointment={(leadId) => openAddAppt(leadId)}
             teamMembers={teamMembers}
+            can={can}
+            actorName={currentUser.name}
           />
         )}
       </AnimatePresence>
@@ -3598,16 +3712,18 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
           <AddLeadModal
             onClose={() => setShowAddLead(false)}
             onCreated={handleLeadCreated}
+            actorName={currentUser.name}
           />
         )}
       </AnimatePresence>
       <AnimatePresence>
         {showAddAppt && (
           <AddAppointmentModal
-            leads={leads}
+            leads={visibleLeads}
             defaultLeadId={addApptDefaultLeadId}
             onClose={() => setShowAddAppt(false)}
             onCreated={handleApptCreated}
+            actorName={currentUser.name}
           />
         )}
       </AnimatePresence>

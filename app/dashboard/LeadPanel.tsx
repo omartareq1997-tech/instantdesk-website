@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import type { TeamMember } from './types'
+import type { Permissions } from '../lib/permissions'
 
 /* ─── Types ──────────────────────────────────────────────────── */
 
@@ -688,7 +689,7 @@ function ApptCard({
 export default function LeadPanel({
   lead, appointments, onClose,
   onLeadDeleted, onLeadUpdated, onApptDeleted, onApptUpdated, onAddAppointment,
-  teamMembers = [],
+  teamMembers = [], can, actorName = 'Alex Thompson',
 }: {
   lead:          Lead
   appointments?: ApptSummary[]
@@ -699,7 +700,14 @@ export default function LeadPanel({
   onApptUpdated?:    (patch: { id:string; type:string; date:string; time:string; status:ApptStatus; notes?:string; leadId?:string }) => void
   onAddAppointment?: (leadId: string) => void
   teamMembers?:      TeamMember[]
+  can?:              Permissions
+  actorName?:        string
 }) {
+  const canEdit   = can?.canEditLead   ?? true
+  const canDelete = can?.canDeleteLead ?? true
+  const canAddAppt  = can?.canAddAppt  ?? true
+  const canEditAppt = can?.canEditAppt ?? true
+  const canDelAppt  = can?.canDeleteAppt ?? true
   const statusCfg = STATUS_CFG[lead.status]
   const scoreCfg  = SCORE_CFG[lead.scoreLabel]
   const meta      = lead.metadata ?? {}
@@ -813,7 +821,7 @@ export default function LeadPanel({
       const merged = { ...meta, notes: notesText, tags }
       await fetch(`/api/leads/${lead.id}`, {
         method:  'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Actor-Name': actorName },
         body:    JSON.stringify({ metadata: merged }),
       })
       setNotesDirty(false)
@@ -844,7 +852,7 @@ export default function LeadPanel({
     try {
       await fetch(`/api/leads/${lead.id}`, {
         method:  'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Actor-Name': actorName },
         body:    JSON.stringify({ status }),
       })
     } catch { /* optimistic update already applied */ }
@@ -872,7 +880,7 @@ export default function LeadPanel({
     setLocalAgent(agentName)
     try {
       await fetch(`/api/leads/${lead.id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Actor-Name': actorName },
         body: JSON.stringify({ assigned_agent: agentName === 'Unassigned' ? '' : agentName }),
       })
     } catch {
@@ -910,7 +918,7 @@ export default function LeadPanel({
       const CLIENT_ID = process.env.NEXT_PUBLIC_DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
       await fetch('/api/appointments', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Actor-Name': actorName },
         body: JSON.stringify({
           client_id: CLIENT_ID, lead_id: lead.id,
           lead_name: lead.name, lead_company: lead.company,
@@ -927,7 +935,7 @@ export default function LeadPanel({
   const deleteLead = useCallback(async () => {
     setDeletingLead(true)
     try {
-      const res = await fetch(`/api/leads/${lead.id}`, { method: 'DELETE' })
+      const res = await fetch(`/api/leads/${lead.id}`, { method: 'DELETE', headers: { 'X-Actor-Name': actorName } })
       if (!res.ok) throw new Error('delete failed')
       onLeadDeleted?.(lead.id)
       onClose()
@@ -949,7 +957,7 @@ export default function LeadPanel({
       }
       const res = await fetch(`/api/leads/${lead.id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Actor-Name': actorName },
         body: JSON.stringify(patch),
       })
       if (!res.ok) throw new Error('update failed')
@@ -977,7 +985,7 @@ export default function LeadPanel({
       const scheduled_at = new Date(`${apptEditDate}T${apptEditTime}:00`).toISOString()
       const res = await fetch(`/api/appointments/${editingApptId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Actor-Name': actorName },
         body: JSON.stringify({
           scheduled_at, type: apptEditType,
           status: apptEditStatus, notes: apptEditNotes || null,
@@ -1002,7 +1010,7 @@ export default function LeadPanel({
   const deleteAppt = useCallback(async (apptId: string) => {
     setDeletingApptId(apptId)
     try {
-      const res = await fetch(`/api/appointments/${apptId}`, { method: 'DELETE' })
+      const res = await fetch(`/api/appointments/${apptId}`, { method: 'DELETE', headers: { 'X-Actor-Name': actorName } })
       if (!res.ok) throw new Error('delete failed')
       onApptDeleted?.(apptId)
     } catch { /* no-op */ }
@@ -1108,13 +1116,15 @@ export default function LeadPanel({
               </div>
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
-              <button type="button" onClick={() => setDeleteConfirm(true)} title="Delete lead"
-                className="w-8 h-8 rounded-xl flex items-center justify-center transition-all"
-                style={{ color:'rgba(248,113,113,0.4)' }}
-                onMouseEnter={e => { e.currentTarget.style.background='rgba(248,113,113,0.08)'; e.currentTarget.style.color='rgba(248,113,113,0.85)' }}
-                onMouseLeave={e => { e.currentTarget.style.background='transparent'; e.currentTarget.style.color='rgba(248,113,113,0.4)' }}>
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+              {canDelete && (
+                <button type="button" onClick={() => setDeleteConfirm(true)} title="Delete lead"
+                  className="w-8 h-8 rounded-xl flex items-center justify-center transition-all"
+                  style={{ color:'rgba(248,113,113,0.4)' }}
+                  onMouseEnter={e => { e.currentTarget.style.background='rgba(248,113,113,0.08)'; e.currentTarget.style.color='rgba(248,113,113,0.85)' }}
+                  onMouseLeave={e => { e.currentTarget.style.background='transparent'; e.currentTarget.style.color='rgba(248,113,113,0.4)' }}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
               <button onClick={onClose}
                 className="w-8 h-8 rounded-xl flex items-center justify-center text-white/30 hover:text-white/80 transition-all"
                 onMouseEnter={e => { e.currentTarget.style.background='rgba(255,255,255,0.08)' }}
@@ -1158,21 +1168,22 @@ export default function LeadPanel({
             </div>
             {/* Status actions */}
             <div className="flex gap-2">
-              <button type="button" onClick={e => { e.stopPropagation(); markStatus('won') }} disabled={updatingStatus || localStatus === 'won'}
+              <button type="button" onClick={e => { e.stopPropagation(); markStatus('won') }} disabled={!canEdit || updatingStatus || localStatus === 'won'}
                 className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all disabled:opacity-40"
                 style={{ background: localStatus==='won' ? 'rgba(52,211,153,0.20)' : 'rgba(52,211,153,0.08)', border:'1px solid rgba(52,211,153,0.25)', color:'#34d399' }}>
                 <CheckCircle className="w-3.5 h-3.5" /> Won
               </button>
-              <button type="button" onClick={e => { e.stopPropagation(); markStatus('lost') }} disabled={updatingStatus || localStatus === 'lost'}
+              <button type="button" onClick={e => { e.stopPropagation(); markStatus('lost') }} disabled={!canEdit || updatingStatus || localStatus === 'lost'}
                 className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all disabled:opacity-40"
                 style={{ background: localStatus==='lost' ? 'rgba(248,113,113,0.20)' : 'rgba(248,113,113,0.08)', border:'1px solid rgba(248,113,113,0.25)', color:'#f87171' }}>
                 <XCircle className="w-3.5 h-3.5" /> Lost
               </button>
-              <button type="button" onClick={e => { e.stopPropagation(); markStatus('demo_booked') }} disabled={updatingStatus || localStatus === 'demo_booked'}
+              <button type="button" onClick={e => { e.stopPropagation(); markStatus('demo_booked') }} disabled={!canEdit || updatingStatus || localStatus === 'demo_booked'}
                 className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all disabled:opacity-40"
                 style={{ background: localStatus==='demo_booked' ? 'rgba(251,191,36,0.20)' : 'rgba(251,191,36,0.08)', border:'1px solid rgba(251,191,36,0.25)', color:'#fbbf24' }}>
                 <Calendar className="w-3.5 h-3.5" /> Demo
               </button>
+              {canAddAppt && (
               <button type="button"
                 onClick={e => {
                   e.stopPropagation()
@@ -1187,6 +1198,7 @@ export default function LeadPanel({
                 style={{ background:'rgba(52,211,153,0.08)', border:'1px solid rgba(52,211,153,0.22)', color:'#34d399' }}>
                 <Plus className="w-3.5 h-3.5" />
               </button>
+              )}
             </div>
           </div>
 
@@ -1387,11 +1399,13 @@ export default function LeadPanel({
                       )}
                     </div>
                   </div>
-                  <button type="button" onClick={()=>setEditMode(true)}
-                    className="flex items-center gap-1.5 self-start text-[11px] font-semibold px-3 py-1.5 rounded-lg transition-all"
-                    style={{ background:'rgba(139,92,246,0.08)', border:'1px solid rgba(139,92,246,0.18)', color:'rgba(167,139,250,0.7)' }}>
-                    <Pencil className="w-3 h-3" /> Edit details
-                  </button>
+                  {canEdit && (
+                    <button type="button" onClick={()=>setEditMode(true)}
+                      className="flex items-center gap-1.5 self-start text-[11px] font-semibold px-3 py-1.5 rounded-lg transition-all"
+                      style={{ background:'rgba(139,92,246,0.08)', border:'1px solid rgba(139,92,246,0.18)', color:'rgba(167,139,250,0.7)' }}>
+                      <Pencil className="w-3 h-3" /> Edit details
+                    </button>
+                  )}
                 </>
               )}
 
@@ -1712,8 +1726,8 @@ export default function LeadPanel({
                         ) : (
                           <ApptCard
                             appt={appt}
-                            onEdit={() => startEditAppt(appt)}
-                            onDelete={() => deleteAppt(appt.id)}
+                            onEdit={canEditAppt ? () => startEditAppt(appt) : undefined}
+                            onDelete={canDelAppt ? () => deleteAppt(appt.id) : undefined}
                             deleting={deletingApptId === appt.id}
                           />
                         )}

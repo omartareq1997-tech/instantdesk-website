@@ -42,10 +42,11 @@ function blurDefault(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement 
 }
 
 export default function AddLeadModal({
-  onClose, onCreated,
+  onClose, onCreated, actorName = 'Alex Thompson',
 }: {
-  onClose:   () => void
-  onCreated: (raw: Record<string, unknown>) => void
+  onClose:     () => void
+  onCreated:   (raw: Record<string, unknown>) => void
+  actorName?:  string
 }) {
   const [name,    setName]    = useState('')
   const [company, setCompany] = useState('')
@@ -70,7 +71,7 @@ export default function AddLeadModal({
 
       const res = await fetch('/api/leads', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Actor-Name': actorName },
         body: JSON.stringify({
           name:        trimmed,
           company:     company.trim(),

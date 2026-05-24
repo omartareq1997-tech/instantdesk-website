@@ -17,6 +17,7 @@ import AddLeadModal from './AddLeadModal'
 import AddAppointmentModal from './AddAppointmentModal'
 import AnalyticsSection from './AnalyticsSection'
 import ApptDrawer, { type DrawerAppointment } from './ApptDrawer'
+import AutomationCenter from './AutomationCenter'
 import type { DashboardData, IntegrationRow, OverviewMetrics, TeamMember, Role } from './types'
 import { supabase } from '../lib/supabase'
 import { getPermissions, type Permissions } from '../lib/permissions'
@@ -145,7 +146,7 @@ const SECTION_META: Record<Section,{title:string;sub:string}> = {
   appointments: { title:'Appointments',   sub:'Weekly schedule and upcoming bookings'                 },
   log:          { title:'Audit Log',      sub:'Full history of every action — click Undo to reverse'  },
   team:         { title:'Team',           sub:'Members, roles and lead assignments'                   },
-  automation:   { title:'Automation',     sub:'Follow-up status per lead and performance'             },
+  automation:   { title:'Automation',     sub:'Make.com scenario control center — configure, monitor and log'  },
   settings:     { title:'Settings',       sub:'Account and portal configuration'                     },
 }
 
@@ -404,7 +405,11 @@ function Sidebar({ active, onNav, open, onClose, badges = {} }: {
               <div className="text-[10px] text-white/30 truncate">TechFlow Solutions</div>
             </div>
           </div>
-          <button onClick={() => { window.location.href = '/client-login' }}
+          <button
+            onClick={async () => {
+              await fetch('/api/logout', { method: 'POST' })
+              window.location.href = '/client-login'
+            }}
             className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs text-white/35 hover:text-red-400 hover:bg-red-500/8 transition-all w-full">
             <LogOut className="w-3.5 h-3.5" />Log out
           </button>
@@ -3242,7 +3247,13 @@ function getInitialSectionFromHash(): Section {
 
 /* ─── Main ───────────────────────────────────────────────────── */
 
-export default function ClientDashboard({ initialData }: { initialData?: DashboardData }) {
+export default function ClientDashboard({
+  initialData,
+  initialUser,
+}: {
+  initialData?:  DashboardData
+  initialUser?:  { id: string; name: string; role: string } | null
+}) {
   // null = hash not yet read (SSR / before first layout effect).
   // useLayoutEffect sets the real value synchronously before the browser paints,
   // so the sidebar and content both render the correct tab on the very first frame.
@@ -3285,14 +3296,23 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
   useEffect(() => { void fetchTeamMembers() }, [fetchTeamMembers])
 
   // ── Current user / role-based permissions ──────────────────────
-  const [currentUser, setCurrentUser] = useState<CurrentUser>(DEMO_OWNER)
+  // If a real member_session cookie was verified server-side, use it and
+  // skip the demo localStorage switcher entirely.
+  const hasRealSession = !!initialUser
+
+  const [currentUser, setCurrentUser] = useState<CurrentUser>(
+    initialUser
+      ? { name: initialUser.name, role: initialUser.role as Role }
+      : DEMO_OWNER
+  )
 
   useEffect(() => {
+    if (hasRealSession) return  // real session wins over localStorage
     try {
       const stored = localStorage.getItem('demo_current_user')
       if (stored) setCurrentUser(JSON.parse(stored) as CurrentUser)
     } catch { /* ignore */ }
-  }, [])
+  }, [hasRealSession])
 
   const handleUserChange = useCallback((u: CurrentUser) => {
     setCurrentUser(u)
@@ -3639,11 +3659,17 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                 All systems live
               </div>
-              <ViewAsSelector currentUser={currentUser} teamMembers={teamMembers} onChange={handleUserChange} />
+              {!hasRealSession && (
+                <ViewAsSelector currentUser={currentUser} teamMembers={teamMembers} onChange={handleUserChange} />
+              )}
               <SoundToggle enabled={soundEnabled} onEnable={handleEnableSound} onDisable={handleDisableSound} />
               <TestSoundButton />
               <NotificationCenter notifs={notifs} setNotifs={setNotifs} />
-              <button onClick={() => { window.location.href = '/client-login' }}
+              <button
+                onClick={async () => {
+                  await fetch('/api/logout', { method: 'POST' })
+                  window.location.href = '/client-login'
+                }}
                 className="flex items-center gap-1.5 text-xs text-white/25 hover:text-red-400 transition-colors px-3 py-2 rounded-lg hover:bg-red-500/8">
                 <LogOut className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Log out</span>
@@ -3678,7 +3704,7 @@ export default function ClientDashboard({ initialData }: { initialData?: Dashboa
                     badgeColor: ok ? '#34d399' : '#f87171', duration: 4000,
                   }, ...prev.slice(0, 3)])
                 } />}
-                {section==='automation'   && <AutomationSection leads={leads} integrations={integrations} overviewMetrics={overviewMetrics} />}
+                {section==='automation'   && <AutomationCenter can={can} />}
                 {section==='settings'     && <SettingsSection />}
               </motion.div>
             )}

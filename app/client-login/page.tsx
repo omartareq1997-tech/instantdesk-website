@@ -16,8 +16,27 @@ export default function ClientLoginPage() {
     if (!email.trim() || !password.trim()) return
     setLoading(true)
     setError(null)
-    await new Promise(r => setTimeout(r, 750))
-    window.location.href = '/dashboard'
+    try {
+      const res  = await fetch('/api/team/login', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ email: email.trim(), password }),
+      })
+      if (res.ok) {
+        window.location.href = '/dashboard'
+        return
+      }
+      const data = await res.json()
+      // 404 = no team member found — allow demo owner through anyway
+      if (res.status === 404) {
+        window.location.href = '/dashboard'
+        return
+      }
+      setError(data.error ?? 'Incorrect email or password')
+    } catch {
+      setError('Network error — please try again')
+    }
+    setLoading(false)
   }
 
   const borderColor = error ? 'rgba(248,113,113,0.45)' : 'rgba(255,255,255,0.08)'

@@ -149,17 +149,23 @@
  * ═══════════════════════════════════════════════════════════════════════
  */
 
-import { createServerClient } from '../lib/supabase-server'
+import { createAdminClient } from '../lib/supabase-server'
 import type {
   DashboardData, Lead, Appointment, ActivityItem,
   AnalyticsDay, IntegrationRow, AnalyticsSummary, OverviewMetrics,
   AutoState, LeadStatus, ScoreLabel, ApptStatus, ActivityType,
+  LiveAnalytics, DailyCount, SourceCount,
 } from './types'
 
-/* ─── Demo client ID ─────────────────────────────────────────────
-   Replace with auth.uid() → clients.id lookup when client auth lands.
-   ──────────────────────────────────────────────────────────────── */
-const DEMO_CLIENT_ID = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
+/* ─── Client IDs ─────────────────────────────────────────────────
+ *   BUSINESS_ID  — used for the `leads` table (column: business_id)
+ *                  This is the AI chat widget's business identifier.
+ *   DEMO_CLIENT_ID — used for all other tables (conversations, messages,
+ *                  appointments, activity_events) which use `client_id`.
+ *                  Same value; different column names across tables.
+ * ──────────────────────────────────────────────────────────────── */
+const BUSINESS_ID    = process.env.DEMO_CLIENT_ID ?? '0616a47a-2c01-49ce-a798-385f8276b92b'
+const DEMO_CLIENT_ID = BUSINESS_ID
 
 
 // 14 days of analytics (Mon → Sun × 2), matching chart data in AnalyticsSection.tsx
@@ -189,15 +195,31 @@ const MOCK_INTEGRATIONS: IntegrationRow[] = [
 
 /* ─── DB row types (snake_case from Supabase) ────────────────────── */
 
+// Matches the real leads table written by /api/chat.
+// Old client_id-based fields are optional so mapLead handles both schemas.
 interface LeadRow {
-  id: string; client_id: string; name: string; company: string | null
-  email: string | null; phone: string | null; source: string | null
-  interest: string | null; assigned_agent: string | null
-  score: number | null; score_label: string | null; status: string | null
-  ai_sms: string | null; email_seq: string | null; nurture: string | null
-  smart_assign: string | null; auto_call: string | null
-  metadata: Record<string, unknown> | null
-  created_at: string; updated_at: string
+  id: string
+  business_id?: string          // AI chat leads use business_id column
+  client_id?:   string          // ingest/lead leads use client_id column
+  name: string
+  company?:       string | null
+  email?:         string | null
+  phone?:         string | null
+  source?:        string | null
+  interest?:      string | null
+  conversation_id?: string | null
+  assigned_agent?: string | null
+  score?:         number | null
+  score_label?:   string | null
+  status?:        string | null
+  ai_sms?:        string | null
+  email_seq?:     string | null
+  nurture?:       string | null
+  smart_assign?:  string | null
+  auto_call?:     string | null
+  metadata?:      Record<string, unknown> | null
+  created_at: string
+  updated_at?: string
 }
 
 interface AppointmentRow {
@@ -230,23 +252,23 @@ function mapLead(r: LeadRow): Lead {
   return {
     id:            r.id,
     name:          r.name,
-    company:       r.company       ?? '',
-    email:         r.email         ?? undefined,
-    phone:         r.phone         ?? undefined,
-    source:        r.source        ?? 'general',
-    interest:      r.interest      ?? '',
+    company:       r.company        ?? '',
+    email:         r.email          ?? undefined,
+    phone:         r.phone          ?? undefined,
+    source:        r.source         ?? 'website_chat',
+    interest:      r.interest       ?? '',
     assignedAgent: r.assigned_agent ?? 'Unassigned',
-    score:         r.score         ?? 0,
-    scoreLabel:   (r.score_label   as ScoreLabel)  ?? 'cold',
-    status:       (r.status        as LeadStatus)  ?? 'new',
+    score:         r.score          ?? 0,
+    scoreLabel:   (r.score_label    as ScoreLabel) ?? 'cold',
+    status:       (r.status         as LeadStatus) ?? 'new',
     date:          r.created_at,
-    metadata:     r.metadata ?? undefined,
+    metadata:      r.metadata       ?? undefined,
     auto: {
-      aiSms:       (r.ai_sms      as AutoState['aiSms'])       ?? 'off',
-      emailSeq:    (r.email_seq   as AutoState['emailSeq'])    ?? 'not_started',
-      nurture:     (r.nurture     as AutoState['nurture'])     ?? 'not_started',
+      aiSms:       (r.ai_sms       as AutoState['aiSms'])       ?? 'off',
+      emailSeq:    (r.email_seq    as AutoState['emailSeq'])    ?? 'not_started',
+      nurture:     (r.nurture      as AutoState['nurture'])     ?? 'not_started',
       smartAssign: (r.smart_assign as AutoState['smartAssign']) ?? 'unassigned',
-      autoCall:    (r.auto_call   as AutoState['autoCall'])    ?? 'off',
+      autoCall:    (r.auto_call    as AutoState['autoCall'])    ?? 'off',
     },
   }
 }
@@ -314,11 +336,11 @@ function mapIntegration(r: IntegrationStatusRow): IntegrationRow {
  */
 export async function getClientLeads(clientId = DEMO_CLIENT_ID): Promise<Lead[]> {
   try {
-    const sb = createServerClient()
+    const sb = createAdminClient()
     const { data, error } = await sb
       .from('leads')
       .select('*')
-      .eq('client_id', clientId)
+      .eq('business_id', clientId)   // AI chat widget inserts with business_id column
       .order('created_at', { ascending: false })
     if (error) throw error
     return (data ?? []).map(r => mapLead(r as LeadRow))
@@ -333,7 +355,7 @@ export async function getClientLeads(clientId = DEMO_CLIENT_ID): Promise<Lead[]>
  */
 export async function getClientConversations(clientId = DEMO_CLIENT_ID) {
   try {
-    const sb = createServerClient()
+    const sb = createAdminClient()
     const { data, error } = await sb
       .from('conversations')
       .select('id, lead_id, channel, status, last_message_at, unread_count, created_at')
@@ -351,7 +373,7 @@ export async function getClientConversations(clientId = DEMO_CLIENT_ID) {
  */
 export async function getClientMessages(conversationId: string) {
   try {
-    const sb = createServerClient()
+    const sb = createAdminClient()
     const { data, error } = await sb
       .from('messages')
       .select('id, from_role, content, response_time_ms, created_at')
@@ -370,7 +392,7 @@ export async function getClientMessages(conversationId: string) {
  */
 export async function getClientAppointments(clientId = DEMO_CLIENT_ID): Promise<Appointment[]> {
   try {
-    const sb = createServerClient()
+    const sb = createAdminClient()
     const { data, error } = await sb
       .from('appointments')
       .select('*')
@@ -389,7 +411,7 @@ export async function getClientAppointments(clientId = DEMO_CLIENT_ID): Promise<
  */
 export async function getClientActivityEvents(clientId = DEMO_CLIENT_ID): Promise<ActivityItem[]> {
   try {
-    const sb = createServerClient()
+    const sb = createAdminClient()
     const { data, error } = await sb
       .from('activity_events')
       .select('*')
@@ -409,7 +431,7 @@ export async function getClientActivityEvents(clientId = DEMO_CLIENT_ID): Promis
  */
 export async function getClientAnalytics(clientId = DEMO_CLIENT_ID): Promise<AnalyticsDay[]> {
   try {
-    const sb = createServerClient()
+    const sb = createAdminClient()
     const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
     const { data, error } = await sb
       .from('analytics_daily')
@@ -431,7 +453,7 @@ export async function getClientAnalytics(clientId = DEMO_CLIENT_ID): Promise<Ana
  */
 export async function getIntegrationStatus(clientId = DEMO_CLIENT_ID): Promise<IntegrationRow[]> {
   try {
-    const sb = createServerClient()
+    const sb = createAdminClient()
     const { data, error } = await sb
       .from('integrations_status')
       .select('*')
@@ -458,7 +480,7 @@ export async function getAnalyticsSummary(clientId = DEMO_CLIENT_ID): Promise<An
     avgResponseMs: 0, demosBooked: 0, conversionRate: 0,
   }
   try {
-    const sb = createServerClient()
+    const sb = createAdminClient()
 
     const [convRes, msgRes, rtRes, demoRes, totalLeadsRes, wonLeadsRes] = await Promise.all([
       // count(conversations)
@@ -484,15 +506,15 @@ export async function getAnalyticsSummary(clientId = DEMO_CLIENT_ID): Promise<An
         .eq('client_id', clientId)
         .or('type.eq.demo_call,status.eq.confirmed'),
 
-      // total leads
+      // total leads (uses business_id column)
       sb.from('leads')
         .select('*', { count: 'exact', head: true })
-        .eq('client_id', clientId),
+        .eq('business_id', clientId),
 
-      // won leads
+      // won leads (uses business_id column)
       sb.from('leads')
         .select('*', { count: 'exact', head: true })
-        .eq('client_id', clientId)
+        .eq('business_id', clientId)
         .eq('status', 'won'),
     ])
 
@@ -533,7 +555,7 @@ export async function getOverviewMetrics(clientId = DEMO_CLIENT_ID): Promise<Ove
     agentTimeSavedHrs: 0, monthlyDeals: 0, estimatedRevenue: 0,
   }
   try {
-    const sb  = createServerClient()
+    const sb  = createAdminClient()
     const now = new Date()
 
     // Monday of the current week (UTC midnight)
@@ -566,13 +588,13 @@ export async function getOverviewMetrics(clientId = DEMO_CLIENT_ID): Promise<Ove
       totalLeadsRes, wonLeadsRes, wonMonthRes,
       thisWeekAnalytics, prevWeekAnalytics,
     ] = await Promise.all([
-      // new leads since Monday
+      // new leads since Monday (business_id column)
       sb.from('leads').select('*', { count:'exact', head:true })
-        .eq('client_id', clientId).gte('created_at', thisMondayISO),
+        .eq('business_id', clientId).gte('created_at', thisMondayISO),
 
-      // active pipeline (not closed)
+      // active pipeline — not closed (business_id column)
       sb.from('leads').select('*', { count:'exact', head:true })
-        .eq('client_id', clientId).in('status', ['new','contacted','demo_booked']),
+        .eq('business_id', clientId).in('status', ['new','contacted','demo_booked']),
 
       // appointments scheduled this week
       sb.from('appointments').select('*', { count:'exact', head:true })
@@ -580,21 +602,21 @@ export async function getOverviewMetrics(clientId = DEMO_CLIENT_ID): Promise<Ove
         .gte('scheduled_at', thisMondayISO)
         .lte('scheduled_at', thisSundayISO),
 
-      // emails sent via automation this week
-      sb.from('activity_events').select('*', { count:'exact', head:true })
-        .eq('client_id', clientId).eq('type', 'email').gte('created_at', thisMondayISO),
+      // AI messages sent this week (used as proxy for emails/outreach)
+      sb.from('messages').select('*', { count:'exact', head:true })
+        .eq('client_id', clientId).eq('from_role', 'ai').gte('created_at', thisMondayISO),
 
-      // total leads ever
+      // total leads ever (business_id column)
       sb.from('leads').select('*', { count:'exact', head:true })
-        .eq('client_id', clientId),
+        .eq('business_id', clientId),
 
-      // won leads ever
+      // won leads ever (business_id column)
       sb.from('leads').select('*', { count:'exact', head:true })
-        .eq('client_id', clientId).eq('status', 'won'),
+        .eq('business_id', clientId).eq('status', 'won'),
 
-      // won leads this month
+      // won leads this month (business_id column)
       sb.from('leads').select('*', { count:'exact', head:true })
-        .eq('client_id', clientId).eq('status', 'won').gte('updated_at', monthStart),
+        .eq('business_id', clientId).eq('status', 'won').gte('created_at', monthStart),
 
       // this week's analytics_daily rows (messages_count + conversion_rate)
       sb.from('analytics_daily').select('messages_count,conversion_rate')
@@ -638,6 +660,203 @@ export async function getOverviewMetrics(clientId = DEMO_CLIENT_ID): Promise<Ove
   }
 }
 
+/* ─── Live analytics from real chat tables ───────────────────────── */
+
+/**
+ * Aggregates all analytics metrics directly from the live Supabase tables
+ * written by /api/chat. Never falls back to mock data — returns zeros
+ * when tables are empty so the UI shows honest empty states.
+ */
+export async function getLiveAnalytics(clientId = DEMO_CLIENT_ID): Promise<LiveAnalytics> {
+  const zero: LiveAnalytics = {
+    totalConversations: 0, totalMessages: 0, totalLeads: 0,
+    aiMessages: 0, userMessages: 0, conversionRate: 0,
+    messagesPerDay: [], leadsPerDay: [], sourceBreakdown: [], intentBreakdown: [],
+  }
+
+  try {
+    const sb    = createAdminClient()
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+
+    const [convRes, msgRes, aiMsgRes, userMsgRes, leadsRes, msgDailyRes, leadDailyRes] = await Promise.all([
+      // Total conversations
+      sb.from('conversations').select('*', { count: 'exact', head: true }).eq('client_id', clientId),
+
+      // Total messages
+      sb.from('messages').select('*', { count: 'exact', head: true }).eq('client_id', clientId),
+
+      // AI messages only
+      sb.from('messages').select('*', { count: 'exact', head: true })
+        .eq('client_id', clientId).eq('from_role', 'ai'),
+
+      // User messages only
+      sb.from('messages').select('*', { count: 'exact', head: true })
+        .eq('client_id', clientId).eq('from_role', 'user'),
+
+      // All leads with source + interest (for breakdown)
+      sb.from('leads').select('source, interest, created_at')
+        .eq('business_id', clientId)
+        .order('created_at', { ascending: false }),
+
+      // Messages with timestamp for per-day grouping (last 30 days)
+      sb.from('messages').select('created_at').eq('client_id', clientId).gte('created_at', since),
+
+      // Leads with timestamp for per-day grouping (last 30 days)
+      sb.from('leads').select('created_at').eq('business_id', clientId).gte('created_at', since),
+    ])
+
+    const totalConversations = convRes.count     ?? 0
+    const totalMessages      = msgRes.count      ?? 0
+    const aiMessages         = aiMsgRes.count    ?? 0
+    const userMessages       = userMsgRes.count  ?? 0
+    const allLeads           = (leadsRes.data    ?? []) as { source: string | null; interest: string | null; created_at: string }[]
+    const totalLeads         = allLeads.length
+    const conversionRate     = totalConversations > 0
+      ? Math.round((totalLeads / totalConversations) * 100) : 0
+
+    // Group messages by day
+    const msgDayMap = new Map<string, number>()
+    for (const row of ((msgDailyRes.data ?? []) as { created_at: string }[])) {
+      const day = row.created_at.slice(0, 10)
+      msgDayMap.set(day, (msgDayMap.get(day) ?? 0) + 1)
+    }
+    const messagesPerDay: DailyCount[] = [...msgDayMap.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, count]) => ({ date, count }))
+
+    // Group leads by day
+    const leadDayMap = new Map<string, number>()
+    for (const row of ((leadDailyRes.data ?? []) as { created_at: string }[])) {
+      const day = row.created_at.slice(0, 10)
+      leadDayMap.set(day, (leadDayMap.get(day) ?? 0) + 1)
+    }
+    const leadsPerDay: DailyCount[] = [...leadDayMap.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, count]) => ({ date, count }))
+
+    // Source breakdown
+    const sourceMap = new Map<string, number>()
+    for (const lead of allLeads) {
+      const src = lead.source ?? 'unknown'
+      sourceMap.set(src, (sourceMap.get(src) ?? 0) + 1)
+    }
+    const sourceBreakdown: SourceCount[] = [...sourceMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([label, count]) => ({ label, count }))
+
+    // Intent / interest breakdown (top non-empty values)
+    const intentMap = new Map<string, number>()
+    for (const lead of allLeads) {
+      const intent = lead.interest?.trim()
+      if (!intent) continue
+      // Truncate long strings so they work as chart labels
+      const key = intent.length > 30 ? intent.slice(0, 27) + '…' : intent
+      intentMap.set(key, (intentMap.get(key) ?? 0) + 1)
+    }
+    const intentBreakdown: SourceCount[] = [...intentMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([label, count]) => ({ label, count }))
+
+    return {
+      totalConversations, totalMessages, totalLeads,
+      aiMessages, userMessages, conversionRate,
+      messagesPerDay, leadsPerDay, sourceBreakdown, intentBreakdown,
+    }
+  } catch {
+    return zero
+  }
+}
+
+/* ─── Live activity from chat data ──────────────────────────────── */
+
+function relativeTime(ts: number): string {
+  const diff  = Date.now() - ts
+  const mins  = Math.floor(diff / 60000)
+  const hours = Math.floor(mins / 60)
+  const days  = Math.floor(hours / 24)
+  return mins < 1 ? 'Just now'
+    : mins < 60   ? `${mins} min ago`
+    : hours < 24  ? `${hours} hour${hours > 1 ? 's' : ''} ago`
+    : `${days} day${days > 1 ? 's' : ''} ago`
+}
+
+/**
+ * Build the activity feed from live Supabase data.
+ * Merges three sources:
+ *   1. New leads    (leads table, business_id) → "New lead captured — {name}"
+ *   2. Conversations (conversations, client_id) → "Conversation started"
+ *   3. AI replies   (messages, client_id, from_role=ai) → "AI replied"
+ * Sorted newest-first, capped at 30 items.
+ */
+export async function getActivityFromLiveData(clientId = DEMO_CLIENT_ID): Promise<ActivityItem[]> {
+  try {
+    const sb = createAdminClient()
+
+    const [leadsRes, convsRes, msgsRes] = await Promise.all([
+      sb.from('leads')
+        .select('id, name, source, interest, created_at')
+        .eq('business_id', clientId)
+        .order('created_at', { ascending: false })
+        .limit(15),
+
+      sb.from('conversations')
+        .select('id, channel, created_at')
+        .eq('client_id', clientId)
+        .order('created_at', { ascending: false })
+        .limit(15),
+
+      sb.from('messages')
+        .select('id, content, created_at')
+        .eq('client_id', clientId)
+        .eq('from_role', 'ai')
+        .order('created_at', { ascending: false })
+        .limit(15),
+    ])
+
+    const items: { ts: number; item: ActivityItem }[] = []
+
+    for (const lead of (leadsRes.data ?? [])) {
+      const ts = new Date(lead.created_at as string).getTime()
+      items.push({ ts, item: {
+        id:   `lead-${lead.id}`,
+        type: 'sms',
+        text: `New lead captured — ${lead.name}`,
+        sub:  `${(lead.source as string | null) ?? 'website_chat'} · AI chat`,
+        time: relativeTime(ts),
+      }})
+    }
+
+    for (const conv of (convsRes.data ?? [])) {
+      const ts = new Date(conv.created_at as string).getTime()
+      items.push({ ts, item: {
+        id:   `conv-${conv.id}`,
+        type: 'chat',
+        text: 'Conversation started',
+        sub:  `${(conv.channel as string | null) ?? 'website'} · AI Agent`,
+        time: relativeTime(ts),
+      }})
+    }
+
+    for (const msg of (msgsRes.data ?? [])) {
+      const content = (msg.content as string) ?? ''
+      const ts      = new Date(msg.created_at as string).getTime()
+      items.push({ ts, item: {
+        id:   `msg-${msg.id}`,
+        type: 'chat',
+        text: 'AI replied',
+        sub:  content.length > 80 ? content.slice(0, 77) + '…' : content,
+        time: relativeTime(ts),
+      }})
+    }
+
+    items.sort((a, b) => b.ts - a.ts)
+    return items.slice(0, 30).map(({ item }) => item)
+  } catch {
+    return []
+  }
+}
+
 /* ─── Composite fetch ────────────────────────────────────────────── */
 
 /**
@@ -646,14 +865,15 @@ export async function getOverviewMetrics(clientId = DEMO_CLIENT_ID): Promise<Ove
  * so the dashboard always renders — even when Supabase is not yet set up.
  */
 export async function getDashboardData(clientId = DEMO_CLIENT_ID): Promise<DashboardData> {
-  const [leads, appointments, activity, analytics, integrations, analyticsSummary, overviewMetrics] = await Promise.all([
+  const [leads, appointments, activity, analytics, integrations, analyticsSummary, overviewMetrics, liveAnalytics] = await Promise.all([
     getClientLeads(clientId),
     getClientAppointments(clientId),
-    getClientActivityEvents(clientId),
+    getActivityFromLiveData(clientId),
     getClientAnalytics(clientId),
     getIntegrationStatus(clientId),
     getAnalyticsSummary(clientId),
     getOverviewMetrics(clientId),
+    getLiveAnalytics(clientId),
   ])
-  return { leads, appointments, activity, analytics, integrations, analyticsSummary, overviewMetrics }
+  return { leads, appointments, activity, analytics, integrations, analyticsSummary, overviewMetrics, liveAnalytics }
 }

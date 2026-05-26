@@ -10,7 +10,7 @@
 export type LeadStatus   = 'new' | 'contacted' | 'demo_booked' | 'won' | 'lost'
 export type ScoreLabel   = 'hot' | 'warm' | 'cold'
 export type ApptStatus   = 'confirmed' | 'pending' | 'completed' | 'cancelled'
-export type ActivityType = 'sms' | 'appointment' | 'assignment' | 'email' | 'call'
+export type ActivityType = 'sms' | 'appointment' | 'assignment' | 'email' | 'call' | 'chat'
 
 /* ─── Automation state ─────────────────────────────────────────── */
 
@@ -141,6 +141,31 @@ export interface IntegrationRow {
   metadata: Record<string, unknown> | null
 }
 
+/* ─── Live analytics from real chat data ────────────────────────── */
+
+export interface DailyCount {
+  date:  string   // YYYY-MM-DD
+  count: number
+}
+
+export interface SourceCount {
+  label: string
+  count: number
+}
+
+export interface LiveAnalytics {
+  totalConversations: number
+  totalMessages:      number
+  totalLeads:         number
+  aiMessages:         number
+  userMessages:       number
+  conversionRate:     number    // leads / conversations * 100  (0–100)
+  messagesPerDay:     DailyCount[]
+  leadsPerDay:        DailyCount[]
+  sourceBreakdown:    SourceCount[]
+  intentBreakdown:    SourceCount[]
+}
+
 /* ─── Composite data bag passed from page.tsx → ClientDashboard ── */
 
 export interface DashboardData {
@@ -151,4 +176,5 @@ export interface DashboardData {
   integrations:     IntegrationRow[]
   analyticsSummary: AnalyticsSummary
   overviewMetrics:  OverviewMetrics
+  liveAnalytics:    LiveAnalytics
 }

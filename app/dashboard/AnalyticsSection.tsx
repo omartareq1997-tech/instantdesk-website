@@ -2,10 +2,11 @@
 
 import { useRef, useEffect } from 'react'
 import { motion, useInView, animate } from 'framer-motion'
-import { TrendingUp, TrendingDown, MessageCircle, Zap, Calendar, BarChart2 } from 'lucide-react'
-import type { AnalyticsDay, AnalyticsSummary } from './types'
-
-const WK_LABELS = ['Wk1','Wk2','Wk3','Wk4','Wk5','Wk6','Wk7','Wk8']
+import {
+  TrendingUp, TrendingDown, MessageCircle, Zap, Users, BarChart2,
+  Bot, UserCheck, Target, Activity,
+} from 'lucide-react'
+import type { AnalyticsDay, AnalyticsSummary, LiveAnalytics } from './types'
 
 /* ── Loading skeleton ────────────────────────────────────────────── */
 
@@ -16,8 +17,8 @@ function Pulse({ className }: { className?: string }) {
 export function AnalyticsSkeleton() {
   return (
     <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {[0,1,2,3].map(i => (
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        {[0,1,2,3,4].map(i => (
           <div key={i} className="rounded-2xl p-5"
             style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}>
             <Pulse className="w-8 h-8 mb-3" />
@@ -33,9 +34,6 @@ export function AnalyticsSkeleton() {
             <Pulse className="h-3 w-32 mb-2" />
             <Pulse className="h-6 w-20 mb-4" />
             <Pulse className="h-[72px] w-full" />
-            <div className="flex justify-between mt-3">
-              {[0,1,2,3,4,5,6].map(j => <Pulse key={j} className="h-2 w-4" />)}
-            </div>
           </div>
         ))}
       </div>
@@ -65,12 +63,20 @@ function areaPath(xs: number[], ys: number[], height: number) {
   return smoothPath(xs, ys) + ` L ${xs[xs.length-1].toFixed(1)} ${height} L ${xs[0].toFixed(1)} ${height} Z`
 }
 
-/* ── Empty chart placeholder ─────────────────────────────────────── */
+/* ── Empty states ────────────────────────────────────────────────── */
 
 function EmptyChart({ height }: { height: number }) {
   return (
     <div className="flex items-center justify-center rounded-xl"
       style={{ height, background:'rgba(255,255,255,0.015)', border:'1px dashed rgba(255,255,255,0.07)' }}>
+      <span className="text-[10px] text-white/20 font-semibold uppercase tracking-widest">No data yet</span>
+    </div>
+  )
+}
+
+function EmptyBreakdown() {
+  return (
+    <div className="flex items-center justify-center py-8">
       <span className="text-[10px] text-white/20 font-semibold uppercase tracking-widest">No data yet</span>
     </div>
   )
@@ -85,7 +91,7 @@ function calcTrend(data: number[]): { trend: 'up' | 'down'; label: string } {
   const prior  = data.slice(-half * 2, -half).reduce((a, b) => a + b, 0)
   if (!prior) return { trend: 'up', label: '—' }
   const pct = Math.round(((recent - prior) / prior) * 100)
-  return { trend: pct >= 0 ? 'up' : 'down', label: `${pct >= 0 ? '+' : ''}${pct}% vs prior period` }
+  return { trend: pct >= 0 ? 'up' : 'down', label: `${pct >= 0 ? '+' : ''}${pct}% vs prior` }
 }
 
 /* ── Animated counter ────────────────────────────────────────────── */
@@ -115,7 +121,7 @@ function LineCard({
   Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
 }) {
   const W = 300; const H = 72
-  const hasData = data.length >= 2
+  const hasData = data.length >= 2 && Math.max(...data) > 0
   const xs = hasData ? data.map((_, i) => i * (W / (data.length - 1))) : []
   const ys = hasData ? normalize(data, H) : []
   const lp = hasData ? smoothPath(xs, ys) : ''
@@ -132,9 +138,7 @@ function LineCard({
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="text-[10px] font-bold uppercase tracking-widest text-white/30 mb-1">{title}</div>
-          <div className="text-2xl font-black text-white">
-            <Counter to={value} suffix={suffix} />
-          </div>
+          <div className="text-2xl font-black text-white"><Counter to={value} suffix={suffix} /></div>
         </div>
         <div className="flex flex-col items-end gap-2">
           <div className="w-8 h-8 rounded-xl flex items-center justify-center"
@@ -176,7 +180,7 @@ function LineCard({
 
       {hasData && (
         <div className="flex justify-between">
-          {labels.filter((_, i) => i % 2 === 0).map((l, i) => (
+          {labels.filter((_, i) => labels.length <= 7 || i % Math.ceil(labels.length / 7) === 0).map((l, i) => (
             <span key={i} className="text-[9px] text-white/20 font-medium">{l}</span>
           ))}
         </div>
@@ -211,9 +215,7 @@ function BarCard({
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="text-[10px] font-bold uppercase tracking-widest text-white/30 mb-1">{title}</div>
-          <div className="text-2xl font-black text-white">
-            <Counter to={value} suffix={suffix} />
-          </div>
+          <div className="text-2xl font-black text-white"><Counter to={value} suffix={suffix} /></div>
         </div>
         <div className="flex flex-col items-end gap-2">
           <div className="w-8 h-8 rounded-xl flex items-center justify-center"
@@ -255,7 +257,7 @@ function BarCard({
 
       {hasData && (
         <div className="flex justify-between">
-          {labels.map((l, i) => (
+          {labels.filter((_, i) => labels.length <= 7 || i % Math.ceil(labels.length / 7) === 0).map((l, i) => (
             <span key={i} className="text-[9px] text-white/20 font-medium">{l}</span>
           ))}
         </div>
@@ -264,72 +266,162 @@ function BarCard({
   )
 }
 
-/* ── Data derivation (no mock fallbacks — zeros when tables empty) ── */
+/* ── Horizontal breakdown bar ────────────────────────────────────── */
 
-function groupIntoWeeks(
-  days: AnalyticsDay[],
-  key: keyof Pick<AnalyticsDay, 'conversionRate' | 'demosBooked'>,
-  weeks = 8,
-): number[] {
-  const buckets: number[][] = Array.from({ length: weeks }, () => [])
-  const sorted = [...days].sort((a, b) => a.date.localeCompare(b.date)).slice(-(weeks * 7))
-  sorted.forEach((d, i) => { buckets[Math.floor(i / 7)].push(d[key]) })
-  return buckets.map(b =>
-    b.length ? Math.round(b.reduce((s, v) => s + v, 0) / (key === 'conversionRate' ? b.length : 1)) : 0,
+function BreakdownCard({
+  title, items, color, Icon,
+}: {
+  title: string
+  items: { label: string; count: number }[]
+  color: string
+  Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
+}) {
+  const total = items.reduce((s, i) => s + i.count, 0) || 1
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: '-40px' }} transition={{ duration: 0.5 }}
+      className="rounded-2xl p-5 flex flex-col gap-4"
+      style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}
+      whileHover={{ borderColor: `${color}30`, boxShadow: `0 0 32px ${color}10` }}
+    >
+      <div className="flex items-center justify-between">
+        <div className="text-[10px] font-bold uppercase tracking-widest text-white/30">{title}</div>
+        <div className="w-7 h-7 rounded-lg flex items-center justify-center"
+          style={{ background:`${color}18`, border:`1px solid ${color}25` }}>
+          <Icon className="w-3.5 h-3.5" style={{ color }} />
+        </div>
+      </div>
+
+      {items.length === 0 ? <EmptyBreakdown /> : (
+        <div className="flex flex-col gap-2.5">
+          {items.map((item, i) => {
+            const pct = Math.round((item.count / total) * 100)
+            return (
+              <div key={i} className="flex flex-col gap-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-white/60 truncate max-w-[70%]">{item.label}</span>
+                  <span className="text-[11px] font-bold text-white/40">{item.count} <span className="text-white/25">({pct}%)</span></span>
+                </div>
+                <div className="h-1 rounded-full overflow-hidden" style={{ background:'rgba(255,255,255,0.06)' }}>
+                  <motion.div
+                    className="h-full rounded-full"
+                    style={{ background: color }}
+                    initial={{ width: 0 }}
+                    whileInView={{ width: `${pct}%` }}
+                    viewport={{ once: true }}
+                    transition={{ duration: 0.8, delay: 0.1 + i * 0.07, ease: 'easeOut' }}
+                  />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </motion.div>
   )
 }
 
-function deriveChartData(analytics: AnalyticsDay[] | undefined) {
-  if (!analytics?.length) {
-    return { msgsPerDay: [] as number[], convRateWks: [] as number[], respSpeed: [] as number[], demosBooked: [] as number[], dayLabels: [] as string[] }
-  }
-  const sorted = [...analytics].sort((a, b) => a.date.localeCompare(b.date))
-  return {
-    msgsPerDay:  sorted.slice(-14).map(d => d.messagesCount),
-    respSpeed:   sorted.slice(-10).map(d => Math.round(d.avgResponseMs / 100) / 10),
-    convRateWks: groupIntoWeeks(sorted, 'conversionRate', 8),
-    demosBooked: groupIntoWeeks(sorted, 'demosBooked', 8),
-    dayLabels:   sorted.slice(-14).map(d =>
-      new Date(d.date + 'T12:00:00Z').toLocaleDateString('en', { weekday: 'narrow' })
-    ),
-  }
+/* ── AI vs User messages split card ──────────────────────────────── */
+
+function MessageSplitCard({ aiMessages, userMessages }: { aiMessages: number; userMessages: number }) {
+  const total = aiMessages + userMessages || 1
+  const aiPct   = Math.round((aiMessages   / total) * 100)
+  const userPct = Math.round((userMessages / total) * 100)
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: '-40px' }} transition={{ duration: 0.5 }}
+      className="rounded-2xl p-5 flex flex-col gap-4"
+      style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}
+      whileHover={{ borderColor:'rgba(129,140,248,0.3)', boxShadow:'0 0 32px rgba(129,140,248,0.1)' }}
+    >
+      <div className="flex items-center justify-between">
+        <div className="text-[10px] font-bold uppercase tracking-widest text-white/30">Message Volume</div>
+        <div className="w-7 h-7 rounded-lg flex items-center justify-center"
+          style={{ background:'rgba(129,140,248,0.12)', border:'1px solid rgba(129,140,248,0.2)' }}>
+          <Activity className="w-3.5 h-3.5" style={{ color:'#818cf8' }} />
+        </div>
+      </div>
+
+      {aiMessages === 0 && userMessages === 0 ? <EmptyBreakdown /> : (
+        <div className="flex flex-col gap-3">
+          <div className="flex gap-1 h-5 rounded-full overflow-hidden">
+            <motion.div className="h-full rounded-l-full" style={{ background:'#818cf8' }}
+              initial={{ width: 0 }} whileInView={{ width: `${aiPct}%` }} viewport={{ once: true }}
+              transition={{ duration: 0.9, ease: 'easeOut' }} />
+            <motion.div className="h-full rounded-r-full flex-1" style={{ background:'rgba(52,211,153,0.6)' }}
+              initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} viewport={{ once: true }}
+              transition={{ duration: 0.9, delay: 0.2 }} />
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full" style={{ background:'#818cf8' }} />
+              <span className="text-[11px] text-white/50">AI replies</span>
+              <span className="text-[11px] font-bold text-white">{aiMessages.toLocaleString()}</span>
+              <span className="text-[10px] text-white/25">({aiPct}%)</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full" style={{ background:'rgba(52,211,153,0.8)' }} />
+              <span className="text-[11px] text-white/50">User msgs</span>
+              <span className="text-[11px] font-bold text-white">{userMessages.toLocaleString()}</span>
+              <span className="text-[10px] text-white/25">({userPct}%)</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </motion.div>
+  )
+}
+
+/* ── Day-label formatter ─────────────────────────────────────────── */
+
+function dayLabel(dateStr: string) {
+  return new Date(dateStr + 'T12:00:00Z').toLocaleDateString('en', { month: 'short', day: 'numeric' })
 }
 
 /* ── Main export ─────────────────────────────────────────────────── */
 
 export default function AnalyticsSection({
-  analytics,
-  analyticsSummary,
+  liveAnalytics,
 }: {
-  analytics?:        AnalyticsDay[]
-  analyticsSummary?: AnalyticsSummary
+  analytics?:        AnalyticsDay[]      // kept in signature for backward compat, unused
+  analyticsSummary?: AnalyticsSummary    // kept in signature for backward compat, unused
+  liveAnalytics?:    LiveAnalytics
 }) {
-  const { msgsPerDay, convRateWks, respSpeed, demosBooked, dayLabels } = deriveChartData(analytics)
+  const live = liveAnalytics ?? {
+    totalConversations: 0, totalMessages: 0, totalLeads: 0,
+    aiMessages: 0, userMessages: 0, conversionRate: 0,
+    messagesPerDay: [], leadsPerDay: [], sourceBreakdown: [], intentBreakdown: [],
+  }
 
-  const msgsTrend  = calcTrend(msgsPerDay)
-  const convTrend  = calcTrend(convRateWks)
-  const speedRaw   = calcTrend(respSpeed)
-  // Response time: lower = better → invert trend direction so green = improvement
-  const speedTrend = { trend: speedRaw.trend === 'up' ? 'down' as const : 'up' as const, label: speedRaw.label }
-  const demoTrend  = calcTrend(demosBooked)
+  const msgData    = live.messagesPerDay.map(d => d.count)
+  const msgLabels  = live.messagesPerDay.map(d => dayLabel(d.date))
+  const leadData   = live.leadsPerDay.map(d => d.count)
+  const leadLabels = live.leadsPerDay.map(d => dayLabel(d.date))
 
-  const avgRespSec = Math.round((analyticsSummary?.avgResponseMs ?? 0) / 1000)
+  const msgTrend  = calcTrend(msgData)
+  const leadTrend = calcTrend(leadData)
 
   const kpis = [
-    { label:'Total conversations', value: analyticsSummary?.totalConversations ?? 0, suffix:'',   color:'#a78bfa', Icon: MessageCircle },
-    { label:'Total messages',      value: analyticsSummary?.totalMessages      ?? 0, suffix:'',   color:'#60a5fa', Icon: BarChart2    },
-    { label:'Avg AI response',     value: avgRespSec,                               suffix:'s',  color:'#34d399', Icon: Zap          },
-    { label:'Demos booked',        value: analyticsSummary?.demosBooked        ?? 0, suffix:'',   color:'#fbbf24', Icon: Calendar     },
+    { label:'Conversations', value: live.totalConversations, suffix:'', color:'#a78bfa', Icon: MessageCircle },
+    { label:'Total messages', value: live.totalMessages,     suffix:'', color:'#60a5fa', Icon: BarChart2     },
+    { label:'Leads captured', value: live.totalLeads,        suffix:'', color:'#34d399', Icon: UserCheck     },
+    { label:'Conversion rate',value: live.conversionRate,   suffix:'%', color:'#fbbf24', Icon: Target        },
+    { label:'AI replies',     value: live.aiMessages,        suffix:'', color:'#818cf8', Icon: Bot           },
   ]
 
   return (
     <div className="flex flex-col gap-6">
+
       {/* KPI summary row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         {kpis.map((k, i) => (
           <motion.div key={k.label}
             initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} transition={{ delay: i * 0.07 }}
-            className="rounded-2xl p-5"
+            className="rounded-2xl p-4 sm:p-5"
             style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}>
             <div className="flex items-center justify-between mb-3">
               <div className="w-8 h-8 rounded-xl flex items-center justify-center"
@@ -340,39 +432,80 @@ export default function AnalyticsSection({
             <div className="text-2xl font-black text-white">
               <Counter to={k.value} suffix={k.suffix} />
             </div>
-            <div className="text-[10px] font-semibold text-white/30 uppercase tracking-wide mt-1">{k.label}</div>
+            <div className="text-[10px] font-semibold text-white/30 uppercase tracking-wide mt-1 leading-tight">{k.label}</div>
           </motion.div>
         ))}
       </div>
 
-      {/* Charts 2×2 */}
+      {/* Time-series charts */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <LineCard
-          id="msgs" title="Messages / day" color="#a78bfa" Icon={MessageCircle}
-          value={analyticsSummary?.totalMessages ?? 0} suffix=" total"
-          trend={msgsTrend.trend} trendLabel={msgsTrend.label}
-          data={msgsPerDay}
-          labels={dayLabels.length ? dayLabels : msgsPerDay.map((_, i) => `D${i+1}`)}
+          id="msgs-day" title="Messages / day" color="#a78bfa" Icon={MessageCircle}
+          value={live.totalMessages} suffix=" total"
+          trend={msgTrend.trend} trendLabel={msgTrend.label}
+          data={msgData} labels={msgLabels}
         />
         <BarCard
-          id="conv" title="Conversion rate" color="#34d399" Icon={TrendingUp}
-          value={analyticsSummary?.conversionRate ?? 0} suffix="%"
-          trend={convTrend.trend} trendLabel={convTrend.label}
-          data={convRateWks} labels={WK_LABELS.slice(0, convRateWks.length)}
-        />
-        <LineCard
-          id="speed" title="Avg AI response" color="#60a5fa" Icon={Zap}
-          value={avgRespSec} suffix="s"
-          trend={speedTrend.trend} trendLabel={speedTrend.label}
-          data={respSpeed} labels={respSpeed.map((_, i) => `D${i+1}`)}
-        />
-        <BarCard
-          id="demos" title="Demos booked" color="#fbbf24" Icon={Calendar}
-          value={analyticsSummary?.demosBooked ?? 0} suffix=" total"
-          trend={demoTrend.trend} trendLabel={demoTrend.label}
-          data={demosBooked} labels={WK_LABELS.slice(0, demosBooked.length)}
+          id="leads-day" title="Leads / day" color="#34d399" Icon={Users}
+          value={live.totalLeads} suffix=" total"
+          trend={leadTrend.trend} trendLabel={leadTrend.label}
+          data={leadData} labels={leadLabels}
         />
       </div>
+
+      {/* Message volume split + conversion */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <MessageSplitCard aiMessages={live.aiMessages} userMessages={live.userMessages} />
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: '-40px' }} transition={{ duration: 0.5 }}
+          className="rounded-2xl p-5 flex flex-col gap-4"
+          style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}
+          whileHover={{ borderColor:'rgba(251,191,36,0.3)', boxShadow:'0 0 32px rgba(251,191,36,0.08)' }}
+        >
+          <div className="flex items-center justify-between">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-white/30">Conversion Rate</div>
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center"
+              style={{ background:'rgba(251,191,36,0.12)', border:'1px solid rgba(251,191,36,0.2)' }}>
+              <Zap className="w-3.5 h-3.5" style={{ color:'#fbbf24' }} />
+            </div>
+          </div>
+          <div className="text-3xl font-black text-white">
+            <Counter to={live.conversionRate} suffix="%" />
+          </div>
+          <div className="text-[11px] text-white/30">
+            {live.totalLeads} leads from {live.totalConversations} conversations
+          </div>
+          <div className="h-2 rounded-full overflow-hidden" style={{ background:'rgba(255,255,255,0.06)' }}>
+            <motion.div
+              className="h-full rounded-full"
+              style={{ background:'linear-gradient(90deg,#fbbf24,#f59e0b)' }}
+              initial={{ width: 0 }}
+              whileInView={{ width: `${Math.min(live.conversionRate, 100)}%` }}
+              viewport={{ once: true }}
+              transition={{ duration: 1, ease: 'easeOut', delay: 0.2 }}
+            />
+          </div>
+        </motion.div>
+      </div>
+
+      {/* Breakdown cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <BreakdownCard
+          title="Lead source breakdown"
+          items={live.sourceBreakdown}
+          color="#60a5fa"
+          Icon={MessageCircle}
+        />
+        <BreakdownCard
+          title="Intent breakdown"
+          items={live.intentBreakdown}
+          color="#f472b6"
+          Icon={Target}
+        />
+      </div>
+
     </div>
   )
 }

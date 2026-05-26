@@ -886,16 +886,6 @@ export default function AutomationCenter({ can }: { can: Permissions }) {
   return (
     <div className="flex flex-col gap-6">
 
-      {/* Error banner */}
-      {fetchError && (
-        <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
-          className="flex items-start gap-3 px-4 py-3.5 rounded-xl text-sm"
-          style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)', color: '#fbbf24' }}>
-          <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-          <span>{fetchError}</span>
-        </motion.div>
-      )}
-
       {/* Summary row — 3 equal columns on all widths */}
       <div className="grid grid-cols-3 gap-2 sm:gap-4">
         {[

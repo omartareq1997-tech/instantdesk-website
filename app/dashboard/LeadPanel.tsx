@@ -8,6 +8,7 @@ import {
   CheckCircle, XCircle, Users, Zap, Send, AlertTriangle,
   TrendingUp, DollarSign, Target, Plus, Save, ChevronDown,
   MessageSquare, Flame, Snowflake, ThumbsUp, Trash2, Pencil,
+  MapPin, Building2, Activity,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import type { TeamMember } from './types'
@@ -51,6 +52,10 @@ interface AISummary {
   urgency:            'high' | 'medium' | 'low'
   urgencyReason:      string
   budget:             string | null
+  location:           string | null
+  propertyType:       string | null
+  preferredViewing:   string | null
+  missingInfo:        string[]
   sentiment:          'positive' | 'neutral' | 'negative'
   action:             string
   signals:            string[]
@@ -546,9 +551,20 @@ function generateAISummary(lead: Lead, apptDate?: string, liveText?: string): AI
     action = `Call ${firstName} within 2 hours.${qualify} Send 2–3 matching listings immediately.`
   }
 
+  // ── Missing info (globally, for all lead states) ─────────────
+  const missingInfo: string[] = []
+  if (!budget)                        missingInfo.push('budget')
+  if (!metaCity)                      missingInfo.push('preferred area')
+  if (!rooms && !propType)            missingInfo.push('size requirements')
+  if (!lead.phone && !lead.email)     missingInfo.push('contact details')
+
   return {
     intent, urgency, urgencyReason, budget, sentiment,
     action, signals, firstClientMessage, appointmentNote,
+    location:         metaCity,
+    propertyType:     propType,
+    preferredViewing: metaPref,
+    missingInfo,
   }
 }
 
@@ -680,6 +696,159 @@ function ApptCard({
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+/* ─── Lead Intelligence Grid ─────────────────────────────────── */
+
+function LeadIntelligenceGrid({ ai, lead }: { ai: AISummary; lead: Lead }) {
+  const urgencyColor = ai.urgency === 'high' ? '#f87171' : ai.urgency === 'medium' ? '#fbbf24' : '#60a5fa'
+
+  const rows: { icon: React.ElementType; label: string; value: string; color?: string }[] = [
+    ai.budget         ? { icon: DollarSign, label: 'Budget',    value: ai.budget,          color: '#34d399' } : null,
+    ai.location       ? { icon: MapPin,     label: 'Location',  value: ai.location                          } : null,
+    ai.propertyType   ? { icon: Building2,  label: 'Property',  value: ai.propertyType                      } : null,
+    ai.preferredViewing ? { icon: Clock,    label: 'Viewing',   value: ai.preferredViewing                  } : null,
+    { icon: Zap, label: 'Urgency', value: `${ai.urgency} — ${ai.urgencyReason}`, color: urgencyColor },
+    isSpecificInterest(lead.interest)
+      ? { icon: Target, label: 'Interest', value: lead.interest }
+      : null,
+  ].filter((r): r is NonNullable<typeof r> => r !== null)
+
+  if (rows.length === 0 && ai.missingInfo.length === 0) return null
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-1.5">
+        <Activity className="w-3.5 h-3.5 text-white/25" />
+        <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">Lead Intelligence</span>
+      </div>
+      <div className="rounded-2xl overflow-hidden" style={{ border:'1px solid rgba(255,255,255,0.07)' }}>
+        {rows.map((row, i) => (
+          <div key={row.label} className="flex items-start gap-3 px-4 py-2.5"
+            style={{ background: i%2===0 ? 'rgba(255,255,255,0.02)' : 'transparent', borderBottom: i < rows.length - 1 || ai.missingInfo.length > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+            <row.icon className="w-3 h-3 mt-0.5 flex-shrink-0" style={{ color: row.color ?? 'rgba(255,255,255,0.2)' }} />
+            <span className="text-[10px] font-bold uppercase tracking-widest text-white/25 w-14 flex-shrink-0">{row.label}</span>
+            <span className="text-[11px] font-medium ml-auto text-right break-words leading-relaxed" style={{ color: row.color ?? 'rgba(255,255,255,0.65)' }}>{row.value}</span>
+          </div>
+        ))}
+        {ai.missingInfo.length > 0 && (
+          <div className="flex items-start gap-3 px-4 py-2.5"
+            style={{ background: rows.length%2===0 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
+            <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0 text-amber-400/50" />
+            <span className="text-[10px] font-bold uppercase tracking-widest text-white/25 w-14 flex-shrink-0">Missing</span>
+            <span className="text-[11px] font-medium text-amber-400/55 ml-auto text-right">{ai.missingInfo.join(', ')}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* ─── Timeline helpers ────────────────────────────────────────── */
+
+interface TimelineEvent {
+  id:    string
+  label: string
+  sub?:  string
+  time:  string
+  color: string
+  Icon:  React.ElementType
+}
+
+function buildTimelineEvents(
+  lead: Lead,
+  messages: ChatMessage[],
+  appts: ApptSummary[],
+): TimelineEvent[] {
+  const events: TimelineEvent[] = []
+
+  events.push({
+    id:    'lead-created',
+    label: 'Lead created',
+    sub:   lead.source && !/^unknown$/i.test(lead.source) ? `via ${lead.source}` : undefined,
+    time:  lead.date,
+    color: '#a78bfa',
+    Icon:  Users,
+  })
+
+  if (messages.length > 0) {
+    events.push({
+      id:    'conv-started',
+      label: 'Conversation started',
+      time:  messages[0].created_at || lead.date,
+      color: '#60a5fa',
+      Icon:  MessageCircle,
+    })
+  }
+
+  messages.forEach(msg => {
+    if (msg.from === 'user') {
+      events.push({
+        id:    `u-${msg.id}`,
+        label: 'User message',
+        sub:   msg.content.length > 80 ? msg.content.slice(0, 78) + '…' : msg.content,
+        time:  msg.created_at,
+        color: 'rgba(255,255,255,0.35)',
+        Icon:  MessageSquare,
+      })
+    } else {
+      events.push({
+        id:    `ai-${msg.id}`,
+        label: 'AI replied',
+        sub:   msg.content.length > 80 ? msg.content.slice(0, 78) + '…' : msg.content,
+        time:  msg.created_at,
+        color: '#818cf8',
+        Icon:  Bot,
+      })
+    }
+  })
+
+  appts.forEach(a => {
+    events.push({
+      id:    `appt-${a.id}`,
+      label: a.type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+      sub:   `${fmtApptFull(a.date)} at ${a.time}`,
+      time:  `${a.date}T${a.time}`,
+      color: '#fbbf24',
+      Icon:  Calendar,
+    })
+  })
+
+  try {
+    events.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
+  } catch { /* leave unsorted if dates are malformed */ }
+
+  return events
+}
+
+function TimelineView({ events }: { events: TimelineEvent[] }) {
+  if (events.length === 0) return null
+  return (
+    <div className="flex flex-col">
+      {events.map((ev, i) => (
+        <div key={ev.id} className="flex gap-3">
+          <div className="flex flex-col items-center flex-shrink-0" style={{ width:24 }}>
+            <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0"
+              style={{ background:`${ev.color}18`, border:`1.5px solid ${ev.color}40` }}>
+              <ev.Icon className="w-3 h-3" style={{ color:ev.color }} />
+            </div>
+            {i < events.length - 1 && (
+              <div className="w-px flex-1 mt-1 mb-1" style={{ background:'rgba(255,255,255,0.06)', minHeight:14 }} />
+            )}
+          </div>
+          <div className="flex-1 pb-2.5" style={{ minWidth:0 }}>
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-[11px] font-semibold" style={{ color:'rgba(255,255,255,0.70)' }}>{ev.label}</span>
+              {ev.time && <span className="text-[9px] text-white/25 flex-shrink-0">{fmtTime(ev.time)}</span>}
+            </div>
+            {ev.sub && (
+              <p className="text-[10px] mt-0.5 leading-relaxed" style={{ color:'rgba(255,255,255,0.32)' }}>{ev.sub}</p>
+            )}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -1286,6 +1455,9 @@ export default function LeadPanel({
                 </div>
               </div>
 
+              {/* Lead intelligence grid */}
+              <LeadIntelligenceGrid ai={ai} lead={lead} />
+
               {/* Contact info — buttons only */}
               {(lead.phone || lead.email) && (
                 <div className="flex flex-col gap-2">
@@ -1452,6 +1624,12 @@ export default function LeadPanel({
                   <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">
                     Conversation
                   </span>
+                  {displayMessages.length > 0 && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+                      style={{ background:'rgba(139,92,246,0.14)', color:'rgba(167,139,250,0.7)' }}>
+                      {displayMessages.length} msg{displayMessages.length !== 1 ? 's' : ''}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   {channelLabel && (
@@ -1498,9 +1676,12 @@ export default function LeadPanel({
                 <div className="flex items-center gap-1.5">
                   <FileText className="w-3.5 h-3.5 text-white/25" />
                   <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">Internal Notes</span>
-                  {notesDirty && (
-                    <span className="ml-auto text-[10px] text-amber-400/60">unsaved changes</span>
-                  )}
+                  {notesDirty
+                    ? <span className="ml-auto text-[10px] text-amber-400/60">unsaved changes</span>
+                    : <span className="ml-auto text-[9px] text-white/20 flex items-center gap-1">
+                        <CheckCircle className="w-2.5 h-2.5" /> Saved to Supabase
+                      </span>
+                  }
                 </div>
                 <textarea
                   value={notesText}
@@ -1576,6 +1757,24 @@ export default function LeadPanel({
           {/* ═══ TIMELINE TAB ═══ */}
           {activeTab === 'timeline' && (
             <div className="flex flex-col gap-5">
+
+              {/* Event timeline from messages */}
+              {(() => {
+                const events = buildTimelineEvents(lead, displayMessages, leadAppts)
+                return events.length > 0 ? (
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center gap-1.5">
+                      <Activity className="w-3.5 h-3.5 text-white/25" />
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">Event Timeline</span>
+                    </div>
+                    <div className="rounded-2xl p-4"
+                      style={{ background:'rgba(255,255,255,0.015)', border:'1px solid rgba(255,255,255,0.07)' }}>
+                      <TimelineView events={events} />
+                    </div>
+                  </div>
+                ) : null
+              })()}
+
               {/* Appointments */}
               <div className="flex flex-col gap-3">
                 <div className="flex items-center justify-between">

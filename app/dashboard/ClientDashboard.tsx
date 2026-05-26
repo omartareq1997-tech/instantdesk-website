@@ -10,7 +10,7 @@ import {
   DollarSign, Timer, Menu, ChevronLeft, ChevronRight, ChevronDown, LineChart, BellDot,
   MessageSquare, SlidersHorizontal, Volume2, VolumeX, ArrowUpDown, Plus,
   History, ScrollText, Undo2, Pencil, Trash2, CalendarPlus, MoveRight,
-  UserPlus, Copy, Check, UserCog, Crown, Eye,
+  UserPlus, Copy, Check, UserCog, Crown, Eye, Bot,
 } from 'lucide-react'
 import LeadPanel from './LeadPanel'
 import AddLeadModal from './AddLeadModal'
@@ -28,7 +28,7 @@ type Section      = 'overview' | 'analytics' | 'pipeline' | 'activity' | 'appoin
 type LeadStatus   = 'new' | 'contacted' | 'demo_booked' | 'won' | 'lost'
 type ScoreLabel   = 'hot' | 'warm' | 'cold'
 type ApptStatus   = 'confirmed' | 'pending' | 'completed' | 'cancelled'
-type ActivityType = 'sms' | 'appointment' | 'assignment' | 'email' | 'call'
+type ActivityType = 'sms' | 'appointment' | 'assignment' | 'email' | 'call' | 'chat'
 type NotifType    = 'lead' | 'booking' | 'ai' | 'alert'
 
 interface AutoState {
@@ -100,6 +100,7 @@ const ACTIVITY_CFG: Record<string, ActivityCfg> = {
   assignment:           { color:'#a78bfa', bg:'rgba(167,139,250,0.12)', Icon:Users         },
   email:                { color:'#fbbf24', bg:'rgba(251,191,36,0.12)',  Icon:Mail          },
   call:                 { color:'#fb923c', bg:'rgba(251,146,60,0.12)',  Icon:Phone         },
+  chat:                 { color:'#818cf8', bg:'rgba(129,140,248,0.12)', Icon:Bot           },
   team_member_invited:  { color:'#34d399', bg:'rgba(52,211,153,0.12)',  Icon:UserPlus      },
   team_member_deleted:  { color:'#f87171', bg:'rgba(248,113,113,0.12)', Icon:Trash2        },
   lead_assigned:        { color:'#a78bfa', bg:'rgba(167,139,250,0.12)', Icon:UserCog       },
@@ -1343,15 +1344,31 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
 
 /* ─── Supabase row shapes (snake_case from realtime payloads) ── */
 
+// Flexible — matches both the AI chat schema (business_id column) and
+// the older ingest schema (client_id column). All optional fields safe-default in mapLeadRow.
 interface RawLeadRow {
-  id: string; client_id: string; name: string; company: string | null
-  email: string | null; phone: string | null; source: string | null
-  interest: string | null; assigned_agent: string | null
-  score: number | null; score_label: string | null; status: string | null
-  ai_sms: string | null; email_seq: string | null; nurture: string | null
-  smart_assign: string | null; auto_call: string | null
-  metadata: Record<string, unknown> | null
-  created_at: string; updated_at: string
+  id: string
+  business_id?:    string | null
+  client_id?:      string | null
+  name: string
+  company?:        string | null
+  email?:          string | null
+  phone?:          string | null
+  source?:         string | null
+  interest?:       string | null
+  conversation_id?: string | null
+  assigned_agent?: string | null
+  score?:          number | null
+  score_label?:    string | null
+  status?:         string | null
+  ai_sms?:         string | null
+  email_seq?:      string | null
+  nurture?:        string | null
+  smart_assign?:   string | null
+  auto_call?:      string | null
+  metadata?:       Record<string, unknown> | null
+  created_at: string
+  updated_at?: string
 }
 interface RawActivityRow {
   id: string; client_id: string; lead_id: string | null
@@ -1370,17 +1387,17 @@ function mapLeadRow(r: RawLeadRow): Lead {
   return {
     id:            r.id,
     name:          r.name,
-    company:       r.company       ?? '',
-    email:         r.email         ?? undefined,
-    phone:         r.phone         ?? undefined,
-    source:        r.source        ?? 'general',
-    interest:      r.interest      ?? '',
+    company:       r.company        ?? '',
+    email:         r.email          ?? undefined,
+    phone:         r.phone          ?? undefined,
+    source:        r.source         ?? 'website_chat',
+    interest:      r.interest       ?? '',
     assignedAgent: r.assigned_agent ?? 'Unassigned',
-    score:         r.score         ?? 0,
-    scoreLabel:   (r.score_label   as ScoreLabel) ?? 'cold',
-    status:       (r.status        as LeadStatus) ?? 'new',
+    score:         r.score          ?? 0,
+    scoreLabel:   (r.score_label    as ScoreLabel) ?? 'cold',
+    status:       (r.status         as LeadStatus) ?? 'new',
     date:          r.created_at,
-    metadata:      r.metadata      ?? undefined,
+    metadata:      r.metadata       ?? undefined,
     auto: {
       aiSms:       (r.ai_sms       as AutoState['aiSms'])       ?? 'off',
       emailSeq:    (r.email_seq    as AutoState['emailSeq'])    ?? 'not_started',
@@ -3281,6 +3298,7 @@ export default function ClientDashboard({
   const integrations     = initialData?.integrations                                   ?? []
   const analyticsSummary = initialData?.analyticsSummary
   const overviewMetrics  = initialData?.overviewMetrics
+  const liveAnalytics    = initialData?.liveAnalytics
 
   // ── Team members ──────────────────────────────────────────────
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
@@ -3430,15 +3448,16 @@ export default function ClientDashboard({
 
   // ── Supabase Realtime subscriptions ──────────────────────────
   useEffect(() => {
-    // Demo client ID — replace with auth-resolved client_id when client auth lands
-    const CLIENT_ID = process.env.NEXT_PUBLIC_DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
+    // Business ID for the AI chat widget — leads use business_id column.
+    // Other tables (conversations, messages, appointments) use client_id with the same value.
+    const CLIENT_ID = '0616a47a-2c01-49ce-a798-385f8276b92b'
 
     const channel = supabase
       .channel('dashboard-live')
 
       // ── leads: INSERT → prepend + toast + sound + browser notif
       .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'leads', filter: `client_id=eq.${CLIENT_ID}` },
+        { event: 'INSERT', schema: 'public', table: 'leads', filter: `business_id=eq.${CLIENT_ID}` },
         (payload) => {
           const lead = mapLeadRow(payload.new as RawLeadRow)
           // Guard against duplicate if optimistic update already added this lead
@@ -3500,7 +3519,7 @@ export default function ClientDashboard({
 
       // ── leads: UPDATE → patch in-place (score, status, metadata, etc.)
       .on('postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'leads', filter: `client_id=eq.${CLIENT_ID}` },
+        { event: 'UPDATE', schema: 'public', table: 'leads', filter: `business_id=eq.${CLIENT_ID}` },
         (payload) => {
           const updated = mapLeadRow(payload.new as RawLeadRow)
           setLeads(prev => prev.map(l => l.id === updated.id ? updated : l))
@@ -3566,7 +3585,7 @@ export default function ClientDashboard({
       // ── DELETE events (fires only when REPLICA IDENTITY FULL is set;
       //    falls back to callback-based state updates from LeadPanel otherwise)
       .on('postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'leads', filter: `client_id=eq.${CLIENT_ID}` },
+        { event: 'DELETE', schema: 'public', table: 'leads', filter: `business_id=eq.${CLIENT_ID}` },
         (payload) => {
           const id = (payload.old as { id?: string })?.id
           if (id) {
@@ -3580,6 +3599,42 @@ export default function ClientDashboard({
         (payload) => {
           const id = (payload.old as { id?: string })?.id
           if (id) setAppointments(prev => prev.filter(a => a.id !== id))
+        }
+      )
+
+      // ── messages: INSERT (ai role) → live activity feed entry
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages', filter: `client_id=eq.${CLIENT_ID}` },
+        (payload) => {
+          const row = payload.new as { id?: string; from_role?: string; content?: string; created_at?: string }
+          if (row.from_role !== 'ai') return
+          const content = row.content ?? ''
+          const item: ActivityItem = {
+            id:   `msg-${row.id ?? crypto.randomUUID()}`,
+            type: 'chat',
+            text: 'AI replied',
+            sub:  content.length > 80 ? content.slice(0, 77) + '…' : content,
+            time: 'Just now',
+            live: true,
+          }
+          setActivityFeed(prev => [item, ...prev.map(i => ({ ...i, live: false })).slice(0, 29)])
+        }
+      )
+
+      // ── conversations: INSERT → live activity entry
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'conversations', filter: `client_id=eq.${CLIENT_ID}` },
+        (payload) => {
+          const row = payload.new as { id?: string; channel?: string; created_at?: string }
+          const item: ActivityItem = {
+            id:   `conv-${row.id ?? crypto.randomUUID()}`,
+            type: 'chat',
+            text: 'Conversation started',
+            sub:  `${row.channel ?? 'website'} · AI Agent`,
+            time: 'Just now',
+            live: true,
+          }
+          setActivityFeed(prev => [item, ...prev.map(i => ({ ...i, live: false })).slice(0, 29)])
         }
       )
 
@@ -3686,7 +3741,7 @@ export default function ClientDashboard({
                 initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-8 }}
                 transition={{ duration:0.22 }}>
                 {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={visibleLeads} appointments={appointments} activity={activityFeed} overviewMetrics={overviewMetrics} />}
-                {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} />}
+                {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} liveAnalytics={liveAnalytics} />}
                 {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={visibleLeads} newLeadIds={newLeadIds} onAddLead={can.canAddLead ? () => setShowAddLead(true) : undefined} teamMembers={teamMembers} />}
                 {section==='activity'     && <ActivitySection feed={activityFeed} />}
                 {section==='appointments' && <AppointmentsSection appointments={appointments} leads={visibleLeads} onSelectLead={handleSelectLead} onApptUpdated={handleApptUpdated} onAddAppointment={can.canAddAppt ? () => openAddAppt() : undefined} actorName={currentUser.name} />}

@@ -8,43 +8,22 @@ import {
   WhatsAppIcon, InstagramIcon, MessengerIcon, TelegramIcon, GlobeIcon,
 } from './ChannelIcons'
 
+/* ─── Config ─────────────────────────────────────────────── */
+
+const BUSINESS_ID = '0616a47a-2c01-49ce-a798-385f8276b92b'
+
+const GREETING: Msg = {
+  id: 'g1',
+  role: 'ai',
+  text: "Hi there! 👋 I'm your AI assistant. How can I help you today?",
+}
+
 /* ─── Types ─────────────────────────────────────────────── */
 
 type Role = 'ai' | 'user'
 type Msg  = { id: string; role: Role; text: string }
 
-/* ─── Static data ────────────────────────────────────────── */
-
-const GREETING: Msg = {
-  id: 'g1',
-  role: 'ai',
-  text: "Hi there! 👋 I'm your 24/7 AI assistant — live on WhatsApp, Instagram, Messenger, Telegram, and your website. How can I help?",
-}
-
-const FOLLOW_UP: Msg = {
-  id: 'g2',
-  role: 'ai',
-  text: 'I can book appointments, capture leads, answer FAQs, and sync everything to your CRM — instantly. What would you like to know? 🚀',
-}
-
-const QUICK_REPLIES = [
-  {
-    label: 'Get a Demo',
-    reply: "I'd love to show you! We set up a personalised demo in 24h. What industry is your business in? 🎯",
-  },
-  {
-    label: 'Pricing',
-    reply: 'Plans start at €497/month — most clients see full ROI within 30 days. Want me to break down what\'s included? 💼',
-  },
-  {
-    label: 'How it works',
-    reply: 'We build your AI in 72h, connect all 5 channels, and go live — no tech team needed. Want to see a live walkthrough? ⚡',
-  },
-  {
-    label: 'Talk to Sales',
-    reply: "I'll get our team on this right away! What's the best way to reach you — email or WhatsApp? 📞",
-  },
-]
+/* ─── Static UI data ─────────────────────────────────────── */
 
 const CHANNELS = [
   { Icon: GlobeIcon,     color: '#60a5fa', bg: 'rgba(96,165,250,0.14)',  label: 'Website'   },
@@ -119,17 +98,15 @@ export default function ChatWidget() {
   const [isOpen,    setIsOpen]    = useState(false)
   const [messages,  setMessages]  = useState<Msg[]>([GREETING])
   const [isTyping,  setIsTyping]  = useState(false)
-  const [replies,   setReplies]   = useState<typeof QUICK_REPLIES>([])
   const [input,     setInput]     = useState('')
   const [hasOpened, setHasOpened] = useState(false)
   const [showLabel, setShowLabel] = useState(false)
 
-  const endRef    = useRef<HTMLDivElement>(null)
-  const inputRef  = useRef<HTMLInputElement>(null)
-  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([])
-  const msgIdRef  = useRef(0)
+  const endRef          = useRef<HTMLDivElement>(null)
+  const inputRef        = useRef<HTMLInputElement>(null)
+  const msgIdRef        = useRef(0)
+  const conversationRef = useRef<string | null>(null)  // persists between sends
 
-  /* Stable ID generator — avoids impure Date.now() in render context */
   const nextId = () => String(++msgIdRef.current)
 
   /* Hide on admin pages */
@@ -151,65 +128,72 @@ export default function ChatWidget() {
     return () => clearTimeout(t)
   }, [])
 
-  /* Timer-based conversation flow — fires after isOpen becomes true */
-  useEffect(() => {
-    timersRef.current.forEach(clearTimeout)
-    timersRef.current = []
-
-    if (!isOpen) return
-
-    const t1 = setTimeout(() => setIsTyping(true), 900)
-    const t2 = setTimeout(() => {
-      setIsTyping(false)
-      setMessages(prev => [...prev, FOLLOW_UP])
-      setReplies(QUICK_REPLIES)
-    }, 2400)
-
-    timersRef.current = [t1, t2]
-    return () => timersRef.current.forEach(clearTimeout)
-  }, [isOpen])
-
-  /* Cleanup timers on unmount */
-  useEffect(() => () => timersRef.current.forEach(clearTimeout), [])
-
-  /* Reset conversation state then open — keeps effect side-effect-free */
   const open = useCallback(() => {
-    timersRef.current.forEach(clearTimeout)
-    timersRef.current = []
     setMessages([GREETING])
-    setReplies([])
     setIsTyping(false)
     setInput('')
     setIsOpen(true)
     setHasOpened(true)
     setShowLabel(false)
+    // Do NOT reset conversationRef — preserve thread across open/close cycles
   }, [])
 
   const close = useCallback(() => setIsOpen(false), [])
 
-  const sendMessage = useCallback((text: string) => {
-    if (!text.trim() || isTyping) return
+  /* ─── Real API send ──────────────────────────────────────── */
 
-    const userMsg: Msg = { id: nextId(), role: 'user', text: text.trim() }
-    const aiText = QUICK_REPLIES.find(r => r.label === text)?.reply
-      ?? "Thanks! A member of our team will follow up with you shortly. In the meantime, feel free to explore our demo. 😊"
+  const sendMessage = useCallback(async (text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed || isTyping) return
 
+    const userMsg: Msg = { id: nextId(), role: 'user', text: trimmed }
     setMessages(prev => [...prev, userMsg])
-    setReplies([])
+    setInput('')
     setIsTyping(true)
 
-    const aiId = nextId()
-    const t = setTimeout(() => {
+    try {
+      const res = await fetch('/api/chat', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          business_id:     BUSINESS_ID,
+          conversation_id: conversationRef.current ?? undefined,
+          message:         trimmed,
+        }),
+      })
+
+      const data = await res.json() as {
+        reply?:           string
+        conversation_id?: string
+        error?:           string
+      }
+
+      // Persist the conversation_id for subsequent messages
+      if (data.conversation_id) conversationRef.current = data.conversation_id
+
+      const replyText = data.reply ?? data.error ?? 'Sorry, something went wrong. Please try again.'
+      setMessages(prev => [...prev, { id: nextId(), role: 'ai', text: replyText }])
+    } catch {
+      setMessages(prev => [...prev, {
+        id:   nextId(),
+        role: 'ai',
+        text: 'Connection error. Please check your internet and try again.',
+      }])
+    } finally {
       setIsTyping(false)
-      setMessages(prev => [...prev, { id: aiId, role: 'ai', text: aiText }])
-    }, 1500)
-    timersRef.current.push(t)
+    }
   }, [isTyping])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    sendMessage(input)
-    setInput('')
+    void sendMessage(input)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      void sendMessage(input)
+    }
   }
 
   return (
@@ -246,7 +230,7 @@ export default function ChatWidget() {
                 borderBottom: '1px solid rgba(255,255,255,0.055)',
               }}
             >
-              {/* Subtle animated shimmer line at top */}
+              {/* Shimmer line */}
               <motion.div
                 className="absolute top-0 left-0 right-0 h-[1px]"
                 style={{
@@ -258,7 +242,6 @@ export default function ChatWidget() {
 
               {/* Top row: avatar + info + close */}
               <div className="flex items-center gap-3 mb-4">
-                {/* AI avatar */}
                 <div className="relative flex-shrink-0">
                   <div
                     className="w-11 h-11 rounded-2xl flex items-center justify-center"
@@ -269,14 +252,12 @@ export default function ChatWidget() {
                   >
                     <Bot className="w-5.5 h-5.5 text-white" style={{ width: '22px', height: '22px' }} />
                   </div>
-                  {/* Online dot */}
                   <span
                     className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2"
                     style={{ background: '#22c55e', borderColor: '#06061400' }}
                   />
                 </div>
 
-                {/* Name + status */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-bold text-white">InstantDesk AI</span>
@@ -301,7 +282,6 @@ export default function ChatWidget() {
                   </div>
                 </div>
 
-                {/* Minimise + Close */}
                 <div className="flex items-center gap-1">
                   <button
                     onClick={close}
@@ -384,43 +364,6 @@ export default function ChatWidget() {
               <div ref={endRef} />
             </div>
 
-            {/* ── Quick replies ── */}
-            <AnimatePresence>
-              {replies.length > 0 && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.25 }}
-                  className="flex-shrink-0 px-4 pb-3 flex flex-wrap gap-2"
-                  style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}
-                >
-                  <div className="w-full pt-3 text-[9px] uppercase tracking-widest text-white/20 font-semibold mb-1">
-                    Quick replies
-                  </div>
-                  {replies.map((r, i) => (
-                    <motion.button
-                      key={r.label}
-                      initial={{ opacity: 0, scale: 0.85 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      transition={{ delay: i * 0.06, duration: 0.2 }}
-                      whileHover={{ scale: 1.04, y: -1 }}
-                      whileTap={{ scale: 0.97 }}
-                      onClick={() => sendMessage(r.label)}
-                      className="text-[11px] font-semibold px-3.5 py-1.5 rounded-full transition-colors"
-                      style={{
-                        background: 'rgba(139,92,246,0.1)',
-                        border: '1px solid rgba(139,92,246,0.25)',
-                        color: '#c4b5fd',
-                      }}
-                    >
-                      {r.label}
-                    </motion.button>
-                  ))}
-                </motion.div>
-              )}
-            </AnimatePresence>
-
             {/* ── Input ── */}
             <div
               className="flex-shrink-0 px-4 pb-4 pt-3"
@@ -432,6 +375,7 @@ export default function ChatWidget() {
                   type="text"
                   value={input}
                   onChange={e => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
                   placeholder="Type a message…"
                   disabled={isTyping}
                   className="flex-1 bg-transparent text-sm text-white/80 placeholder-white/20 outline-none py-2.5 px-4 rounded-xl transition-all"
@@ -455,7 +399,6 @@ export default function ChatWidget() {
                 </motion.button>
               </form>
 
-              {/* Footer */}
               <div className="flex items-center justify-center gap-1.5 mt-3">
                 <Sparkles className="w-3 h-3 text-violet-500/50" />
                 <span className="text-[10px] text-white/20 font-medium">
@@ -499,16 +442,8 @@ export default function ChatWidget() {
               key={i}
               className="absolute inset-0 rounded-full"
               style={{ background: 'rgba(124,58,237,0.35)' }}
-              animate={{
-                scale: [1, 1.65 + i * 0.25],
-                opacity: [0.45, 0],
-              }}
-              transition={{
-                duration: 2.2,
-                repeat: Infinity,
-                delay: i * 0.75,
-                ease: 'easeOut',
-              }}
+              animate={{ scale: [1, 1.65 + i * 0.25], opacity: [0.45, 0] }}
+              transition={{ duration: 2.2, repeat: Infinity, delay: i * 0.75, ease: 'easeOut' }}
             />
           ))}
 

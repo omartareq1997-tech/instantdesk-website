@@ -407,7 +407,13 @@ export async function getClientAppointments(clientId = DEMO_CLIENT_ID): Promise<
       return []
     }
     const rows = data ?? []
-    console.log('[getClientAppointments] rows returned:', rows.length, '| business_id:', clientId)
+    console.log('APPOINTMENTS RETURNED', rows.map(r => ({
+      id:           r.id,
+      lead_name:    r.lead_name,
+      scheduled_at: r.scheduled_at,
+      business_id:  r.business_id,
+      client_id:    r.client_id,
+    })))
     return rows.flatMap(r => {
       try {
         return [mapAppointment(r as AppointmentRow)]

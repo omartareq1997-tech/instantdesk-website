@@ -583,18 +583,67 @@ export async function POST(req: NextRequest) {
   const sb = createAdminClient()
 
   /* 4. Load active agent ──────────────────────────────────────────────────── */
-  const { data: agentRow, error: agentErr } = await sb
+  // Try session businessId first; if not found, fall back to the widget's body business_id.
+  // This handles the case where an authenticated owner tests the widget from their browser
+  // (session overrides businessId) but the agent row is keyed on the widget's configured ID.
+  console.log('[POST /api/chat] agent lookup — session businessId:', businessId, '| body business_id:', business_id)
+
+  let agentRow: AgentRow | null = null
+  let agentLookupId = businessId
+
+  // Primary lookup: session-resolved businessId
+  const { data: agentPrimary, error: agentErr } = await sb
     .from('agents').select('*')
     .eq('business_id', businessId).eq('active', true)
     .limit(1).maybeSingle()
 
   if (agentErr) {
-    console.error('[POST /api/chat] agent error:', JSON.stringify(agentErr))
+    console.error('[POST /api/chat] agent primary lookup error:', JSON.stringify(agentErr))
     return NextResponse.json({ error: 'Failed to load agent', details: agentErr }, { status: 500 })
   }
-  if (!agentRow) {
-    return NextResponse.json({ error: 'No active agent found', details: { business_id } }, { status: 404 })
+
+  if (agentPrimary) {
+    agentRow = agentPrimary as AgentRow
+    console.log('[POST /api/chat] agent found via session businessId:', businessId, '| agent id:', agentRow.id)
+  } else if (business_id && business_id !== businessId) {
+    // Fallback: try the body's business_id (widget embed ID may differ from session ID)
+    console.log('[POST /api/chat] no agent for session businessId, trying body business_id:', business_id)
+    const { data: agentFallback, error: agentFallbackErr } = await sb
+      .from('agents').select('*')
+      .eq('business_id', business_id).eq('active', true)
+      .limit(1).maybeSingle()
+
+    if (agentFallbackErr) {
+      console.error('[POST /api/chat] agent fallback lookup error:', JSON.stringify(agentFallbackErr))
+    } else if (agentFallback) {
+      agentRow = agentFallback as AgentRow
+      agentLookupId = business_id
+      // Agent config found via widget ID — but all DB writes still use the session-resolved
+      // clientId/businessId so leads and appointments land in the right account.
+      console.log('[POST /api/chat] agent found via body business_id:', business_id, '| agent id:', agentRow.id, '| writes use session:', businessId)
+    }
   }
+
+  if (!agentRow) {
+    // Diagnostic: count ALL agents for both IDs to help debug
+    const { data: allAgents } = await sb
+      .from('agents').select('id, business_id, active, name')
+      .in('business_id', [businessId, business_id ?? businessId].filter(Boolean))
+    console.error('[POST /api/chat] NO ACTIVE AGENT FOUND', {
+      sessionBusinessId: businessId,
+      bodyBusinessId:    business_id,
+      agentsFound:       allAgents ?? [],
+    })
+    return NextResponse.json({
+      error:  'No active agent found',
+      details: {
+        sessionBusinessId: businessId,
+        bodyBusinessId:    business_id,
+        hint: 'Create an active agent in the dashboard AI section, or ensure the widget business_id matches your account.',
+      },
+    }, { status: 404 })
+  }
+  void agentLookupId  // consumed above
   const agent = agentRow as AgentRow
 
   /* 4. Load knowledge ─────────────────────────────────────────────────────── */
@@ -687,6 +736,7 @@ export async function POST(req: NextRequest) {
     if (aMsgR.error) console.error('[POST /api/chat] booking ai-msg insert:', JSON.stringify(aMsgR.error))
 
     console.log('[GUARD] blockedRepeatedQuestion: false (booking short-circuit)')
+    console.log('PERSIST IDS', { resolvedClientId: clientId, resolvedBusinessId: businessId, bodyBusinessId: business_id, fallbackUsed })
     const bResult = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, 'qualified', bookingReply, message)
 
     return NextResponse.json({
@@ -737,6 +787,12 @@ export async function POST(req: NextRequest) {
   if (aiMsgErr) console.error('[POST /api/chat] ai message insert failed:', JSON.stringify(aiMsgErr))
 
   /* 13. Update / create lead ─────────────────────────────────────────────── */
+  console.log('PERSIST IDS', {
+    resolvedClientId:   clientId,
+    resolvedBusinessId: businessId,
+    bodyBusinessId:     business_id,
+    fallbackUsed,
+  })
   const isQualified = !!(confirmed.name && confirmed.phone && confirmed.email)
   const intent      = detectDealType(message) ? 'inquiry' : 'greeting'
   const persist = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, isQualified ? 'contacted' : 'new', finalReply, message)
@@ -781,42 +837,71 @@ export async function POST(req: NextRequest) {
 ═══════════════════════════════════════════════════════════════════════════ */
 
 function parseViewingTime(text: string | null): Date {
-  const d = new Date()
-  const t = (text ?? '').toLowerCase()
+  // Fallback: tomorrow at noon UTC (safe across all server timezones).
+  // Using UTC construction avoids the common "midnight crossover" bug where
+  // setHours(12) on a local-time Date maps to a different UTC day.
+  function tomorrowNoonUTC(): Date {
+    const now = new Date()
+    return new Date(Date.UTC(
+      now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1,
+      12, 0, 0, 0,
+    ))
+  }
 
-  // Extract clock time if present
-  function applyClock(base: Date): void {
+  if (!text) {
+    console.log('[parseViewingTime] no text — defaulting to tomorrow noon UTC')
+    return tomorrowNoonUTC()
+  }
+
+  const t = text.toLowerCase()
+
+  // Extract clock time from the original text and apply it to a UTC base date.
+  function applyClock(utcBase: Date): void {
     const c = (text ?? '').match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i)
     if (c) {
       let h = parseInt(c[1])
       const m = parseInt(c[2] ?? '0')
       if (/pm/i.test(c[3] ?? '') && h < 12) h += 12
-      base.setHours(h, m, 0, 0)
-    } else {
-      base.setHours(12, 0, 0, 0)
+      if (h >= 0 && h <= 23) {
+        utcBase.setUTCHours(h, m, 0, 0)
+        return
+      }
     }
+    utcBase.setUTCHours(12, 0, 0, 0)
   }
 
-  if (/\btoday\b/.test(t)) { applyClock(d); return d }
+  const now = new Date()
+  const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 12, 0, 0, 0))
+
+  if (/\btoday\b/.test(t)) { applyClock(todayUTC); return todayUTC }
 
   if (/\btomorrow\b/.test(t)) {
-    d.setDate(d.getDate() + 1); applyClock(d); return d
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 12, 0, 0, 0))
+    applyClock(d); return d
   }
 
   const DAYS = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday']
   for (let i = 0; i < DAYS.length; i++) {
     if (t.includes(DAYS[i])) {
-      const diff = ((i - d.getDay()) + 7) % 7 || 7
-      d.setDate(d.getDate() + diff); applyClock(d); return d
+      const diff = ((i - now.getUTCDay()) + 7) % 7 || 7
+      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + diff, 12, 0, 0, 0))
+      applyClock(d); return d
     }
   }
 
-  if (/\bmorning\b/.test(t))   { d.setDate(d.getDate()+1); d.setHours(10,0,0,0); return d }
-  if (/\bafternoon\b/.test(t)) { d.setDate(d.getDate()+1); d.setHours(14,0,0,0); return d }
-  if (/\bevening\b/.test(t))   { d.setDate(d.getDate()+1); d.setHours(18,0,0,0); return d }
+  if (/\bmorning\b/.test(t))   {
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 10, 0, 0, 0))
+  }
+  if (/\bafternoon\b/.test(t)) {
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 14, 0, 0, 0))
+  }
+  if (/\bevening\b/.test(t))   {
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 18, 0, 0, 0))
+  }
 
-  // Default: tomorrow noon
-  d.setDate(d.getDate() + 1); d.setHours(12, 0, 0, 0); return d
+  // No recognisable pattern — default to tomorrow noon UTC
+  console.log('[parseViewingTime] unrecognised text, defaulting to tomorrow noon UTC:', text)
+  return tomorrowNoonUTC()
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -844,6 +929,8 @@ async function persistLead(
   appointment_id:           string | null
   appointment_insert_error: string | null
 }> {
+  console.log('PERSIST IDS', { resolvedClientId: clientId, resolvedBusinessId: businessId })
+
   // Build AI summary from confirmed slots
   const namePart   = confirmed.name         ? confirmed.name                      : null
   const actionPart = confirmed.deal_type    ? `looking to ${confirmed.deal_type}` : 'enquiring about'

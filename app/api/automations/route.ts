@@ -1,20 +1,22 @@
 /**
- * GET  /api/automations — list all automation settings for the business,
+ * GET  /api/automations — list all automation settings for the authenticated client,
  *                         with aggregated last_run / success / failure counts.
  *                         Returns defaults for any presets not yet saved.
  * POST /api/automations — upsert a full automation setting row.
  *
- * automation_logs real columns:
- *   id, business_id, conversation_id, lead_id, event_type (NOT NULL),
- *   payload, success (bool), error_message, created_at
+ * automation_settings real columns (see sql/create_automation_tables.sql):
+ *   id, client_id, automation_type, enabled, channel, delay_minutes,
+ *   config, message_template, created_at, updated_at
+ *   UNIQUE(client_id, automation_type)
  *
- * automation_settings: may or may not exist — handled gracefully (42P01).
+ * automation_logs real columns:
+ *   id, client_id, automation_type, lead_id, appointment_id,
+ *   status ('success'|'failure'|'skipped'), message, execution_result, created_at
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../lib/supabase-server'
-
-const BUSINESS_ID = process.env.BUSINESS_ID ?? '0616a47a-2c01-49ce-a798-385f8276b92b'
+import { getSessionBusinessId } from '../../lib/getSessionBusinessId'
 
 export type AutomationType =
   | 'missed_lead_recovery'
@@ -74,13 +76,14 @@ const DEFAULTS: Record<AutomationType, {
 
 export async function GET() {
   try {
+    const { clientId } = await getSessionBusinessId()
     const sb = createAdminClient()
 
-    // Fetch saved settings (table may not exist yet)
+    // Fetch saved settings (table may not exist yet — 42P01 is graceful)
     const { data: rows, error: settingsErr } = await sb
       .from('automation_settings')
       .select('*')
-      .eq('business_id', BUSINESS_ID)
+      .eq('client_id', clientId)
 
     if (settingsErr && settingsErr.code !== '42P01') throw settingsErr
 
@@ -88,36 +91,34 @@ export async function GET() {
       (rows ?? []).map(r => [r.automation_type as string, r as Record<string, unknown>])
     )
 
-    // Fetch aggregated log stats per event_type (real columns: event_type, success)
+    // Fetch log stats per event_type (actual DB columns: business_id, event_type, success bool)
     const { data: logRows, error: logErr } = await sb
       .from('automation_logs')
       .select('event_type, success, created_at')
-      .eq('business_id', BUSINESS_ID)
+      .eq('business_id', clientId)
       .order('created_at', { ascending: false })
       .limit(1000)
 
     if (logErr && logErr.code !== '42P01') throw logErr
 
-    // Aggregate stats per event_type
     type Stats = { last_run: string | null; success_count: number; failure_count: number }
     const statsMap = new Map<string, Stats>()
     for (const log of (logRows ?? [])) {
       const t = log.event_type as string
       const s = statsMap.get(t) ?? { last_run: null, success_count: 0, failure_count: 0 }
       if (!s.last_run) s.last_run = log.created_at as string
-      if (log.success === true)  s.success_count++
+      if (log.success === true) s.success_count++
       if (log.success === false) s.failure_count++
       statsMap.set(t, s)
     }
 
-    // Merge: DB row ?? default + runtime stats
     const settings = ALL_TYPES.map(type => {
       const saved = savedMap.get(type)
       const def   = DEFAULTS[type]
       const stats = statsMap.get(type) ?? { last_run: null, success_count: 0, failure_count: 0 }
       return {
         id:               (saved?.id as string | undefined) ?? null,
-        business_id:      BUSINESS_ID,
+        client_id:        clientId,
         automation_type:  type,
         enabled:          saved ? (saved.enabled as boolean) : def.enabled,
         channel:          (saved?.channel as string | undefined) ?? def.channel,
@@ -141,7 +142,9 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
+    const { clientId } = await getSessionBusinessId()
     const body = await req.json()
+
     const type = body.automation_type as string
     if (!ALL_TYPES.includes(type as AutomationType)) {
       return NextResponse.json({ error: 'Invalid automation_type' }, { status: 400 })
@@ -149,7 +152,7 @@ export async function POST(req: NextRequest) {
 
     const sb = createAdminClient()
     const upsertPayload = {
-      business_id:      BUSINESS_ID,
+      client_id:        clientId,
       automation_type:  type,
       enabled:          typeof body.enabled          === 'boolean' ? body.enabled          : false,
       channel:          typeof body.channel          === 'string'  ? body.channel          : 'whatsapp',
@@ -161,13 +164,13 @@ export async function POST(req: NextRequest) {
 
     const { data, error } = await sb
       .from('automation_settings')
-      .upsert(upsertPayload, { onConflict: 'business_id,automation_type' })
+      .upsert(upsertPayload, { onConflict: 'client_id,automation_type' })
       .select('*')
       .single()
 
     if (error) {
       console.error('[POST /api/automations]', error)
-      if (error.code === '42P01') return NextResponse.json({ error: 'automation_settings table not found.' }, { status: 503 })
+      if (error.code === '42P01') return NextResponse.json({ error: 'automation_settings table not found — run sql/create_automation_tables.sql first.' }, { status: 503 })
       throw error
     }
 

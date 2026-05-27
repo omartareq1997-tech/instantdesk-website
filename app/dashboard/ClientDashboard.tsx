@@ -347,9 +347,12 @@ function NotificationCenter({ notifs, setNotifs }: { notifs:Notification[]; setN
 
 /* ─── Sidebar ────────────────────────────────────────────────── */
 
-function Sidebar({ active, onNav, open, onClose, badges = {} }: {
+function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner', businessName = 'My Business', onLogout }: {
   active: Section | null; onNav:(s:Section)=>void; open:boolean; onClose:()=>void
   badges?: Partial<Record<Section, number>>
+  userName?: string
+  businessName?: string
+  onLogout?: () => void
 }) {
   return (
     <>
@@ -442,17 +445,16 @@ function Sidebar({ active, onNav, open, onClose, badges = {} }: {
         <div className="px-3 pb-5 pt-4" style={{ borderTop:'1px solid rgba(255,255,255,0.06)' }}>
           <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1" style={{ background:'rgba(255,255,255,0.03)' }}>
             <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-black text-white flex-shrink-0"
-              style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.6),rgba(37,99,235,0.5))' }}>AT</div>
+              style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.6),rgba(37,99,235,0.5))' }}>
+              {userName.slice(0, 2).toUpperCase()}
+            </div>
             <div className="min-w-0">
-              <div className="text-xs font-semibold text-white/80 truncate">Alex Thompson</div>
-              <div className="text-[10px] text-white/30 truncate">TechFlow Solutions</div>
+              <div className="text-xs font-semibold text-white/80 truncate">{userName}</div>
+              <div className="text-[10px] text-white/30 truncate">{businessName}</div>
             </div>
           </div>
           <button
-            onClick={async () => {
-              await fetch('/api/logout', { method: 'POST' })
-              window.location.href = '/client-login'
-            }}
+            onClick={onLogout}
             className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs text-white/35 hover:text-red-400 hover:bg-red-500/8 transition-all w-full">
             <LogOut className="w-3.5 h-3.5" />Log out
           </button>
@@ -3311,9 +3313,15 @@ function getInitialSectionFromHash(): Section {
 export default function ClientDashboard({
   initialData,
   initialUser,
+  businessId: businessIdProp,
+  supabaseUser,
+  businessName: businessNameProp,
 }: {
-  initialData?:  DashboardData
-  initialUser?:  { id: string; name: string; role: string } | null
+  initialData?:    DashboardData
+  initialUser?:    { id: string; name: string; role: string } | null
+  businessId?:     string
+  supabaseUser?:   { id: string; name: string; role: string } | null
+  businessName?:   string
 }) {
   // null = hash not yet read (SSR / before first layout effect).
   // useLayoutEffect sets the real value synchronously before the browser paints,
@@ -3359,14 +3367,15 @@ export default function ClientDashboard({
   useEffect(() => { void fetchTeamMembers() }, [fetchTeamMembers])
 
   // ── Current user / role-based permissions ──────────────────────
-  // If a real member_session cookie was verified server-side, use it and
-  // skip the demo localStorage switcher entirely.
-  const hasRealSession = !!initialUser
+  // Priority: member_session (team member) > supabaseUser (owner) > demo localStorage
+  const hasRealSession = !!(initialUser ?? supabaseUser)
 
   const [currentUser, setCurrentUser] = useState<CurrentUser>(
     initialUser
       ? { name: initialUser.name, role: initialUser.role as Role }
-      : DEMO_OWNER
+      : supabaseUser
+        ? { name: supabaseUser.name, role: supabaseUser.role as Role }
+        : DEMO_OWNER
   )
 
   useEffect(() => {
@@ -3493,7 +3502,7 @@ export default function ClientDashboard({
 
   // ── Supabase Realtime subscriptions ──────────────────────────
   useEffect(() => {
-    const BUSINESS_ID = '0616a47a-2c01-49ce-a798-385f8276b92b'
+    const BUSINESS_ID = businessIdProp ?? '0616a47a-2c01-49ce-a798-385f8276b92b'
 
     // ── Dedicated leads channel — isolated so other broken subscriptions
     //    cannot poison this channel and prevent lead events from arriving.
@@ -3722,7 +3731,7 @@ export default function ClientDashboard({
       supabase.removeChannel(leadsChannel)
       supabase.removeChannel(channel)
     }
-  }, [])
+  }, [businessIdProp])
 
   // ── Browser notification permission ──────────────────────────
   // Requested 3 s after mount so it doesn't fire immediately on load.
@@ -3771,7 +3780,17 @@ export default function ClientDashboard({
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background:'#050510' }}>
-      <Sidebar active={section} onNav={handleNav} open={sidebarOpen} onClose={() => setSidebarOpen(false)} badges={navBadges} />
+      <Sidebar
+        active={section} onNav={handleNav} open={sidebarOpen} onClose={() => setSidebarOpen(false)}
+        badges={navBadges}
+        userName={currentUser.name}
+        businessName={businessNameProp || 'My Business'}
+        onLogout={async () => {
+          await fetch('/api/auth/logout', { method: 'POST' })
+          await fetch('/api/logout', { method: 'POST' }).catch(() => {})
+          window.location.replace('/login')
+        }}
+      />
 
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
         {/* Sticky header */}
@@ -3804,8 +3823,11 @@ export default function ClientDashboard({
               <NotificationCenter notifs={notifs} setNotifs={setNotifs} />
               <button
                 onClick={async () => {
-                  await fetch('/api/logout', { method: 'POST' })
-                  window.location.href = '/client-login'
+                  // Sign out from Supabase Auth + clear all session cookies
+                  await fetch('/api/auth/logout', { method: 'POST' })
+                  // Also clear legacy member_session via old route (best-effort)
+                  await fetch('/api/logout', { method: 'POST' }).catch(() => {})
+                  window.location.replace('/login')
                 }}
                 className="flex items-center gap-1.5 text-xs text-white/25 hover:text-red-400 transition-colors px-3 py-2 rounded-lg hover:bg-red-500/8">
                 <LogOut className="w-3.5 h-3.5" />

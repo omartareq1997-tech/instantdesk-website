@@ -31,6 +31,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
 import { createAdminClient } from '../../lib/supabase-server'
 import { logEvent } from '../_lib/logEvent'
+import { getSessionBusinessId } from '../../lib/getSessionBusinessId'
 
 /* ════════════════════════════════════════════════════════════════════════════
    TYPES
@@ -564,13 +565,27 @@ export async function POST(req: NextRequest) {
   if (!business_id) return NextResponse.json({ error: 'business_id is required' }, { status: 400 })
   if (!message)     return NextResponse.json({ error: 'message is required' },     { status: 400 })
 
-  /* 2. Supabase ───────────────────────────────────────────────────────────── */
+  /* 2. Resolve session IDs ────────────────────────────────────────────────── */
+  let clientId:     string  = business_id
+  let businessId:   string  = business_id
+  let fallbackUsed: boolean = true
+  try {
+    const session = await getSessionBusinessId()
+    if (session.fromSession) {
+      clientId     = session.clientId
+      businessId   = session.businessId ?? session.clientId
+      fallbackUsed = false
+    }
+  } catch { /* no session — use body business_id */ }
+  console.log('CHAT SESSION IDS', { clientId, businessId, fallbackUsed })
+
+  /* 3. Supabase ───────────────────────────────────────────────────────────── */
   const sb = createAdminClient()
 
-  /* 3. Load active agent ──────────────────────────────────────────────────── */
+  /* 4. Load active agent ──────────────────────────────────────────────────── */
   const { data: agentRow, error: agentErr } = await sb
     .from('agents').select('*')
-    .eq('business_id', business_id).eq('active', true)
+    .eq('business_id', businessId).eq('active', true)
     .limit(1).maybeSingle()
 
   if (agentErr) {
@@ -585,7 +600,7 @@ export async function POST(req: NextRequest) {
   /* 4. Load knowledge ─────────────────────────────────────────────────────── */
   const { data: knowledgeRows } = await sb
     .from('knowledge_sources').select('title, content')
-    .eq('business_id', business_id).eq('is_active', true)
+    .eq('business_id', businessId).eq('is_active', true)
     .order('created_at', { ascending: true })
   const knowledge = (knowledgeRows ?? []) as KnowledgeRow[]
 
@@ -604,7 +619,7 @@ export async function POST(req: NextRequest) {
   if (isNewConv) {
     const { error: ce } = await sb.from('conversations').insert({
       id:              convId,
-      business_id:     business_id,
+      business_id:     businessId,
       channel:         'website',
       status:          'open',
       last_message_at: new Date().toISOString(),
@@ -626,7 +641,7 @@ export async function POST(req: NextRequest) {
       .eq('conversation_id', convId).order('created_at', { ascending: true }).limit(40),
     sb.from('agent_qualification_fields')
       .select('field_key, label, prompt, required, sort_order')
-      .eq('business_id', business_id).eq('active', true)
+      .eq('business_id', businessId).eq('active', true)
       .order('sort_order', { ascending: true }),
   ])
 
@@ -666,13 +681,13 @@ export async function POST(req: NextRequest) {
 
     // Persist user message first, then assistant — sequential so user always gets an earlier
     // created_at timestamp (parallel inserts can produce same or reversed timestamps).
-    const uMsgR = await sb.from('messages').insert({ conversation_id: convId, business_id, role: 'user', content: message })
+    const uMsgR = await sb.from('messages').insert({ conversation_id: convId, business_id: businessId, role: 'user', content: message })
     if (uMsgR.error) console.error('[POST /api/chat] booking user-msg insert:', JSON.stringify(uMsgR.error))
-    const aMsgR = await sb.from('messages').insert({ conversation_id: convId, business_id, role: 'assistant', content: bookingReply })
+    const aMsgR = await sb.from('messages').insert({ conversation_id: convId, business_id: businessId, role: 'assistant', content: bookingReply })
     if (aMsgR.error) console.error('[POST /api/chat] booking ai-msg insert:', JSON.stringify(aMsgR.error))
 
     console.log('[GUARD] blockedRepeatedQuestion: false (booking short-circuit)')
-    const bResult = await persistLead(sb, existingLead, convId, business_id, confirmed, missing, 'qualified', bookingReply, message)
+    const bResult = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, 'qualified', bookingReply, message)
 
     return NextResponse.json({
       reply:                    bookingReply,
@@ -688,7 +703,7 @@ export async function POST(req: NextRequest) {
 
   /* 9. Persist user message ──────────────────────────────────────────────── */
   const { error: userMsgErr } = await sb.from('messages').insert({
-    conversation_id: convId, business_id, role: 'user', content: message,
+    conversation_id: convId, business_id: businessId, role: 'user', content: message,
   })
   if (userMsgErr) console.error('[POST /api/chat] user message insert failed:', JSON.stringify(userMsgErr))
 
@@ -717,14 +732,14 @@ export async function POST(req: NextRequest) {
 
   /* 12. Persist assistant reply ──────────────────────────────────────────── */
   const { error: aiMsgErr } = await sb.from('messages').insert({
-    conversation_id: convId, business_id, role: 'assistant', content: finalReply,
+    conversation_id: convId, business_id: businessId, role: 'assistant', content: finalReply,
   })
   if (aiMsgErr) console.error('[POST /api/chat] ai message insert failed:', JSON.stringify(aiMsgErr))
 
   /* 13. Update / create lead ─────────────────────────────────────────────── */
   const isQualified = !!(confirmed.name && confirmed.phone && confirmed.email)
   const intent      = detectDealType(message) ? 'inquiry' : 'greeting'
-  const persist = await persistLead(sb, existingLead, convId, business_id, confirmed, missing, isQualified ? 'contacted' : 'new', finalReply, message)
+  const persist = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, isQualified ? 'contacted' : 'new', finalReply, message)
 
   /* 14. Fire webhook if fully qualified ──────────────────────────────────── */
   const webhookUrl    = process.env.MAKE_WEBHOOK_URL
@@ -732,7 +747,7 @@ export async function POST(req: NextRequest) {
   if (webhookUrl && isQualified && resolvedLeadId) {
     fetch(webhookUrl, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event: 'lead_qualified', lead_id: resolvedLeadId, business_id, conversation_id: convId, slots: confirmed }),
+      body: JSON.stringify({ event: 'lead_qualified', lead_id: resolvedLeadId, business_id: businessId, conversation_id: convId, slots: confirmed }),
     }).catch(e => console.warn('[POST /api/chat] webhook error:', e))
   }
 
@@ -816,6 +831,7 @@ async function persistLead(
   sb:           ReturnType<typeof createAdminClient>,
   existing:     ExistingLead | null,
   convId:       string,
+  clientId:     string,
   businessId:   string,
   confirmed:    Slots,
   missing:      SlotDef[],
@@ -944,8 +960,8 @@ async function persistLead(
       // Use the same business_id as the manual appointment route so the row
       // is found by getClientAppointments and the dashboard realtime filter.
       const apptPayload: Record<string, unknown> = {
-        client_id:    process.env.DEMO_CLIENT_ID    ?? '00000000-0000-0000-0000-000000000001',
-        business_id:  process.env.BUSINESS_ID       ?? '0616a47a-2c01-49ce-a798-385f8276b92b',
+        client_id:    clientId,
+        business_id:  businessId,
         lead_id:      resolvedLeadId,
         lead_name:    leadFullName,
         lead_company: '',

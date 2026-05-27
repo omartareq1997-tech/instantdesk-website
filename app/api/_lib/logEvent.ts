@@ -2,18 +2,24 @@
  * Server-only helper: write one row to activity_events.
  * Never throws — logging must never break a mutation.
  *
+ * clientId is resolved from the auth session automatically if not supplied,
+ * so callers that already have it can pass it in for efficiency.
+ *
  * activity_events schema:
- *   client_id   UUID  NOT NULL  FK → clients(id)   (always '00000000-0000-0000-0000-000000000001')
- *   business_id UUID  NULLABLE  FK → businesses(id) (the AI business UUID)
+ *   client_id   UUID  NOT NULL  FK → clients(id)
+ *   business_id UUID  NULLABLE
  *   lead_id, type, title, description, metadata, undoable
  */
 
 import { createAdminClient } from '../../lib/supabase-server'
+import { getSessionBusinessId } from '../../lib/getSessionBusinessId'
 
-// FK to clients table — required NOT NULL
-const FIXED_CLIENT_ID = '00000000-0000-0000-0000-000000000001'
+const FALLBACK_CLIENT_ID =
+  process.env.DEMO_CLIENT_ID ??
+  process.env.NEXT_PUBLIC_DEMO_CLIENT_ID ??
+  '0616a47a-2c01-49ce-a798-385f8276b92b'
 
-export const ACTOR = 'Alex Thompson'
+export const ACTOR = 'System'
 
 export interface LogMeta {
   actor:               string
@@ -35,6 +41,7 @@ export interface LogPayload {
   title:        string
   description?: string | null
   leadId?:      string | null
+  clientId?:    string
   meta:         LogMeta
 }
 
@@ -43,11 +50,22 @@ export async function logEvent(p: LogPayload, businessId?: string): Promise<void
   const safeType   = SAFE_TYPES.includes(p.type) ? p.type : 'sms'
   const metaWithType = { ...p.meta, _type: p.type }
 
+  // Resolve clientId: caller can supply it; otherwise derive from session
+  let clientId = p.clientId
+  if (!clientId) {
+    try {
+      const session = await getSessionBusinessId()
+      clientId = session.clientId
+    } catch {
+      clientId = FALLBACK_CLIENT_ID
+    }
+  }
+
   try {
     const sb = createAdminClient()
     const { error } = await sb.from('activity_events').insert({
-      client_id:   FIXED_CLIENT_ID,
-      business_id: businessId ?? null,
+      client_id:   clientId,
+      business_id: businessId ?? clientId,
       lead_id:     p.leadId ?? null,
       type:        safeType,
       title:       p.title,
@@ -57,8 +75,6 @@ export async function logEvent(p: LogPayload, businessId?: string): Promise<void
     })
     if (error) {
       console.warn('[logEvent] write failure:', error.message, `(${error.code})`)
-    } else {
-      console.log('[logEvent] activity_events insert ok:', p.type, p.title)
     }
   } catch (err) {
     console.warn('[logEvent] unexpected error:', err)

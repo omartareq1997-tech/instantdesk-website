@@ -474,7 +474,7 @@ export async function POST(req: NextRequest) {
     if (email) {
       const { data: existing } = await sb
         .from('leads').select('id, metadata')
-        .eq('client_id', clientId).eq('email', email).maybeSingle()
+        .eq('business_id', clientId).eq('email', email).maybeSingle()
 
       if (existing?.id) {
         // Merge: preserve keys that weren't sent in this call.
@@ -488,10 +488,8 @@ export async function POST(req: NextRequest) {
           : prevMeta
 
         const updatePayload: Record<string, unknown> = {
-          name, company, phone,
+          name, phone,
           source, interest: interest ?? undefined,
-          score, score_label: scoreLabel,
-          updated_at: nowIso,
         }
         if (Object.keys(mergedMeta).length > 0) updatePayload.metadata = mergedMeta
         await sb.from('leads').update(updatePayload).eq('id', existing.id)
@@ -499,28 +497,24 @@ export async function POST(req: NextRequest) {
         leadId = existing.id
       } else {
         const insertPayload = {
-          client_id: clientId, name, company, email, phone,
+          business_id: clientId, name, email, phone,
           source, interest: interest ?? undefined,
-          score, score_label: scoreLabel, status: 'new',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          status: 'new',
           ...(finalMetadata && { metadata: finalMetadata }),
         }
-        console.log('[INGEST FINAL LEAD CREATED_AT]', name, insertPayload.created_at)
+        console.log('[INGEST] lead INSERT', name)
         const { data, error } = await sb.from('leads').insert(insertPayload).select('id').single()
         if (error) throw error
         leadId = data.id; isNewLead = true
       }
     } else {
       const insertPayload = {
-        client_id: clientId, name, company, phone,
+        business_id: clientId, name, phone,
         source, interest: interest ?? undefined,
-        score, score_label: scoreLabel, status: 'new',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        status: 'new',
         ...(finalMetadata && { metadata: finalMetadata }),
       }
-      console.log('[INGEST FINAL LEAD CREATED_AT]', name, insertPayload.created_at)
+      console.log('[INGEST] lead INSERT', name)
       const { data, error } = await sb.from('leads').insert(insertPayload).select('id').single()
       if (error) throw error
       leadId = data.id; isNewLead = true

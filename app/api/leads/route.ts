@@ -9,8 +9,7 @@ import { createAdminClient } from '../../lib/supabase-server'
 import { logEvent, ACTOR } from '../_lib/logEvent'
 import { getActorRole } from '../../lib/getActorRole'
 import { getPermissions } from '../../lib/permissions'
-
-const DEMO_CLIENT_ID = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
+import { getSessionBusinessId } from '../../lib/getSessionBusinessId'
 
 export async function POST(req: NextRequest) {
   try {
@@ -19,6 +18,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Insufficient permissions to create leads' }, { status: 403 })
     }
 
+    const session = await getSessionBusinessId()
+    const { clientId, businessId } = session
+    console.log('[POST /api/leads] session ids', { clientId, businessId, fromSession: session.fromSession })
+
     const body = await req.json()
 
     const name: string | undefined = typeof body.name === 'string' ? body.name.trim() : undefined
@@ -26,23 +29,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'name is required' }, { status: 400 })
     }
 
-    const clientId: string = typeof body.client_id === 'string' ? body.client_id : DEMO_CLIENT_ID
-
-    const now = new Date().toISOString()
+    const resolvedBusinessId = businessId ?? clientId
+    console.log('[POST /api/leads] inserting with business_id:', resolvedBusinessId)
 
     const insertPayload: Record<string, unknown> = {
-      client_id:   clientId,
+      business_id: resolvedBusinessId,
       name,
-      company:     typeof body.company    === 'string' ? body.company.trim()    : '',
-      email:       typeof body.email      === 'string' ? body.email.trim()      : null,
-      phone:       typeof body.phone      === 'string' ? body.phone.trim()      : null,
-      source:      typeof body.source     === 'string' ? body.source.trim()     : 'manual',
-      interest:    typeof body.interest   === 'string' ? body.interest.trim()   : '',
-      score:       typeof body.score      === 'number' ? body.score             : 0,
-      score_label: typeof body.score_label === 'string' ? body.score_label      : 'cold',
-      status:      typeof body.status     === 'string' ? body.status            : 'new',
-      created_at:  now,
-      updated_at:  now,
+      email:       typeof body.email       === 'string' ? body.email.trim()       : null,
+      phone:       typeof body.phone       === 'string' ? body.phone.trim()       : null,
+      source:      typeof body.source      === 'string' ? body.source.trim()      : 'manual',
+      interest:    typeof body.interest    === 'string' ? body.interest.trim()    : '',
+      status:      typeof body.status      === 'string' ? body.status             : 'new',
     }
 
     if (body.metadata && typeof body.metadata === 'object') {
@@ -56,20 +53,27 @@ export async function POST(req: NextRequest) {
       .select('*')
       .single()
 
-    if (error) throw error
+    if (error) {
+      console.error('[POST /api/leads] Supabase error:', error)
+      return NextResponse.json(
+        { error: error.message, code: error.code, hint: error.hint, details: error.details },
+        { status: 500 },
+      )
+    }
 
     void logEvent({
       type:        'lead_created',
       title:       `Lead created: ${data.name}`,
-      description: data.company ? `${data.company} · via ${data.source}` : `via ${data.source}`,
+      description: `via ${data.source}`,
       leadId:      data.id,
+      clientId,
       meta: {
         actor:       ACTOR,
         undoable:    true,
         entity_id:   data.id,
         entity_type: 'lead',
         entity_name: data.name,
-        new_value:   { name: data.name, company: data.company, status: data.status },
+        new_value:   { name: data.name, status: data.status },
         undo_data:   { lead_id: data.id },
       },
     })

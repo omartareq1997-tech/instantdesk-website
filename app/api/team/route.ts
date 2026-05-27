@@ -1,9 +1,9 @@
 /**
- * GET  /api/team  — list all team members
+ * GET  /api/team  — list all team members for the authenticated client
  * POST /api/team  — invite a new team member
  *
- * Gracefully returns [] if the team_members table does not yet exist (42P01),
- * so the dashboard renders without errors before the SQL migration is run.
+ * Scoped to the session's clientId — authenticated users see only their own team.
+ * Gracefully returns [] if the team_members table does not yet exist (42P01).
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -11,45 +11,47 @@ import { createAdminClient } from '../../lib/supabase-server'
 import { logEvent, ACTOR } from '../_lib/logEvent'
 import { getActorRole } from '../../lib/getActorRole'
 import { getPermissions } from '../../lib/permissions'
+import { getSessionBusinessId } from '../../lib/getSessionBusinessId'
 
-const CLIENT_ID   = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
 const VALID_ROLES = new Set(['owner', 'team_leader', 'agent', 'viewer'])
 
-/** Sentinel ID for the always-present Alex Thompson seed row (never in the DB). */
+/** Sentinel ID for the always-present owner seed row (never stored in the DB). */
 export const PROTECTED_OWNER_ID = '00000000-0000-0000-0000-000000000000'
-
-const SEED_OWNER = {
-  id:           PROTECTED_OWNER_ID,
-  client_id:    CLIENT_ID,
-  name:         'Alex Thompson',
-  email:        'alex@instantdesk.io',
-  role:         'owner',
-  status:       'active',
-  invited_by:   null,
-  invite_token: null,
-  created_at:   '2024-01-01T00:00:00.000Z',
-}
 
 /* ── GET ─────────────────────────────────────────────────────── */
 
 export async function GET() {
   try {
+    const { clientId, ownerName, userEmail, fromSession } = await getSessionBusinessId()
+
+    const seedOwner = {
+      id:           PROTECTED_OWNER_ID,
+      client_id:    clientId,
+      name:         ownerName,
+      email:        userEmail || (fromSession ? '' : 'alex@instantdesk.io'),
+      role:         'owner',
+      status:       'active',
+      invited_by:   null,
+      invite_token: null,
+      created_at:   '2024-01-01T00:00:00.000Z',
+    }
+
     const sb = createAdminClient()
     const { data, error } = await sb
       .from('team_members')
       .select('*')
-      .eq('client_id', CLIENT_ID)
+      .eq('client_id', clientId)
       .order('created_at', { ascending: true })
 
     if (error) {
-      if (error.code === '42P01') return NextResponse.json({ members: [SEED_OWNER] })
+      if (error.code === '42P01') return NextResponse.json({ members: [seedOwner] })
       throw error
     }
 
-    // Always prepend the seed owner if no real row for Alex Thompson exists
     const rows = data ?? []
-    const hasAlexRow = rows.some(m => m.name === 'Alex Thompson' && m.role === 'owner')
-    const members = hasAlexRow ? rows : [SEED_OWNER, ...rows]
+    // Prepend the owner seed row if no real owner row exists yet
+    const hasOwnerRow = rows.some(m => m.role === 'owner')
+    const members = hasOwnerRow ? rows : [seedOwner, ...rows]
 
     return NextResponse.json({ members })
   } catch (err) {
@@ -62,17 +64,18 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { role: actorRole } = await getActorRole(req)
+    const { role: actorRole, name: actorName } = await getActorRole(req)
     if (!getPermissions(actorRole).canInviteMember) {
       return NextResponse.json({ error: 'Insufficient permissions to invite team members' }, { status: 403 })
     }
 
+    const { clientId } = await getSessionBusinessId()
     const body = await req.json()
-    const name  = typeof body.name  === 'string' ? body.name.trim()  : ''
-    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
-    const inviteRole  = typeof body.role  === 'string' && VALID_ROLES.has(body.role) ? body.role : 'agent'
 
-    // Team leaders may only invite agents and viewers
+    const name       = typeof body.name  === 'string' ? body.name.trim()  : ''
+    const email      = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
+    const inviteRole = typeof body.role  === 'string' && VALID_ROLES.has(body.role) ? body.role : 'agent'
+
     if (actorRole === 'team_leader' && (inviteRole === 'owner' || inviteRole === 'team_leader')) {
       return NextResponse.json({ error: 'Team leaders can only invite agents and viewers' }, { status: 403 })
     }
@@ -85,12 +88,12 @@ export async function POST(req: NextRequest) {
     const { data, error } = await sb
       .from('team_members')
       .insert({
-        client_id:  CLIENT_ID,
+        client_id:  clientId,
         name,
         email,
         role:       inviteRole,
         status:     'invited',
-        invited_by: typeof body.invited_by === 'string' ? body.invited_by : 'Alex Thompson',
+        invited_by: typeof body.invited_by === 'string' ? body.invited_by : actorName,
       })
       .select('*')
       .single()
@@ -106,6 +109,7 @@ export async function POST(req: NextRequest) {
       title:       `Team member invited: ${data.name}`,
       description: `${data.role.replace(/_/g, ' ')} · ${data.email}`,
       leadId:      null,
+      clientId,
       meta: {
         actor:       ACTOR,
         undoable:    false,

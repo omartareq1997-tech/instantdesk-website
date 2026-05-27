@@ -8,9 +8,7 @@ import { createAdminClient } from '../../lib/supabase-server'
 import { logEvent, ACTOR } from '../_lib/logEvent'
 import { getActorRole } from '../../lib/getActorRole'
 import { getPermissions } from '../../lib/permissions'
-
-const DEMO_CLIENT_ID = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
-const BUSINESS_ID    = process.env.BUSINESS_ID    ?? '0616a47a-2c01-49ce-a798-385f8276b92b'
+import { getSessionBusinessId } from '../../lib/getSessionBusinessId'
 
 const VALID_STATUSES  = new Set(['confirmed', 'pending', 'completed', 'cancelled'])
 const VALID_TYPES     = new Set(['demo_call', 'discovery_call', 'onboarding', 'follow_up'])
@@ -72,12 +70,11 @@ export async function POST(req: NextRequest) {
         ? body.status
         : 'pending'
 
-    const clientId: string =
-      typeof body.client_id === 'string' ? body.client_id : DEMO_CLIENT_ID
+    const { clientId: sessionClientId } = await getSessionBusinessId()
 
     const insertPayload: Record<string, unknown> = {
-      client_id:    clientId,
-      business_id:  BUSINESS_ID,
+      client_id:    sessionClientId,
+      business_id:  sessionClientId,
       type,
       scheduled_at: scheduledAt,
       status,
@@ -123,6 +120,7 @@ export async function POST(req: NextRequest) {
       title:       `Appointment scheduled: ${data.lead_name ?? 'Unknown'}`,
       description: `${data.type?.replace(/_/g, ' ')} on ${new Date(data.scheduled_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`,
       leadId:      data.lead_id ?? null,
+      clientId:    sessionClientId,
       meta: {
         actor: ACTOR, undoable: true, entity_id: data.id, entity_type: 'appointment',
         entity_name: data.lead_name ?? 'Unknown',

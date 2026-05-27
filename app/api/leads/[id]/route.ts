@@ -13,6 +13,7 @@ import { createAdminClient } from '../../../lib/supabase-server'
 import { logEvent, ACTOR } from '../../_lib/logEvent'
 import { getActorRole } from '../../../lib/getActorRole'
 import { getPermissions } from '../../../lib/permissions'
+import { getSessionBusinessId } from '../../../lib/getSessionBusinessId'
 
 type Ctx = { params: Promise<{ id: string }> }
 
@@ -45,8 +46,8 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
 /* ── PATCH ────────────────────────────────────────────────────────── */
 
 const ALLOWED_LEAD_FIELDS = new Set([
-  'name', 'company', 'email', 'phone', 'source', 'interest',
-  'score', 'score_label', 'status', 'metadata',
+  'name', 'email', 'phone', 'source', 'interest',
+  'status', 'metadata',
   'ai_sms', 'email_seq', 'nurture', 'smart_assign', 'auto_call',
   'assigned_agent',
 ])
@@ -54,7 +55,10 @@ const ALLOWED_LEAD_FIELDS = new Set([
 export async function PATCH(req: NextRequest, { params }: Ctx) {
   const { id } = await params
   try {
-    const { name: actorName, role } = await getActorRole(req)
+    const [{ name: actorName, role }, { clientId }] = await Promise.all([
+      getActorRole(req),
+      getSessionBusinessId(),
+    ])
     const can = getPermissions(role)
     if (!can.canEditLead) {
       return NextResponse.json({ error: 'Insufficient permissions to edit leads' }, { status: 403 })
@@ -70,8 +74,6 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 })
     }
-
-    patch.updated_at = new Date().toISOString()
 
     const sb = createAdminClient()
 
@@ -99,11 +101,11 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
     // Determine which log event to emit
     if (before) {
-      const changedPatchKeys  = Object.keys(patch).filter(k => k !== 'updated_at')
+      const changedPatchKeys  = Object.keys(patch)
       const isStatusChange    = 'status' in patch && patch.status !== before.status
       const isAssignment      = 'assigned_agent' in patch && patch.assigned_agent !== before.assigned_agent
       const isMetadataChange  = 'metadata' in patch && !('status' in patch) &&
-        !('name' in patch) && !('company' in patch) && !('email' in patch) &&
+        !('name' in patch) && !('email' in patch) &&
         !('phone' in patch) && !('source' in patch) && !('score' in patch) &&
         !('assigned_agent' in patch)
       const isScoreChange     = !isStatusChange && !isMetadataChange && !isAssignment &&
@@ -119,8 +121,9 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
           title:       `Lead assigned: ${before.name}`,
           description: `${oldAgent} → ${newAgent}`,
           leadId:      id,
+          clientId,
           meta: {
-            actor: ACTOR, undoable: true, entity_id: id, entity_type: 'lead',
+            actor: actorName, undoable: true, entity_id: id, entity_type: 'lead',
             entity_name: before.name,
             old_value:   { assigned_agent: oldAgent },
             new_value:   { assigned_agent: newAgent },
@@ -133,8 +136,9 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
           title:       `Status changed: ${before.name}`,
           description: `${before.status} → ${patch.status as string}`,
           leadId:      id,
+          clientId,
           meta: {
-            actor: ACTOR, undoable: true, entity_id: id, entity_type: 'lead',
+            actor: actorName, undoable: true, entity_id: id, entity_type: 'lead',
             entity_name: before.name,
             old_value:  { status: before.status },
             new_value:  { status: patch.status },
@@ -147,8 +151,9 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
           title:       `Score changed: ${before.name}`,
           description: `${before.score_label ?? ''} → ${(patch.score_label ?? '') as string}`,
           leadId:      id,
+          clientId,
           meta: {
-            actor: ACTOR, undoable: true, entity_id: id, entity_type: 'lead',
+            actor: actorName, undoable: true, entity_id: id, entity_type: 'lead',
             entity_name: before.name,
             old_value:  { score: before.score, score_label: before.score_label },
             new_value:  { score: patch.score,  score_label: patch.score_label  },
@@ -163,8 +168,9 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
           type:        'notes_changed',
           title:       `Notes updated: ${before.name}`,
           leadId:      id,
+          clientId,
           meta: {
-            actor: ACTOR, undoable: true, entity_id: id, entity_type: 'lead',
+            actor: actorName, undoable: true, entity_id: id, entity_type: 'lead',
             entity_name: before.name,
             undo_data: { lead_id: id, old_metadata: before.metadata },
           },
@@ -175,8 +181,9 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
           title:       `Lead updated: ${data.name}`,
           description: `Changed: ${changedPatchKeys.join(', ')}`,
           leadId:      id,
+          clientId,
           meta: {
-            actor: ACTOR, undoable: true, entity_id: id, entity_type: 'lead',
+            actor: actorName, undoable: true, entity_id: id, entity_type: 'lead',
             entity_name: data.name,
             old_value: changedPatchKeys.reduce<Record<string, unknown>>((acc, k) => {
               acc[k] = (before as Record<string, unknown>)[k]; return acc
@@ -209,7 +216,10 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
   console.log(`[deleteLead] deleting lead id: ${id}`)
 
   try {
-    const { role } = await getActorRole(req)
+    const [{ role }, { clientId }] = await Promise.all([
+      getActorRole(req),
+      getSessionBusinessId(),
+    ])
     if (!getPermissions(role).canDeleteLead) {
       return NextResponse.json({ error: 'Insufficient permissions to delete leads' }, { status: 403 })
     }
@@ -287,6 +297,7 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
       title:       `Lead deleted: ${lead.name}`,
       description: undefined,
       leadId:      null,
+      clientId,
       meta: {
         actor: ACTOR, undoable: true, entity_id: id, entity_type: 'lead',
         entity_name: lead.name as string,

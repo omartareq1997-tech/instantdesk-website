@@ -12,15 +12,17 @@ import { createAdminClient } from '../../../../lib/supabase-server'
 import { logEvent, ACTOR } from '../../../_lib/logEvent'
 import { getActorRole } from '../../../../lib/getActorRole'
 import { getPermissions } from '../../../../lib/permissions'
+import { getSessionBusinessId } from '../../../../lib/getSessionBusinessId'
 
 type Ctx = { params: Promise<{ id: string }> }
-
-const CLIENT_ID = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
 
 export async function POST(req: NextRequest, { params }: Ctx) {
   const { id } = await params
   try {
-    const { role } = await getActorRole(req)
+    const [{ role }, { clientId }] = await Promise.all([
+      getActorRole(req),
+      getSessionBusinessId(),
+    ])
     if (!getPermissions(role).canUndoActions) {
       return NextResponse.json({ error: 'Insufficient permissions to undo actions' }, { status: 403 })
     }
@@ -79,12 +81,15 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         if (!snapshot) return NextResponse.json({ error: 'No snapshot in undo_data' }, { status: 400 })
         const lead = snapshot.lead as Record<string, unknown>
         if (!lead) return NextResponse.json({ error: 'No lead in snapshot' }, { status: 400 })
-        const { error: leadErr } = await sb.from('leads').insert({ ...lead, client_id: CLIENT_ID })
+        // Strip columns that don't exist on leads table before restoring
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { company: _company, client_id: _cid, score: _score, score_label: _sl, updated_at: _ua, ...leadFields } = lead
+        const { error: leadErr } = await sb.from('leads').insert({ ...leadFields, business_id: clientId })
         if (leadErr) throw leadErr
         const appts = snapshot.appointments as Record<string, unknown>[] | undefined
         if (appts && appts.length > 0) {
           const { error: apptErr } = await sb.from('appointments').insert(
-            appts.map(a => ({ ...a, client_id: CLIENT_ID }))
+            appts.map(a => ({ ...a, client_id: clientId, business_id: clientId }))
           )
           if (apptErr) console.warn('[undo lead_deleted] Could not restore appointments:', apptErr.message)
         }
@@ -94,27 +99,26 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       case 'lead_edited':
       case 'lead_updated': {
         const leadId = (undo.lead_id ?? event.lead_id) as string
-        const patch  = undo.old_fields as Record<string, unknown> | undefined
-        if (!leadId || !patch) return NextResponse.json({ error: 'Missing lead_id or old_fields in undo_data' }, { status: 400 })
-        const { error } = await sb.from('leads').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', leadId)
+        const rawPatch = undo.old_fields as Record<string, unknown> | undefined
+        if (!leadId || !rawPatch) return NextResponse.json({ error: 'Missing lead_id or old_fields in undo_data' }, { status: 400 })
+        // Strip columns that don't exist on leads table
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { company: _c, client_id: _ci, score: _s, score_label: _sl, ...patch } = rawPatch
+        const { error } = await sb.from('leads').update(patch).eq('id', leadId)
         if (error) throw error
         break
       }
 
       case 'score_changed': {
-        const leadId    = (undo.lead_id ?? event.lead_id) as string
-        const oldFields = undo.old_fields as Record<string, unknown> | undefined
-        if (!leadId || !oldFields) return NextResponse.json({ error: 'Missing lead_id or old_fields in undo_data' }, { status: 400 })
-        const { error } = await sb.from('leads').update({ ...oldFields, updated_at: new Date().toISOString() }).eq('id', leadId)
-        if (error) throw error
-        break
+        // score/score_label columns do not exist on leads table — undo is a no-op
+        return NextResponse.json({ error: 'Undo not supported: score column removed from leads schema' }, { status: 400 })
       }
 
       case 'status_changed': {
         const leadId    = (undo.lead_id ?? event.lead_id) as string
         const oldStatus = undo.old_status as string | undefined
         if (!leadId || !oldStatus) return NextResponse.json({ error: 'Missing lead_id or old_status in undo_data' }, { status: 400 })
-        const { error } = await sb.from('leads').update({ status: oldStatus, updated_at: new Date().toISOString() }).eq('id', leadId)
+        const { error } = await sb.from('leads').update({ status: oldStatus }).eq('id', leadId)
         if (error) throw error
         break
       }
@@ -123,7 +127,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         const leadId      = (undo.lead_id ?? event.lead_id) as string
         const oldMetadata = undo.old_metadata as Record<string, unknown> | undefined
         if (!leadId) return NextResponse.json({ error: 'Missing lead_id in undo_data' }, { status: 400 })
-        const { error } = await sb.from('leads').update({ metadata: oldMetadata ?? null, updated_at: new Date().toISOString() }).eq('id', leadId)
+        const { error } = await sb.from('leads').update({ metadata: oldMetadata ?? null }).eq('id', leadId)
         if (error) throw error
         break
       }
@@ -139,7 +143,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       case 'appointment_deleted': {
         const appt = undo.appointment as Record<string, unknown> | undefined
         if (!appt) return NextResponse.json({ error: 'No appointment in undo_data' }, { status: 400 })
-        const { error } = await sb.from('appointments').insert({ ...appt, client_id: CLIENT_ID })
+        const { error } = await sb.from('appointments').insert({ ...appt, client_id: clientId, business_id: clientId })
         if (error) throw error
         break
       }
@@ -178,6 +182,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       title:       `Undone: ${event.title as string}`,
       description: (event.description as string | null) ?? undefined,
       leadId:      (event.lead_id as string | null) ?? null,
+      clientId,
       meta: {
         actor:              ACTOR,
         undoable:           false,

@@ -1,20 +1,22 @@
 /**
  * GET /api/activity
- * Returns the last 200 activity events for the demo client, newest first.
+ * Returns the last 200 activity events for the authenticated client, newest first.
+ * Scoped to the session's clientId — authenticated users see only their own events.
  */
 
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '../../lib/supabase-server'
-
-const CLIENT_ID = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
+import { getSessionBusinessId } from '../../lib/getSessionBusinessId'
 
 export async function GET() {
   try {
+    const { clientId } = await getSessionBusinessId()
+
     const sb = createAdminClient()
     const { data, error } = await sb
       .from('activity_events')
       .select('*')
-      .eq('client_id', CLIENT_ID)
+      .eq('client_id', clientId)
       .order('created_at', { ascending: false })
       .limit(200)
 

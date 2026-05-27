@@ -2367,27 +2367,30 @@ interface LogEvent {
   metadata:    Record<string, unknown> | null
 }
 
-type LogFilter = 'all' | 'leads' | 'appointments' | 'deletes' | 'edits' | 'undoable'
+type LogFilter = 'all' | 'leads' | 'appointments' | 'deletes' | 'edits' | 'undoable' | 'automation'
 
 const FILTER_CFG: { id: LogFilter; label: string }[] = [
   { id: 'all',          label: 'All'          },
   { id: 'leads',        label: 'Leads'        },
   { id: 'appointments', label: 'Appointments' },
+  { id: 'automation',   label: 'Automation'   },
   { id: 'deletes',      label: 'Deletes'      },
   { id: 'edits',        label: 'Edits'        },
   { id: 'undoable',     label: 'Undoable'     },
 ]
 
-const LEAD_TYPES    = new Set(['lead_created','lead_deleted','lead_updated','lead_edited','status_changed','notes_changed','score_changed'])
-const APPT_TYPES    = new Set(['appointment_created','appointment_deleted','appointment_updated','appointment_edited','appointment_moved'])
-const DELETE_TYPES  = new Set(['lead_deleted','appointment_deleted'])
-const EDIT_TYPES    = new Set(['lead_updated','lead_edited','status_changed','notes_changed','score_changed','appointment_updated','appointment_edited','appointment_moved'])
+const LEAD_TYPES       = new Set(['lead_created','lead_deleted','lead_updated','lead_edited','status_changed','notes_changed','score_changed'])
+const APPT_TYPES       = new Set(['appointment_created','appointment_deleted','appointment_updated','appointment_edited','appointment_moved'])
+const DELETE_TYPES     = new Set(['lead_deleted','appointment_deleted'])
+const EDIT_TYPES       = new Set(['lead_updated','lead_edited','status_changed','notes_changed','score_changed','appointment_updated','appointment_edited','appointment_moved'])
+const AUTOMATION_TYPES = new Set(['follow_up_scheduled','follow_up_sent','follow_up_failed'])
 
 function applyFilter(ev: LogEvent, filter: LogFilter, undoneIds: Set<string>): boolean {
   const type = (ev.metadata?._type as string) || ev.type
   if (filter === 'all')          return true
   if (filter === 'leads')        return LEAD_TYPES.has(type) || type.startsWith('undo_lead_') || type.startsWith('undo_status_') || type.startsWith('undo_notes_') || type.startsWith('undo_score_')
   if (filter === 'appointments') return APPT_TYPES.has(type) || type.startsWith('undo_appointment_')
+  if (filter === 'automation')   return AUTOMATION_TYPES.has(type) || type.startsWith('follow_up_')
   if (filter === 'deletes')      return DELETE_TYPES.has(type)
   if (filter === 'edits')        return EDIT_TYPES.has(type)
   if (filter === 'undoable')     return !!(ev.metadata?.undoable) && !undoneIds.has(ev.id) && !(ev.metadata?.undone)
@@ -2407,6 +2410,9 @@ const LOG_TYPE_LABELS: Record<string, string> = {
   appointment_edited:        'Appt Updated',
   appointment_updated:       'Appt Updated',
   appointment_moved:         'Appt Moved',
+  follow_up_scheduled:       'Follow-up Scheduled',
+  follow_up_sent:            'Follow-up Sent',
+  follow_up_failed:          'Follow-up Failed',
   undo_lead_created:         'Undone · Lead Create',
   undo_lead_deleted:         'Undone · Lead Delete',
   undo_lead_edited:          'Undone · Lead Update',
@@ -2437,6 +2443,9 @@ const LOG_CFG: Record<string, LogCfg> = {
   appointment_edited:   { color: '#a78bfa', bg: 'rgba(167,139,250,0.12)',  Icon: Pencil       },
   appointment_updated:  { color: '#a78bfa', bg: 'rgba(167,139,250,0.12)',  Icon: Pencil       },
   appointment_moved:    { color: '#38bdf8', bg: 'rgba(56,189,248,0.12)',   Icon: MoveRight    },
+  follow_up_scheduled:  { color: '#fbbf24', bg: 'rgba(251,191,36,0.10)',   Icon: Bot          },
+  follow_up_sent:       { color: '#34d399', bg: 'rgba(52,211,153,0.10)',   Icon: Bot          },
+  follow_up_failed:     { color: '#f87171', bg: 'rgba(248,113,113,0.10)',  Icon: Bot          },
 }
 const LOG_CFG_DEFAULT: LogCfg = { color: 'rgba(255,255,255,0.25)', bg: 'rgba(255,255,255,0.05)', Icon: Activity }
 
@@ -3447,6 +3456,36 @@ export default function ClientDashboard({
     setAppointments(prev => prev.some(a => a.id === appt.id) ? prev : [appt, ...prev])
   }, [])
 
+  // Re-fetch ALL appointments for the session from the server.
+  // Replaces local state with the authoritative DB view.
+  // Called: on section change to 'appointments', on window focus, and after realtime events
+  // as a safety net for when the table is not in the Supabase realtime publication.
+  const refreshAppointments = useCallback(async () => {
+    try {
+      const res  = await fetch('/api/appointments')
+      const data = await res.json() as { appointments?: RawAppointmentRow[] }
+      if (!Array.isArray(data.appointments)) return
+      const mapped = data.appointments.flatMap(r => {
+        try { return [mapAppointmentRow(r)] }
+        catch { return [] }
+      })
+      setAppointments(mapped)
+    } catch { /* silent — stale state is acceptable */ }
+  }, [])
+
+  // Re-fetch when the appointments tab is opened so it's always fresh.
+  useEffect(() => {
+    if (section === 'appointments') void refreshAppointments()
+  }, [section, refreshAppointments])
+
+  // Re-fetch when the browser tab regains focus — catches appointments created
+  // by the chat widget or any other server-side process while the user was away.
+  useEffect(() => {
+    const onFocus = () => void refreshAppointments()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [refreshAppointments])
+
   const openAddAppt = useCallback((defaultLeadId?: string) => {
     setAddApptDefaultLeadId(defaultLeadId)
     setShowAddAppt(true)
@@ -3605,29 +3644,20 @@ export default function ClientDashboard({
         console.log('[Realtime] leads-live channel status:', status, err ?? '')
       })
 
-    // ── Secondary channel for activity feed, appointments, messages, conversations.
-    //    No server-side filters — client-side business_id check instead.
-    //    (Server-side filters require those tables to be in the realtime publication.)
-    const channel = supabase
-      .channel('dashboard-live')
+    // ── Dedicated appointments channel — server-side filter so only this
+    //    business's rows are delivered. Requires the appointments table to be
+    //    in the supabase_realtime publication:
+    //      ALTER PUBLICATION supabase_realtime ADD TABLE appointments;
+    //    If the table is NOT in the publication this channel gets no events but
+    //    does not error — the refreshAppointments() fallback handles that case.
+    const appointmentsChannel = supabase
+      .channel('appointments-live')
 
-      // ── activity_events: INSERT → prepend to feed
       .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'activity_events' },
+        { event: 'INSERT', schema: 'public', table: 'appointments', filter: `business_id=eq.${BUSINESS_ID}` },
         (payload) => {
-          const row = payload.new as RawActivityRow
-          if (row.business_id && row.business_id !== BUSINESS_ID) return
-          const item: ActivityItem = { ...mapActivityRow(row), live: true }
-          setActivityFeed(prev => [item, ...prev.map(i => ({ ...i, live: false })).slice(0, 14)])
-        }
-      )
-
-      // ── appointments: INSERT → update list + toast + bell notif
-      .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'appointments' },
-        (payload) => {
-          const row = payload.new as RawAppointmentRow
-          if (row.business_id && row.business_id !== BUSINESS_ID) return
+          console.log('[Realtime] appointments INSERT received:', payload.new)
+          const row  = payload.new as RawAppointmentRow
           const appt = mapAppointmentRow(row)
           setAppointments(prev => prev.some(a => a.id === appt.id) ? prev : [...prev, appt])
           setActivityFeed(prev => [{
@@ -3659,20 +3689,14 @@ export default function ClientDashboard({
           }, ...prev.slice(0, 19)])
 
           if (soundEnabledRef.current) playChime('appointment alert')
-
-          sendBrowserNotif(
-            'Appointment booked',
-            `${appt.name} · ${appt.type} · ${appt.date} at ${appt.time}`,
-          )
+          sendBrowserNotif('Appointment booked', `${appt.name} · ${appt.type} · ${appt.date} at ${appt.time}`)
         }
       )
 
       .on('postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'appointments' },
+        { event: 'UPDATE', schema: 'public', table: 'appointments', filter: `business_id=eq.${BUSINESS_ID}` },
         (payload) => {
-          const row = payload.new as RawAppointmentRow
-          if (row.business_id && row.business_id !== BUSINESS_ID) return
-          const updated = mapAppointmentRow(row)
+          const updated = mapAppointmentRow(payload.new as RawAppointmentRow)
           setAppointments(prev => prev.map(a => a.id === updated.id ? updated : a))
         }
       )
@@ -3682,6 +3706,32 @@ export default function ClientDashboard({
         (payload) => {
           const id = (payload.old as { id?: string })?.id
           if (id) setAppointments(prev => prev.filter(a => a.id !== id))
+        }
+      )
+
+      .subscribe((status, err) => {
+        console.log('[Realtime] appointments-live channel status:', status, err ?? '')
+        // If the channel cannot connect (table not in publication or RLS blocks),
+        // fall back to a one-time re-fetch so the state is at least up-to-date.
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[Realtime] appointments-live degraded — falling back to fetch')
+          void refreshAppointments()
+        }
+      })
+
+    // ── Secondary channel for activity feed, messages, conversations.
+    //    No server-side filters — client-side business_id check instead.
+    const channel = supabase
+      .channel('dashboard-live')
+
+      // ── activity_events: INSERT → prepend to feed
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'activity_events' },
+        (payload) => {
+          const row = payload.new as RawActivityRow
+          if (row.business_id && row.business_id !== BUSINESS_ID) return
+          const item: ActivityItem = { ...mapActivityRow(row), live: true }
+          setActivityFeed(prev => [item, ...prev.map(i => ({ ...i, live: false })).slice(0, 14)])
         }
       )
 
@@ -3727,11 +3777,74 @@ export default function ClientDashboard({
         console.log('[Realtime] dashboard-live channel status:', status, err ?? '')
       })
 
+    // ── follow_ups channel: live notifications when follow-ups are sent/scheduled
+    const followUpsChannel = supabase
+      .channel('follow-ups-live')
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'follow_ups', filter: `business_id=eq.${BUSINESS_ID}` },
+        (payload) => {
+          const row = payload.new as {
+            id?: string; business_id?: string; status?: string
+            trigger_type?: string; message?: string; lead_id?: string
+          }
+          if (row.business_id && row.business_id !== BUSINESS_ID) return
+
+          const triggerLabels: Record<string, string> = {
+            no_reply_2h:        'No-reply 2h',
+            no_reply_24h:       'No-reply 24h',
+            missed_appointment: 'Missed appointment',
+            viewing_tomorrow:   'Viewing reminder',
+            hot_lead_followup:  'Hot lead',
+          }
+          const label = triggerLabels[row.trigger_type ?? ''] ?? 'Follow-up'
+
+          if (row.status === 'sent') {
+            setToasts(prev => [{
+              id:         crypto.randomUUID(),
+              type:       'hint' as const,
+              title:      `Follow-up sent`,
+              sub:        `${label} — AI message delivered`,
+              badge:      'AI Follow-up',
+              badgeColor: '#60a5fa',
+              duration:   5500,
+            }, ...prev.slice(0, 3)])
+          }
+        }
+      )
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'follow_ups', filter: `business_id=eq.${BUSINESS_ID}` },
+        (payload) => {
+          const row = payload.new as { business_id?: string; trigger_type?: string; status?: string }
+          if (row.business_id && row.business_id !== BUSINESS_ID) return
+          if (row.status !== 'scheduled') return
+          const triggerLabels: Record<string, string> = {
+            no_reply_2h:        'No-reply 2h follow-up',
+            no_reply_24h:       'No-reply 24h follow-up',
+            missed_appointment: 'Missed appointment follow-up',
+            viewing_tomorrow:   'Viewing reminder',
+            hot_lead_followup:  'Hot lead follow-up',
+          }
+          const label = triggerLabels[row.trigger_type ?? ''] ?? 'Follow-up'
+          const item: ActivityItem = {
+            id:   `fu-${crypto.randomUUID()}`,
+            type: 'chat',
+            text: 'Follow-up scheduled',
+            sub:  label,
+            time: 'Just now',
+            live: true,
+          }
+          setActivityFeed(prev => [item, ...prev.map(i => ({ ...i, live: false })).slice(0, 29)])
+        }
+      )
+      .subscribe()
+
     return () => {
       supabase.removeChannel(leadsChannel)
+      supabase.removeChannel(appointmentsChannel)
       supabase.removeChannel(channel)
+      supabase.removeChannel(followUpsChannel)
     }
-  }, [businessIdProp])
+  }, [businessIdProp, refreshAppointments])
 
   // ── Browser notification permission ──────────────────────────
   // Requested 3 s after mount so it doesn't fire immediately on load.

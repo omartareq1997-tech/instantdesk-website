@@ -1,7 +1,11 @@
 'use client'
 
+import FollowUpCenter from './FollowUpCenter'
+
 /**
- * AutomationCenter — Make.com scenario control center.
+ * AutomationCenter — two-tab view:
+ *   1. Make.com Scenarios (existing)
+ *   2. AI Follow-Ups      (native, powered by /api/follow-ups/worker)
  *
  * Architecture:
  *   This component stores and displays automation configuration.
@@ -21,7 +25,7 @@ import {
   Bot, Clock3, SlidersHorizontal, Webhook,
   CheckCircle2, XCircle, AlertTriangle,
   X, ChevronRight, ToggleLeft, ToggleRight,
-  Shield, Timer, Eye,
+  Shield, Timer, Eye, Zap,
 } from 'lucide-react'
 import type { Permissions } from '../lib/permissions'
 
@@ -754,6 +758,7 @@ function RecentLogs({ logs }: { logs: AutoLog[] }) {
 export default function AutomationCenter({ can }: { can: Permissions }) {
   const canManage = can.canManageAutomations
 
+  const [activeTab,    setActiveTab]    = useState<'makecom' | 'followups'>('makecom')
   const [settings,     setSettings]     = useState<AutoSetting[]>([])
   const [logs,         setLogs]         = useState<AutoLog[]>([])
   const [loading,      setLoading]      = useState(true)
@@ -886,6 +891,35 @@ export default function AutomationCenter({ can }: { can: Permissions }) {
   return (
     <div className="flex flex-col gap-6">
 
+      {/* Tab switcher */}
+      <div className="flex items-center gap-1 p-1 rounded-xl self-start"
+        style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+        {([
+          { id: 'makecom',   label: 'Make.com',      Icon: Webhook },
+          { id: 'followups', label: 'AI Follow-Ups', Icon: Zap     },
+        ] as const).map(tab => {
+          const TabIcon = tab.Icon
+          return (
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all"
+              style={activeTab === tab.id ? {
+                background: 'rgba(139,92,246,0.18)', color: '#a78bfa',
+              } : {
+                color: 'rgba(255,255,255,0.35)',
+              }}>
+              <TabIcon className="w-3.5 h-3.5" />
+              {tab.label}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* AI Follow-ups tab — delegates entirely to FollowUpCenter */}
+      {activeTab === 'followups' && <FollowUpCenter />}
+
+      {/* Make.com tab content below */}
+      {activeTab === 'makecom' && <>
+
       {/* Summary row — 3 equal columns on all widths */}
       <div className="grid grid-cols-3 gap-2 sm:gap-4">
         {[
@@ -984,6 +1018,8 @@ export default function AutomationCenter({ can }: { can: Permissions }) {
           />
         )}
       </AnimatePresence>
+
+      </> /* end makecom tab */}
     </div>
   )
 }

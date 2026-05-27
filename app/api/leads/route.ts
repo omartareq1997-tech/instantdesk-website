@@ -1,6 +1,6 @@
 /**
- * POST /api/leads
- * Create a manual lead (from dashboard "Add Lead" form).
+ * GET  /api/leads          — list all leads for the authenticated session's business
+ * POST /api/leads          — create a manual lead (from dashboard "Add Lead" form)
  * Uses service-role client — never call from browser code.
  */
 
@@ -10,6 +10,33 @@ import { logEvent, ACTOR } from '../_lib/logEvent'
 import { getActorRole } from '../../lib/getActorRole'
 import { getPermissions } from '../../lib/permissions'
 import { getSessionBusinessId } from '../../lib/getSessionBusinessId'
+
+export async function GET() {
+  try {
+    const session = await getSessionBusinessId()
+    const { clientId, businessId } = session
+    const resolvedId = businessId ?? clientId
+    console.log('[GET /api/leads] resolved ids', { clientId, businessId: resolvedId, fromSession: session.fromSession })
+
+    const sb = createAdminClient()
+    const { data, error } = await sb
+      .from('leads')
+      .select('*')
+      .eq('business_id', resolvedId)
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('[GET /api/leads] Supabase error:', error)
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
+
+    console.log('[GET /api/leads] rows returned', data?.length ?? 0)
+    return NextResponse.json({ leads: data ?? [] })
+  } catch (err) {
+    console.error('[GET /api/leads]', err)
+    return NextResponse.json({ error: 'Failed to fetch leads' }, { status: 500 })
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {

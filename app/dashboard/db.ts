@@ -339,6 +339,7 @@ function mapIntegration(r: IntegrationStatusRow): IntegrationRow {
  * Returns [] when no leads exist or Supabase is unavailable.
  */
 export async function getClientLeads(clientId = DEMO_CLIENT_ID): Promise<Lead[]> {
+  console.log('[getClientLeads] querying business_id:', clientId)
   try {
     const sb = createAdminClient()
     const { data, error } = await sb
@@ -346,9 +347,14 @@ export async function getClientLeads(clientId = DEMO_CLIENT_ID): Promise<Lead[]>
       .select('*')
       .eq('business_id', clientId)   // AI chat widget inserts with business_id column
       .order('created_at', { ascending: false })
-    if (error) throw error
+    if (error) {
+      console.error('[getClientLeads] Supabase error:', error.message, error.code, '| business_id filter:', clientId)
+      return []
+    }
+    console.log('[getClientLeads] rows returned:', data?.length ?? 0, '| business_id filter:', clientId)
     return (data ?? []).map(r => mapLead(r as LeadRow))
-  } catch {
+  } catch (err) {
+    console.error('[getClientLeads] unexpected error:', err)
     return []
   }
 }

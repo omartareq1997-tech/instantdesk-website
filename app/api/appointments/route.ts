@@ -17,22 +17,49 @@ const VALID_TYPES     = new Set(['demo_call', 'discovery_call', 'onboarding', 'f
 
 export async function GET(req: NextRequest) {
   const leadId = req.nextUrl.searchParams.get('lead_id')
-  if (!leadId) return NextResponse.json({ appointments: [] })
 
   try {
     const sb = createAdminClient()
+
+    if (leadId) {
+      // Fetch appointments for a specific lead (used by LeadPanel)
+      const { data, error } = await sb
+        .from('appointments')
+        .select('id, lead_id, lead_name, lead_company, type, scheduled_at, status, notes')
+        .eq('lead_id', leadId)
+        .order('scheduled_at', { ascending: true })
+
+      if (error) {
+        console.error('[GET /api/appointments] error:', error.message, '| lead_id:', leadId)
+        return NextResponse.json({ appointments: [] })
+      }
+
+      return NextResponse.json({ appointments: data ?? [] })
+    }
+
+    // No lead_id → return ALL appointments for the authenticated session's business.
+    // Used by the dashboard to re-sync state without a full page refresh.
+    const { clientId } = await getSessionBusinessId()
     const { data, error } = await sb
       .from('appointments')
-      .select('id, lead_id, lead_name, lead_company, type, scheduled_at, status, notes')
-      .eq('lead_id', leadId)
+      .select('id, business_id, client_id, lead_id, lead_name, lead_company, type, scheduled_at, status, notes, created_at')
+      .eq('business_id', clientId)
       .order('scheduled_at', { ascending: true })
 
     if (error) {
-      console.error('[GET /api/appointments] error:', error.message, '| lead_id:', leadId)
+      console.error('[GET /api/appointments] session query error:', error.message, '| clientId:', clientId)
       return NextResponse.json({ appointments: [] })
     }
 
-    return NextResponse.json({ appointments: data ?? [] })
+    const rows = data ?? []
+    console.log('APPOINTMENTS RETURNED', rows.map(r => ({
+      id:           r.id,
+      lead_name:    r.lead_name,
+      scheduled_at: r.scheduled_at,
+      business_id:  (r as Record<string, unknown>).business_id,
+      client_id:    (r as Record<string, unknown>).client_id,
+    })))
+    return NextResponse.json({ appointments: rows })
   } catch (err) {
     console.error('[GET /api/appointments] unexpected error:', err)
     return NextResponse.json({ appointments: [] })

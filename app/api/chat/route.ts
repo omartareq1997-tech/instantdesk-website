@@ -32,6 +32,7 @@ import OpenAI from 'openai'
 import { createAdminClient } from '../../lib/supabase-server'
 import { logEvent } from '../_lib/logEvent'
 import { getSessionBusinessId } from '../../lib/getSessionBusinessId'
+import { scheduleFollowUps } from '../../lib/scheduleFollowUps'
 
 /* ════════════════════════════════════════════════════════════════════════════
    TYPES
@@ -409,15 +410,19 @@ function hasEnoughForBooking(confirmed: Slots): boolean {
 ═══════════════════════════════════════════════════════════════════════════ */
 
 function buildSystemPrompt(
-  agent:    AgentRow,
+  agent:     AgentRow,
   knowledge: KnowledgeRow[],
   confirmed: Slots,
   missing:   SlotDef[],
 ): string {
+  // ── Knowledge block ──────────────────────────────────────────────────────
   const knowledgeBlock = knowledge.length > 0
     ? knowledge.map(k => `### ${k.title}\n${k.content}`).join('\n\n')
     : 'No additional knowledge configured.'
 
+  // ── Already-collected block — driven entirely by confirmed slot values ───
+  // Slots come from the lead DB row (authoritative) + deterministic extraction
+  // over all prior messages. Nothing is assumed — only DB-confirmed values appear.
   const confirmedLines: string[] = []
   if (confirmed.name)          confirmedLines.push(`  ✓ Name: ${confirmed.name}`)
   if (confirmed.phone)         confirmedLines.push(`  ✓ Phone: ${confirmed.phone}`)
@@ -431,37 +436,45 @@ function buildSystemPrompt(
   if (confirmed.viewing_time)  confirmedLines.push(`  ✓ Preferred viewing time: ${confirmed.viewing_time}`)
 
   const confirmedBlock = confirmedLines.length > 0
-    ? `CONFIRMED INFORMATION (DO NOT ask about any of these):\n${confirmedLines.join('\n')}`
-    : `CONFIRMED INFORMATION: Nothing yet — greet and begin qualifying.`
+    ? `ALREADY COLLECTED — NEVER ask for any of these again:\n${confirmedLines.join('\n')}`
+    : `ALREADY COLLECTED: Nothing yet — greet the visitor and begin qualifying.`
 
-  const missingBlock = missing.length > 0
-    ? `MISSING INFORMATION (ask for these ONE AT A TIME, in this priority order):\n${missing.map(d => `  ○ ${d.label}`).join('\n')}`
-    : `MISSING INFORMATION: None — all key information collected. Confirm and offer to book.`
+  // ── Missing-fields block — first item is the EXACT next question to ask ──
+  let missingBlock: string
+  if (missing.length === 0) {
+    missingBlock = `NEXT ACTION: All required fields are collected. Summarise what you know, confirm it with the visitor, and offer to proceed or schedule a next step.`
+  } else {
+    const [next, ...rest] = missing
+    const nextLine  = `  → ASK THIS NOW: ${next.label}\n     Use this phrasing (adapt naturally): "${next.question}"`
+    const restLines = rest.map(d => `  ○ ${d.label}${d.required ? ' (required)' : ' (optional)'}`).join('\n')
+    missingBlock    = `MISSING FIELDS — collect in this order:\n${nextLine}${rest.length ? '\n\nStill needed after that:\n' + restLines : ''}`
+  }
 
-  return `You are ${agent.name}, a professional real estate sales assistant.
+  // ── Full prompt — persona/objective/tone come 100% from the agents table ─
+  return `${agent.persona}
 
-PERSONA: ${agent.persona}
-OBJECTIVE: ${agent.objective}
+YOUR OBJECTIVE: ${agent.objective}
 TONE: ${agent.tone}
 
 KNOWLEDGE BASE:
 ${knowledgeBlock}
 
+---
+
 ${confirmedBlock}
 
 ${missingBlock}
 
-STRICT RULES — MUST FOLLOW:
-1. ABSOLUTE: Never ask for any item in CONFIRMED INFORMATION. This is non-negotiable.
-2. Ask for ONE item from MISSING INFORMATION per message.
-3. Acknowledge what the visitor just said, then ask the next question.
-4. Keep replies short: 2–4 sentences.
-5. Be warm and natural — like a professional sales rep.
-6. If the visitor mentions city/area/budget/rooms in their message, acknowledge it and move on.
-7. NEVER repeat a question from the previous assistant message.
-8. If asked something outside your knowledge base: ${agent.fallback_msg}
+---
 
-Your reply is plain conversational text only. No JSON, no lists.`
+RULES (absolute — follow without exception):
+1. NEVER ask for any field in ALREADY COLLECTED. It is confirmed. Do not re-confirm it.
+2. Your next question MUST be the field marked "→ ASK THIS NOW". Ask exactly one field per reply.
+3. Briefly acknowledge what the visitor just said, then ask the next field naturally.
+4. Keep your reply to 2–4 sentences. Be concise and warm.
+5. If the visitor volunteers information that matches a missing field, capture it — then ask the NEXT missing field.
+6. If asked something outside your knowledge base: ${agent.fallback_msg || 'Politely explain you cannot help with that and redirect to your objective.'}
+7. Reply in plain conversational text only. No JSON, no bullet lists, no numbered lists.`
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -739,6 +752,19 @@ export async function POST(req: NextRequest) {
     console.log('PERSIST IDS', { resolvedClientId: clientId, resolvedBusinessId: businessId, bodyBusinessId: business_id, fallbackUsed })
     const bResult = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, 'qualified', bookingReply, message)
 
+    if (bResult.lead_id) {
+      void scheduleFollowUps(sb, {
+        businessId,
+        clientId:        clientId,
+        leadId:          bResult.lead_id,
+        leadName:        confirmed.name ?? undefined,
+        conversationId:  convId,
+        appointmentId:   bResult.appointment_id,
+        appointmentTime: bResult.appointment_scheduled_at,
+        isHotLead:       !!(confirmed.name && (confirmed.phone || confirmed.email)),
+      })
+    }
+
     return NextResponse.json({
       reply:                    bookingReply,
       conversation_id:          convId,
@@ -807,7 +833,21 @@ export async function POST(req: NextRequest) {
     }).catch(e => console.warn('[POST /api/chat] webhook error:', e))
   }
 
-  /* 15. Return ─────────────────────────────────────────────────────────────── */
+  /* 15. Schedule AI follow-ups (fire-and-forget) ───────────────────────── */
+  if (resolvedLeadId) {
+    void scheduleFollowUps(sb, {
+      businessId,
+      clientId:        clientId,
+      leadId:          resolvedLeadId,
+      leadName:        confirmed.name ?? undefined,
+      conversationId:  convId,
+      appointmentId:   persist.appointment_id,
+      appointmentTime: persist.appointment_scheduled_at ?? null,
+      isHotLead:       !!(confirmed.name && (confirmed.phone || confirmed.email)),
+    })
+  }
+
+  /* 16. Return ─────────────────────────────────────────────────────────────── */
   const response: Record<string, unknown> = {
     reply:                    finalReply,
     conversation_id:          convId,
@@ -928,6 +968,7 @@ async function persistLead(
   insert_error:             string | null
   appointment_id:           string | null
   appointment_insert_error: string | null
+  appointment_scheduled_at: string | null
 }> {
   console.log('PERSIST IDS', { resolvedClientId: clientId, resolvedBusinessId: businessId })
 
@@ -1025,8 +1066,9 @@ async function persistLead(
   }
 
   // ── Create appointment if booking intent or viewing_time captured ──────────
-  let appointmentId:           string | null = null
-  let appointmentInsertError:  string | null = null
+  let appointmentId:            string | null = null
+  let appointmentInsertError:   string | null = null
+  let appointmentScheduledAt:   string | null = null
 
   const shouldBook = !!(confirmed.viewing_time || (detectBookingIntent(message) && hasEnoughForBooking(confirmed)))
 
@@ -1041,6 +1083,7 @@ async function persistLead(
       appointmentId = existingAppt.id as string
     } else {
       const scheduledAt  = parseViewingTime(confirmed.viewing_time)
+        appointmentScheduledAt = scheduledAt.toISOString()
       const leadFullName = confirmed.name ?? 'Website Visitor'
       // Match exact schema used by the manual Add Appointment modal (appointments/route.ts).
       // Do NOT include `notes` — the column is optional and may not exist on older schemas.
@@ -1086,6 +1129,7 @@ async function persistLead(
     lead_id:                  resolvedLeadId,
     insert_error:             insertError,
     appointment_id:           appointmentId,
+    appointment_scheduled_at: appointmentScheduledAt,
     appointment_insert_error: appointmentInsertError,
   }
 }

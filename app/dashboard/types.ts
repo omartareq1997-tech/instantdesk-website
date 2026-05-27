@@ -38,6 +38,7 @@ export interface Lead {
   status: LeadStatus
   date: string
   auto: AutoState
+  conversation_id?: string | null
   /** Niche-specific custom fields sent by Make — stored as JSONB in leads.metadata */
   metadata?: Record<string, unknown>
 }

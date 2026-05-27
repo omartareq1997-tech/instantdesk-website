@@ -10,9 +10,10 @@ import {
   DollarSign, Timer, Menu, ChevronLeft, ChevronRight, ChevronDown, LineChart, BellDot,
   MessageSquare, SlidersHorizontal, Volume2, VolumeX, ArrowUpDown, Plus,
   History, ScrollText, Undo2, Pencil, Trash2, CalendarPlus, MoveRight,
-  UserPlus, Copy, Check, UserCog, Crown, Eye, Bot,
+  UserPlus, Copy, Check, UserCog, Crown, Eye, Bot, BookOpen, FlaskConical, Brain,
 } from 'lucide-react'
 import LeadPanel from './LeadPanel'
+import AIAgentSection from './AIAgentSection'
 import AddLeadModal from './AddLeadModal'
 import AddAppointmentModal from './AddAppointmentModal'
 import AnalyticsSection from './AnalyticsSection'
@@ -25,6 +26,7 @@ import { getPermissions, type Permissions } from '../lib/permissions'
 /* ─── Types ──────────────────────────────────────────────────── */
 
 type Section      = 'overview' | 'analytics' | 'pipeline' | 'activity' | 'appointments' | 'automation' | 'settings' | 'log' | 'team'
+                  | 'ai_overview' | 'ai_instructions' | 'ai_knowledge' | 'ai_qualification' | 'ai_test'
 type LeadStatus   = 'new' | 'contacted' | 'demo_booked' | 'won' | 'lost'
 type ScoreLabel   = 'hot' | 'warm' | 'cold'
 type ApptStatus   = 'confirmed' | 'pending' | 'completed' | 'cancelled'
@@ -41,6 +43,7 @@ interface Lead {
   source: string; interest: string
   assignedAgent: string; score: number; scoreLabel: ScoreLabel; status: LeadStatus
   date: string; auto: AutoState; metadata?: Record<string, unknown>
+  conversation_id?: string | null
 }
 interface ActivityItem { id: string; type: ActivityType; text: string; sub: string; time: string; live?: boolean }
 interface Appointment { id: string; name: string; company: string; type: string; date: string; time: string; status: ApptStatus; upcoming: boolean; leadId?: string; notes?: string }
@@ -139,6 +142,14 @@ const NAV_ITEMS: {id:Section; label:string; Icon:React.ComponentType<{className?
   { id:'settings',     label:'Settings',      Icon:Settings                 },
 ]
 
+const AI_NAV_ITEMS: {id:Section; label:string; Icon:React.ComponentType<{className?:string}>}[] = [
+  { id:'ai_overview',      label:'AI Overview',        Icon:Bot          },
+  { id:'ai_instructions',  label:'AI Instructions',    Icon:Brain        },
+  { id:'ai_knowledge',     label:'Knowledge Base',     Icon:BookOpen     },
+  { id:'ai_qualification', label:'Lead Qualification', Icon:Target       },
+  { id:'ai_test',          label:'Test AI',            Icon:FlaskConical },
+]
+
 const SECTION_META: Record<Section,{title:string;sub:string}> = {
   overview:     { title:'Overview',       sub:'Performance snapshot and live activity'                },
   analytics:    { title:'Analytics',      sub:'Conversation metrics and conversion data'              },
@@ -147,8 +158,13 @@ const SECTION_META: Record<Section,{title:string;sub:string}> = {
   appointments: { title:'Appointments',   sub:'Weekly schedule and upcoming bookings'                 },
   log:          { title:'Audit Log',      sub:'Full history of every action — click Undo to reverse'  },
   team:         { title:'Team',           sub:'Members, roles and lead assignments'                   },
-  automation:   { title:'Automation',     sub:'Make.com scenario control center — configure, monitor and log'  },
-  settings:     { title:'Settings',       sub:'Account and portal configuration'                     },
+  automation:        { title:'Automation',         sub:'Make.com scenario control center — configure, monitor and log'  },
+  settings:          { title:'Settings',           sub:'Account and portal configuration'                               },
+  ai_overview:       { title:'AI Overview',        sub:'Agent status, metrics and quick actions'                        },
+  ai_instructions:   { title:'AI Instructions',    sub:'Persona, tone, creativity and fallback settings'                },
+  ai_knowledge:      { title:'Knowledge Base',     sub:'Documents and URLs that train your AI agent'                    },
+  ai_qualification:  { title:'Lead Qualification', sub:'Required fields, scoring thresholds and booking triggers'       },
+  ai_test:           { title:'Test AI',            sub:'Live chat simulator with slot extraction debug panels'          },
 }
 
 /* ─── Helpers ────────────────────────────────────────────────── */
@@ -391,6 +407,32 @@ function Sidebar({ active, onNav, open, onClose, badges = {} }: {
                       {badge}
                     </span>
                   )}
+                </button>
+              </div>
+            )
+          })}
+
+          {/* AI Agent group */}
+          <div className="mx-1 mt-3 mb-1 flex items-center gap-2">
+            <div className="flex-1 h-px" style={{ background:'rgba(255,255,255,0.07)' }} />
+            <span className="text-[9px] font-bold tracking-[0.15em] uppercase"
+              style={{ color:'rgba(167,139,250,0.5)' }}>AI Agent</span>
+            <div className="flex-1 h-px" style={{ background:'rgba(255,255,255,0.07)' }} />
+          </div>
+
+          {AI_NAV_ITEMS.map(item => {
+            const isActive = active === item.id
+            return (
+              <div key={item.id} className="relative">
+                {isActive && (
+                  <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full"
+                    style={{ background:'linear-gradient(180deg,#a78bfa,#7c3aed)' }} />
+                )}
+                <button onClick={() => { onNav(item.id); onClose() }}
+                  className="flex items-center gap-3 w-full pl-4 pr-3 py-2 rounded-xl text-sm font-medium transition-all duration-150"
+                  style={isActive ? { background:'rgba(167,139,250,0.10)', color:'#c4b5fd' } : { color:'rgba(255,255,255,0.35)' }}>
+                  <item.Icon className="w-4 h-4 flex-shrink-0" />
+                  <span className="flex-1 text-left text-[13px]">{item.label}</span>
                 </button>
               </div>
             )
@@ -1371,13 +1413,13 @@ interface RawLeadRow {
   updated_at?: string
 }
 interface RawActivityRow {
-  id: string; client_id: string; lead_id: string | null
+  id: string; business_id?: string; lead_id: string | null
   type: string; title: string; description: string | null; created_at: string
 }
 interface RawAppointmentRow {
-  id: string; client_id: string; lead_id: string | null
-  lead_name: string | null; lead_company: string | null
-  type: string; scheduled_at: string; status: string; created_at: string
+  id: string; business_id?: string; client_id?: string; lead_id: string | null
+  lead_name: string | null; lead_company?: string | null
+  type?: string; scheduled_at: string; status: string; created_at: string
   notes?: string | null
 }
 
@@ -1385,19 +1427,20 @@ interface RawAppointmentRow {
 
 function mapLeadRow(r: RawLeadRow): Lead {
   return {
-    id:            r.id,
-    name:          r.name,
-    company:       r.company        ?? '',
-    email:         r.email          ?? undefined,
-    phone:         r.phone          ?? undefined,
-    source:        r.source         ?? 'website_chat',
-    interest:      r.interest       ?? '',
-    assignedAgent: r.assigned_agent ?? 'Unassigned',
-    score:         r.score          ?? 0,
-    scoreLabel:   (r.score_label    as ScoreLabel) ?? 'cold',
-    status:       (r.status         as LeadStatus) ?? 'new',
-    date:          r.created_at,
-    metadata:      r.metadata       ?? undefined,
+    id:              r.id,
+    name:            r.name,
+    company:         r.company        ?? '',
+    email:           r.email          ?? undefined,
+    phone:           r.phone          ?? undefined,
+    source:          r.source         ?? 'website_chat',
+    interest:        r.interest       ?? '',
+    assignedAgent:   r.assigned_agent ?? 'Unassigned',
+    score:           r.score          ?? 0,
+    scoreLabel:     (r.score_label    as ScoreLabel) ?? 'cold',
+    status:         (r.status         as LeadStatus) ?? 'new',
+    date:            r.created_at,
+    conversation_id: r.conversation_id ?? null,
+    metadata:        r.metadata       ?? undefined,
     auto: {
       aiSms:       (r.ai_sms       as AutoState['aiSms'])       ?? 'off',
       emailSeq:    (r.email_seq    as AutoState['emailSeq'])    ?? 'not_started',
@@ -1419,7 +1462,7 @@ function mapAppointmentRow(r: RawAppointmentRow): Appointment {
     id:       r.id,
     name:     r.lead_name    ?? 'Unknown',
     company:  r.lead_company ?? '',
-    type:     r.type.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase()),
+    type:     (r.type ?? 'viewing').replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase()),
     date:     dt.toISOString().split('T')[0],
     time:     dt.toTimeString().slice(0, 5),
     status:  (r.status as ApptStatus) ?? 'pending',
@@ -3255,6 +3298,7 @@ function TeamSection({
 
 const VALID_SECTIONS = new Set<string>([
   'overview','analytics','pipeline','activity','appointments','log','team','automation','settings',
+  'ai_overview','ai_instructions','ai_knowledge','ai_qualification','ai_test',
 ])
 
 function getInitialSectionFromHash(): Section {
@@ -3282,9 +3326,10 @@ export default function ClientDashboard({
   const [soundEnabled,   setSoundEnabled]   = useState(false)
 
   // Refs so realtime callbacks (closed over stale state) always see current values
-  const soundEnabledRef  = useRef(false)
-  soundEnabledRef.current = soundEnabled
-  const hintShownRef = useRef(false)  // show the "enable sound" hint only once per session
+  const soundEnabledRef     = useRef(false)
+  soundEnabledRef.current   = soundEnabled
+  const hintShownRef        = useRef(false)
+  const scrollContainerRef  = useRef<HTMLDivElement>(null)
 
   // ── Live state (seeded from SSR, then kept fresh by Supabase Realtime)
   const [leads, setLeads] = useState<Lead[]>(() =>
@@ -3448,27 +3493,38 @@ export default function ClientDashboard({
 
   // ── Supabase Realtime subscriptions ──────────────────────────
   useEffect(() => {
-    // Business ID for the AI chat widget — leads use business_id column.
-    // Other tables (conversations, messages, appointments) use client_id with the same value.
-    const CLIENT_ID = '0616a47a-2c01-49ce-a798-385f8276b92b'
+    const BUSINESS_ID = '0616a47a-2c01-49ce-a798-385f8276b92b'
 
-    const channel = supabase
-      .channel('dashboard-live')
+    // ── Dedicated leads channel — isolated so other broken subscriptions
+    //    cannot poison this channel and prevent lead events from arriving.
+    //    Server-side filter: only events for this business_id reach the client.
+    //    Requires: ALTER PUBLICATION supabase_realtime ADD TABLE leads;
+    const leadsChannel = supabase
+      .channel('leads-live')
 
-      // ── leads: INSERT → prepend + toast + sound + browser notif
       .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'leads', filter: `business_id=eq.${CLIENT_ID}` },
+        { event: 'INSERT', schema: 'public', table: 'leads' },
         (payload) => {
-          const lead = mapLeadRow(payload.new as RawLeadRow)
+          const row = payload.new as RawLeadRow
+          if (!row.business_id || row.business_id !== BUSINESS_ID) return
+          console.log('[Realtime] leads INSERT received:', payload.new)
+          const lead = mapLeadRow(row)
           // Guard against duplicate if optimistic update already added this lead
           setLeads(prev => prev.some(l => l.id === lead.id) ? prev : [lead, ...prev])
           setNewLeadIds(prev => new Set([...prev, lead.id]))
           setTimeout(() => setNewLeadIds(prev => { const s = new Set(prev); s.delete(lead.id); return s }), 4000)
+          setActivityFeed(prev => [{
+            id:   `live-lead-${lead.id}`,
+            type: 'sms' as ActivityType,
+            text: `New lead — ${lead.name}`,
+            sub:  `${lead.source} · AI chat`,
+            time: 'Just now',
+            live: true,
+          }, ...prev.map(i => ({ ...i, live: false })).slice(0, 14)])
 
           const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
           const badgeColor = lead.scoreLabel === 'hot' ? '#f87171' : lead.scoreLabel === 'warm' ? '#fb923c' : '#60a5fa'
 
-          // Toast
           setToasts(prev => [{
             id:         crypto.randomUUID(),
             type:       'lead',
@@ -3479,7 +3535,6 @@ export default function ClientDashboard({
             leadId:     lead.id,
           }, ...prev.slice(0, 3)])
 
-          // Bell panel
           setNotifs(prev => [{
             id:   crypto.randomUUID(),
             type: 'lead' as NotifType,
@@ -3489,12 +3544,10 @@ export default function ClientDashboard({
             time: 'Just now',
           }, ...prev.slice(0, 19)])
 
-          // Sound — only after user has clicked "Enable sound"
           if (soundEnabledRef.current) {
             playChime('lead alert')
           } else {
             console.log('[SOUND] blocked — sound alerts not enabled')
-            // Show the "enable sound" hint once per session
             if (!hintShownRef.current) {
               hintShownRef.current = true
               setToasts(prev => [{
@@ -3509,7 +3562,6 @@ export default function ClientDashboard({
             }
           }
 
-          // Browser notification
           sendBrowserNotif(
             `New lead — ${lead.name}`,
             `${lead.source} · ${cap(lead.scoreLabel)} · Score ${lead.score}`,
@@ -3517,33 +3569,67 @@ export default function ClientDashboard({
         }
       )
 
-      // ── leads: UPDATE → patch in-place (score, status, metadata, etc.)
       .on('postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'leads', filter: `business_id=eq.${CLIENT_ID}` },
+        { event: 'UPDATE', schema: 'public', table: 'leads' },
         (payload) => {
-          const updated = mapLeadRow(payload.new as RawLeadRow)
+          const row = payload.new as RawLeadRow
+          if (!row.business_id || row.business_id !== BUSINESS_ID) return
+          console.log('[Realtime] leads UPDATE received:', payload.new)
+          const updated = mapLeadRow(row)
           setLeads(prev => prev.map(l => l.id === updated.id ? updated : l))
         }
       )
 
+      .on('postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'leads' },
+        (payload) => {
+          const old = payload.old as { id?: string; business_id?: string }
+          if (!old?.id) return
+          if (old.business_id && old.business_id !== BUSINESS_ID) return
+          console.log('[Realtime] leads DELETE received:', old.id)
+          setLeads(prev => prev.filter(l => l.id !== old.id))
+          setAppointments(prev => prev.filter(a => a.leadId !== old.id))
+        }
+      )
+
+      .subscribe((status, err) => {
+        console.log('[Realtime] leads-live channel status:', status, err ?? '')
+      })
+
+    // ── Secondary channel for activity feed, appointments, messages, conversations.
+    //    No server-side filters — client-side business_id check instead.
+    //    (Server-side filters require those tables to be in the realtime publication.)
+    const channel = supabase
+      .channel('dashboard-live')
+
       // ── activity_events: INSERT → prepend to feed
       .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'activity_events', filter: `client_id=eq.${CLIENT_ID}` },
+        { event: 'INSERT', schema: 'public', table: 'activity_events' },
         (payload) => {
-          const item: ActivityItem = { ...mapActivityRow(payload.new as RawActivityRow), live: true }
+          const row = payload.new as RawActivityRow
+          if (row.business_id && row.business_id !== BUSINESS_ID) return
+          const item: ActivityItem = { ...mapActivityRow(row), live: true }
           setActivityFeed(prev => [item, ...prev.map(i => ({ ...i, live: false })).slice(0, 14)])
         }
       )
 
       // ── appointments: INSERT → update list + toast + bell notif
       .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'appointments', filter: `client_id=eq.${CLIENT_ID}` },
+        { event: 'INSERT', schema: 'public', table: 'appointments' },
         (payload) => {
-          const appt = mapAppointmentRow(payload.new as RawAppointmentRow)
-          // Guard against duplicate if optimistic update already added this appointment
+          const row = payload.new as RawAppointmentRow
+          if (row.business_id && row.business_id !== BUSINESS_ID) return
+          const appt = mapAppointmentRow(row)
           setAppointments(prev => prev.some(a => a.id === appt.id) ? prev : [...prev, appt])
+          setActivityFeed(prev => [{
+            id:   `live-appt-${appt.id}`,
+            type: 'appointment' as ActivityType,
+            text: `Appointment booked — ${appt.name}`,
+            sub:  `${appt.type} · ${appt.date} at ${appt.time}`,
+            time: 'Just now',
+            live: true,
+          }, ...prev.map(i => ({ ...i, live: false })).slice(0, 14)])
 
-          // Toast
           setToasts(prev => [{
             id:         crypto.randomUUID(),
             type:       'appointment',
@@ -3554,7 +3640,6 @@ export default function ClientDashboard({
             leadId:     appt.leadId,
           }, ...prev.slice(0, 3)])
 
-          // Bell panel
           setNotifs(prev => [{
             id:   crypto.randomUUID(),
             type: 'booking' as NotifType,
@@ -3564,50 +3649,40 @@ export default function ClientDashboard({
             time: 'Just now',
           }, ...prev.slice(0, 19)])
 
-          // Sound
           if (soundEnabledRef.current) playChime('appointment alert')
 
-          // Browser notification
           sendBrowserNotif(
             'Appointment booked',
             `${appt.name} · ${appt.type} · ${appt.date} at ${appt.time}`,
           )
         }
       )
+
       .on('postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'appointments', filter: `client_id=eq.${CLIENT_ID}` },
+        { event: 'UPDATE', schema: 'public', table: 'appointments' },
         (payload) => {
-          const updated = mapAppointmentRow(payload.new as RawAppointmentRow)
+          const row = payload.new as RawAppointmentRow
+          if (row.business_id && row.business_id !== BUSINESS_ID) return
+          const updated = mapAppointmentRow(row)
           setAppointments(prev => prev.map(a => a.id === updated.id ? updated : a))
         }
       )
 
-      // ── DELETE events (fires only when REPLICA IDENTITY FULL is set;
-      //    falls back to callback-based state updates from LeadPanel otherwise)
       .on('postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'leads', filter: `business_id=eq.${CLIENT_ID}` },
-        (payload) => {
-          const id = (payload.old as { id?: string })?.id
-          if (id) {
-            setLeads(prev => prev.filter(l => l.id !== id))
-            setAppointments(prev => prev.filter(a => a.leadId !== id))
-          }
-        }
-      )
-      .on('postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'appointments', filter: `client_id=eq.${CLIENT_ID}` },
+        { event: 'DELETE', schema: 'public', table: 'appointments' },
         (payload) => {
           const id = (payload.old as { id?: string })?.id
           if (id) setAppointments(prev => prev.filter(a => a.id !== id))
         }
       )
 
-      // ── messages: INSERT (ai role) → live activity feed entry
+      // ── messages: INSERT (assistant role) → live activity feed entry
       .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `client_id=eq.${CLIENT_ID}` },
+        { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
-          const row = payload.new as { id?: string; from_role?: string; content?: string; created_at?: string }
-          if (row.from_role !== 'ai') return
+          const row = payload.new as { id?: string; business_id?: string; role?: string; content?: string; created_at?: string }
+          if (row.business_id && row.business_id !== BUSINESS_ID) return
+          if (row.role !== 'assistant') return
           const content = row.content ?? ''
           const item: ActivityItem = {
             id:   `msg-${row.id ?? crypto.randomUUID()}`,
@@ -3623,9 +3698,10 @@ export default function ClientDashboard({
 
       // ── conversations: INSERT → live activity entry
       .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'conversations', filter: `client_id=eq.${CLIENT_ID}` },
+        { event: 'INSERT', schema: 'public', table: 'conversations' },
         (payload) => {
-          const row = payload.new as { id?: string; channel?: string; created_at?: string }
+          const row = payload.new as { id?: string; business_id?: string; channel?: string; created_at?: string }
+          if (row.business_id && row.business_id !== BUSINESS_ID) return
           const item: ActivityItem = {
             id:   `conv-${row.id ?? crypto.randomUUID()}`,
             type: 'chat',
@@ -3638,9 +3714,14 @@ export default function ClientDashboard({
         }
       )
 
-      .subscribe()
+      .subscribe((status, err) => {
+        console.log('[Realtime] dashboard-live channel status:', status, err ?? '')
+      })
 
-    return () => { supabase.removeChannel(channel) }
+    return () => {
+      supabase.removeChannel(leadsChannel)
+      supabase.removeChannel(channel)
+    }
   }, [])
 
   // ── Browser notification permission ──────────────────────────
@@ -3673,10 +3754,11 @@ export default function ClientDashboard({
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
 
-  // Navigate to a section and update the URL hash
+  // Navigate to a section, update the URL hash, and reset scroll position
   const handleNav = useCallback((s: Section) => {
     setSection(s)
     history.replaceState(null, '', `#${s}`)
+    scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'instant' })
   }, [])
 
   // Close sidebar on larger screens
@@ -3691,7 +3773,7 @@ export default function ClientDashboard({
     <div className="flex h-screen overflow-hidden" style={{ background:'#050510' }}>
       <Sidebar active={section} onNav={handleNav} open={sidebarOpen} onClose={() => setSidebarOpen(false)} badges={navBadges} />
 
-      <div className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
         {/* Sticky header */}
         <div className="sticky top-0 z-20 px-4 sm:px-8 py-4"
           style={{ background:'rgba(5,5,16,0.95)', backdropFilter:'blur(20px)', borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
@@ -3761,6 +3843,9 @@ export default function ClientDashboard({
                 } />}
                 {section==='automation'   && <AutomationCenter can={can} />}
                 {section==='settings'     && <SettingsSection />}
+                {(section==='ai_overview' || section==='ai_instructions' || section==='ai_knowledge' || section==='ai_qualification' || section==='ai_test') && (
+                  <AIAgentSection section={section} />
+                )}
               </motion.div>
             )}
           </AnimatePresence>

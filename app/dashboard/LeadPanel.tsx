@@ -28,6 +28,7 @@ interface Lead {
   source: string; interest: string; assignedAgent: string
   score: number; scoreLabel: ScoreLabel; status: LeadStatus; date: string
   auto: AutoState
+  conversation_id?: string | null
   metadata?: Record<string, unknown>
 }
 
@@ -881,13 +882,40 @@ export default function LeadPanel({
   const scoreCfg  = SCORE_CFG[lead.scoreLabel]
   const meta      = lead.metadata ?? {}
 
+  // Fresh appointments fetched directly from the DB for this lead.
+  // null = not yet fetched; [] = fetched with no results.
+  const [freshAppts, setFreshAppts] = useState<ApptSummary[] | null>(null)
+
+  const fetchFreshAppts = useCallback(() => {
+    fetch(`/api/appointments?lead_id=${encodeURIComponent(lead.id)}`)
+      .then(r => r.json())
+      .then((d: { appointments?: { id:string; lead_id?:string|null; lead_name?:string|null; lead_company?:string|null; type?:string; scheduled_at:string; status:string; notes?:string|null }[] }) => {
+        setFreshAppts((d.appointments ?? []).map(a => {
+          const dt = new Date(a.scheduled_at)
+          return {
+            id:      a.id,
+            type:    (a.type ?? 'viewing').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+            date:    dt.toISOString().split('T')[0],
+            time:    dt.toTimeString().slice(0, 5),
+            status:  a.status as ApptStatus,
+            name:    a.lead_name ?? '',
+            company: a.lead_company ?? '',
+            notes:   a.notes ?? undefined,
+            leadId:  lead.id,
+          }
+        }))
+      })
+      .catch(() => {})
+  }, [lead.id])
+
   // Filter, deduplicate, then sort appointments linked to this lead.
-  // Primary dedup key: id (UUID). Fallback: date+time+type composite.
-  const leadAppts = (() => {
+  // Merges freshly fetched rows (primary) with the parent prop (fallback / realtime).
+  const leadAppts = useMemo(() => {
+    const fromProp = (appointments ?? []).filter(a => a.leadId === lead.id)
+    const combined = freshAppts ? [...freshAppts, ...fromProp] : fromProp
     const seen = new Set<string>()
-    return (appointments ?? [])
+    return combined
       .filter(a => {
-        if (a.leadId !== lead.id) return false
         const key = a.id || `${a.date}|${a.time}|${a.type}`
         if (seen.has(key)) return false
         seen.add(key)
@@ -899,7 +927,7 @@ export default function LeadPanel({
         if (aA && !bA) return -1; if (!aA && bA) return 1
         return `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`)
       })
-  })()
+  }, [freshAppts, appointments, lead.id])
 
   /* ── Tab ───────────────────────────────────────────────────── */
   const [activeTab, setActiveTab] = useState<TabId>('overview')
@@ -911,10 +939,16 @@ export default function LeadPanel({
   const [convId,      setConvId]      = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
 
-  // Fetch messages on mount — never mutates state during render
+  // Fetch messages on mount — use conversation_id directly when available (fast path),
+  // fall back to lead_id lookup (legacy path for older leads without conversation_id).
   useEffect(() => {
     setConvLoading(true); setMessages([]); setChannelLabel(null); setConvId(null)
-    fetch(`/api/lead-messages?lead_id=${encodeURIComponent(lead.id)}`)
+
+    const url = lead.conversation_id
+      ? `/api/lead-messages?conversation_id=${encodeURIComponent(lead.conversation_id)}`
+      : `/api/lead-messages?lead_id=${encodeURIComponent(lead.id)}`
+
+    fetch(url)
       .then(r => r.json())
       .then((d: { messages?: ChatMessage[]; channel?: string | null; conversation_id?: string | null }) => {
         setMessages(d.messages ?? [])
@@ -923,7 +957,7 @@ export default function LeadPanel({
       })
       .catch(() => {})
       .finally(() => setConvLoading(false))
-  }, [lead.id])
+  }, [lead.id, lead.conversation_id])
 
   // Derive transcript from metadata — memoised pure computation, zero side-effects
   const rawText = useMemo<string | null>(() => {
@@ -941,9 +975,32 @@ export default function LeadPanel({
     [rawText],
   )
 
-  // DB messages take priority; fall back to parsed metadata transcript
-  const displayMessages = messages.length > 0 ? messages : parsedTranscript
+  // DB messages take priority; fall back to parsed metadata transcript.
+  // Always sort ascending by created_at so oldest appears at top, newest at bottom.
   const fromMetadata    = messages.length === 0 && parsedTranscript.length > 0
+  const displayMessages = useMemo(() => {
+    const base = messages.length > 0 ? messages : parsedTranscript
+    // Sort rules (strictly ascending):
+    //   1. No created_at on both  → preserve original array position (keeps transcript order)
+    //   2. One missing            → missing floats to top
+    //   3. Different timestamps   → earlier first (ASC)
+    //   4. Same timestamp         → 'user' before 'ai'/'agent', then original position
+    return base
+      .map((msg, idx) => ({ msg, idx }))
+      .sort(({ msg: a, idx: ia }, { msg: b, idx: ib }) => {
+        const noA = !a.created_at
+        const noB = !b.created_at
+        if (noA && noB) return ia - ib
+        if (noA) return -1
+        if (noB) return 1
+        const cmp = a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0
+        if (cmp !== 0) return cmp
+        if (a.from === 'user' && b.from !== 'user') return -1
+        if (b.from === 'user' && a.from !== 'user') return 1
+        return ia - ib
+      })
+      .map(({ msg }) => msg)
+  }, [messages, parsedTranscript])
 
   // Auto-scroll to newest message when the conversation tab is open
   useEffect(() => {
@@ -960,10 +1017,10 @@ export default function LeadPanel({
       .on('postgres_changes',
         { event:'INSERT', schema:'public', table:'messages', filter:`conversation_id=eq.${convId}` },
         (payload) => {
-          const r = payload.new as { id:string; from_role:string; content:string; response_time_ms:number|null; created_at:string }
+          const r = payload.new as { id:string; role:string; content:string; created_at:string }
           setMessages(prev => [...prev, {
-            id: r.id, from: r.from_role as FromRole,
-            content: r.content, response_time_ms: r.response_time_ms, created_at: r.created_at,
+            id: r.id, from: (r.role === 'assistant' ? 'ai' : r.role) as FromRole,
+            content: r.content, response_time_ms: null, created_at: r.created_at,
           }])
         }
       )
@@ -1094,11 +1151,12 @@ export default function LeadPanel({
           type: apptType, scheduled_at, status: 'pending',
         }),
       })
+      fetchFreshAppts()
       setApptSaved(true)
       setTimeout(() => { setApptSaved(false); setShowApptForm(false) }, 2000)
     } catch { /* no-op */ }
     setSavingAppt(false)
-  }, [apptDate, apptTime, apptType, lead])
+  }, [apptDate, apptTime, apptType, lead, fetchFreshAppts])
 
   /* ── Delete lead ───────────────────────────────────────────── */
   const deleteLead = useCallback(async () => {
@@ -1171,10 +1229,11 @@ export default function LeadPanel({
         notes:  a.notes  ?? undefined,
         leadId: a.lead_id ?? lead.id,
       })
+      fetchFreshAppts()
       setEditingApptId(null)
     } catch { /* stay in edit mode */ }
     setSavingApptEdit(false)
-  }, [editingApptId, apptEditDate, apptEditTime, apptEditType, apptEditStatus, apptEditNotes, lead, onApptUpdated])
+  }, [editingApptId, apptEditDate, apptEditTime, apptEditType, apptEditStatus, apptEditNotes, lead, onApptUpdated, fetchFreshAppts])
 
   const deleteAppt = useCallback(async (apptId: string) => {
     setDeletingApptId(apptId)
@@ -1182,9 +1241,13 @@ export default function LeadPanel({
       const res = await fetch(`/api/appointments/${apptId}`, { method: 'DELETE', headers: { 'X-Actor-Name': actorName } })
       if (!res.ok) throw new Error('delete failed')
       onApptDeleted?.(apptId)
+      fetchFreshAppts()
     } catch { /* no-op */ }
     setDeletingApptId(null)
-  }, [onApptDeleted])
+  }, [onApptDeleted, fetchFreshAppts])
+
+  // Fetch fresh appointments for this lead on mount.
+  useEffect(() => { fetchFreshAppts() }, [fetchFreshAppts])
 
   /* ── Scroll + ESC ──────────────────────────────────────────── */
   useEffect(() => {
@@ -1656,11 +1719,10 @@ export default function LeadPanel({
               {convLoading ? (
                 <ConvSkeleton />
               ) : displayMessages.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 gap-2 rounded-2xl"
+                <div className="flex flex-col items-center justify-center py-12 gap-3 rounded-2xl"
                   style={{ background:'rgba(255,255,255,0.02)', border:'1px dashed rgba(255,255,255,0.07)' }}>
                   <MessageCircle className="w-7 h-7 text-white/10" />
-                  <p className="text-sm text-white/25 font-medium">No conversation recorded</p>
-                  <p className="text-xs text-white/15">Messages appear once the lead chats</p>
+                  <p className="text-sm text-white/25 font-medium">No messages saved for this conversation</p>
                 </div>
               ) : (
                 <ChatBubbles messages={displayMessages} endRef={messagesEndRef} />

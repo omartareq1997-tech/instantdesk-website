@@ -1,19 +1,20 @@
 /**
- * GET  /api/automations — list all automation settings for the client,
+ * GET  /api/automations — list all automation settings for the business,
  *                         with aggregated last_run / success / failure counts.
  *                         Returns defaults for any presets not yet saved.
  * POST /api/automations — upsert a full automation setting row.
  *
- * Architecture:
- *   InstantDesk stores configuration here.
- *   Make.com reads these settings from Supabase before executing each scenario.
- *   Make.com writes execution results to automation_logs.
+ * automation_logs real columns:
+ *   id, business_id, conversation_id, lead_id, event_type (NOT NULL),
+ *   payload, success (bool), error_message, created_at
+ *
+ * automation_settings: may or may not exist — handled gracefully (42P01).
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../lib/supabase-server'
 
-const CLIENT_ID = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
+const BUSINESS_ID = process.env.BUSINESS_ID ?? '0616a47a-2c01-49ce-a798-385f8276b92b'
 
 export type AutomationType =
   | 'missed_lead_recovery'
@@ -75,11 +76,11 @@ export async function GET() {
   try {
     const sb = createAdminClient()
 
-    // Fetch saved settings
+    // Fetch saved settings (table may not exist yet)
     const { data: rows, error: settingsErr } = await sb
       .from('automation_settings')
       .select('*')
-      .eq('client_id', CLIENT_ID)
+      .eq('business_id', BUSINESS_ID)
 
     if (settingsErr && settingsErr.code !== '42P01') throw settingsErr
 
@@ -87,25 +88,25 @@ export async function GET() {
       (rows ?? []).map(r => [r.automation_type as string, r as Record<string, unknown>])
     )
 
-    // Fetch aggregated log stats per type
+    // Fetch aggregated log stats per event_type (real columns: event_type, success)
     const { data: logRows, error: logErr } = await sb
       .from('automation_logs')
-      .select('automation_type, status, created_at')
-      .eq('client_id', CLIENT_ID)
+      .select('event_type, success, created_at')
+      .eq('business_id', BUSINESS_ID)
       .order('created_at', { ascending: false })
       .limit(1000)
 
     if (logErr && logErr.code !== '42P01') throw logErr
 
-    // Aggregate stats per type
+    // Aggregate stats per event_type
     type Stats = { last_run: string | null; success_count: number; failure_count: number }
     const statsMap = new Map<string, Stats>()
     for (const log of (logRows ?? [])) {
-      const t = log.automation_type as string
+      const t = log.event_type as string
       const s = statsMap.get(t) ?? { last_run: null, success_count: 0, failure_count: 0 }
       if (!s.last_run) s.last_run = log.created_at as string
-      if (log.status === 'success') s.success_count++
-      else if (log.status === 'failure') s.failure_count++
+      if (log.success === true)  s.success_count++
+      if (log.success === false) s.failure_count++
       statsMap.set(t, s)
     }
 
@@ -116,7 +117,7 @@ export async function GET() {
       const stats = statsMap.get(type) ?? { last_run: null, success_count: 0, failure_count: 0 }
       return {
         id:               (saved?.id as string | undefined) ?? null,
-        client_id:        CLIENT_ID,
+        business_id:      BUSINESS_ID,
         automation_type:  type,
         enabled:          saved ? (saved.enabled as boolean) : def.enabled,
         channel:          (saved?.channel as string | undefined) ?? def.channel,
@@ -147,8 +148,8 @@ export async function POST(req: NextRequest) {
     }
 
     const sb = createAdminClient()
-    const payload = {
-      client_id:        CLIENT_ID,
+    const upsertPayload = {
+      business_id:      BUSINESS_ID,
       automation_type:  type,
       enabled:          typeof body.enabled          === 'boolean' ? body.enabled          : false,
       channel:          typeof body.channel          === 'string'  ? body.channel          : 'whatsapp',
@@ -160,12 +161,13 @@ export async function POST(req: NextRequest) {
 
     const { data, error } = await sb
       .from('automation_settings')
-      .upsert(payload, { onConflict: 'client_id,automation_type' })
+      .upsert(upsertPayload, { onConflict: 'business_id,automation_type' })
       .select('*')
       .single()
 
     if (error) {
-      if (error.code === '42P01') return NextResponse.json({ error: 'Run sql/create_automation_tables.sql first.' }, { status: 503 })
+      console.error('[POST /api/automations]', error)
+      if (error.code === '42P01') return NextResponse.json({ error: 'automation_settings table not found.' }, { status: 503 })
       throw error
     }
 

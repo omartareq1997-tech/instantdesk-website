@@ -206,6 +206,8 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
 export async function DELETE(req: NextRequest, { params }: Ctx) {
   const { id } = await params
+  console.log(`[deleteLead] deleting lead id: ${id}`)
+
   try {
     const { role } = await getActorRole(req)
     if (!getPermissions(role).canDeleteLead) {
@@ -214,72 +216,88 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
 
     const sb = createAdminClient()
 
-    // Capture full snapshot before any deletions
-    const { data: leadSnap }  = await sb.from('leads').select('*').eq('id', id).single()
+    // 1. Fetch the lead to get conversation_id and business_id.
+    //    The live schema stores the link on leads.conversation_id, not conversations.lead_id.
+    const { data: lead, error: fetchErr } = await sb
+      .from('leads')
+      .select('id, name, conversation_id, business_id')
+      .eq('id', id)
+      .maybeSingle()
+
+    if (fetchErr) {
+      console.error(`[deleteLead] fetch lead error:`, fetchErr)
+      return NextResponse.json({ error: fetchErr.message, code: fetchErr.code, step: 'fetch_lead' }, { status: 500 })
+    }
+    if (!lead) {
+      console.warn(`[deleteLead] lead not found: ${id}`)
+      return NextResponse.json({ error: 'Lead not found' }, { status: 404 })
+    }
+    console.log(`[deleteLead] lead found: "${lead.name}" | conversation_id: ${lead.conversation_id ?? 'none'} | business_id: ${lead.business_id ?? 'none'}`)
+
+    const convId: string | null = (lead.conversation_id as string | null) ?? null
+
+    // Snapshot appointments for the undo log (best-effort, non-blocking)
     const { data: apptSnaps } = await sb.from('appointments').select('*').eq('lead_id', id)
 
-    // 1. Nullify lead_id on activity_events so they survive the lead deletion
-    //    (audit history is permanent — NEVER delete it)
-    await sb.from('activity_events').update({ lead_id: null }).eq('lead_id', id)
-
-    // 2. Delete appointments linked to this lead
-    const { error: apptErr } = await sb
-      .from('appointments')
-      .delete()
-      .eq('lead_id', id)
-    if (apptErr) throw apptErr
-
-    // 3. Get conversation IDs for this lead, then delete their messages
-    const { data: convos, error: convoFetchErr } = await sb
-      .from('conversations')
-      .select('id')
-      .eq('lead_id', id)
-    if (convoFetchErr) throw convoFetchErr
-
-    if (convos && convos.length > 0) {
-      const convoIds = convos.map((c: { id: string }) => c.id)
-      const { error: msgErr } = await sb
-        .from('messages')
-        .delete()
-        .in('conversation_id', convoIds)
-      if (msgErr) throw msgErr
-
-      const { error: convoDelErr } = await sb
-        .from('conversations')
-        .delete()
-        .in('id', convoIds)
-      if (convoDelErr) throw convoDelErr
+    // 2. Nullify lead_id on activity_events (audit history is permanent — never delete it).
+    //    The FK is ON DELETE SET NULL so the DB handles this automatically, but we do it
+    //    explicitly first so the log row is already clean before the lead row is gone.
+    const aeUpd = await sb.from('activity_events').update({ lead_id: null }).eq('lead_id', id)
+    if (aeUpd.error) {
+      console.warn(`[deleteLead] activity_events nullify error (non-fatal):`, aeUpd.error.message)
     }
 
-    // 4. Delete the lead itself
-    const { error: leadErr } = await sb
-      .from('leads')
-      .delete()
-      .eq('id', id)
-    if (leadErr) throw leadErr
-
-    if (leadSnap) {
-      void logEvent({
-        type:        'lead_deleted',
-        title:       `Lead deleted: ${leadSnap.name}`,
-        description: leadSnap.company || undefined,
-        leadId:      null,
-        meta: {
-          actor: ACTOR, undoable: true, entity_id: id, entity_type: 'lead',
-          entity_name: leadSnap.name,
-          undo_data: {
-            snapshot: {
-              lead:         leadSnap,
-              appointments: apptSnaps ?? [],
-            },
-          },
-        },
-      })
+    // 3. Delete appointments linked to this lead
+    const { error: apptErr } = await sb.from('appointments').delete().eq('lead_id', id)
+    if (apptErr) {
+      console.error(`[deleteLead] delete appointments error:`, apptErr.message, apptErr.code)
+      return NextResponse.json({ error: apptErr.message, code: apptErr.code, step: 'delete_appointments' }, { status: 500 })
     }
+    console.log(`[deleteLead] delete appointments ok`)
+
+    // 4. Delete messages then conversation, using leads.conversation_id (not conversations.lead_id)
+    if (convId) {
+      const { error: msgErr } = await sb.from('messages').delete().eq('conversation_id', convId)
+      if (msgErr) {
+        console.error(`[deleteLead] delete messages error:`, msgErr.message, msgErr.code)
+        return NextResponse.json({ error: msgErr.message, code: msgErr.code, step: 'delete_messages' }, { status: 500 })
+      }
+      console.log(`[deleteLead] delete messages ok`)
+
+      const { error: convErr } = await sb.from('conversations').delete().eq('id', convId)
+      if (convErr) {
+        console.error(`[deleteLead] delete conversation error:`, convErr.message, convErr.code)
+        return NextResponse.json({ error: convErr.message, code: convErr.code, step: 'delete_conversation' }, { status: 500 })
+      }
+      console.log(`[deleteLead] delete conversation ok`)
+    } else {
+      console.log(`[deleteLead] no conversation_id — skipping messages + conversation delete`)
+    }
+
+    // 5. Delete the lead itself
+    const { error: leadErr } = await sb.from('leads').delete().eq('id', id)
+    if (leadErr) {
+      console.error(`[deleteLead] delete lead error:`, leadErr.message, leadErr.code)
+      return NextResponse.json({ error: leadErr.message, code: leadErr.code, step: 'delete_lead' }, { status: 500 })
+    }
+    console.log(`[deleteLead] delete lead ok`)
+
+    void logEvent({
+      type:        'lead_deleted',
+      title:       `Lead deleted: ${lead.name}`,
+      description: undefined,
+      leadId:      null,
+      meta: {
+        actor: ACTOR, undoable: true, entity_id: id, entity_type: 'lead',
+        entity_name: lead.name as string,
+        undo_data: { snapshot: { lead, appointments: apptSnaps ?? [] } },
+      },
+    })
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error(`[DELETE /api/leads/${id}]`, err)
-    return NextResponse.json({ error: 'Failed to delete lead' }, { status: 500 })
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error(`[deleteLead] unexpected error:`, err)
+    return NextResponse.json({ error: msg, step: 'unexpected' }, { status: 500 })
   }
 }

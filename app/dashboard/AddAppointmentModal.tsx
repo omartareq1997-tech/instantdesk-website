@@ -90,11 +90,13 @@ export default function AddAppointmentModal({
       const dt = new Date(yr, (mo ?? 1) - 1, dy ?? 1, hr ?? 9, mn ?? 0, 0, 0)
       const scheduled_at = dt.toISOString()
 
-      const lead     = leads.find(l => l.id === selectedLeadId)
-      const clientId = process.env.NEXT_PUBLIC_DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
+      const lead       = leads.find(l => l.id === selectedLeadId)
+      const clientId   = process.env.NEXT_PUBLIC_DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
+      const businessId = process.env.NEXT_PUBLIC_BUSINESS_ID    ?? '0616a47a-2c01-49ce-a798-385f8276b92b'
 
       const payload = {
         client_id:    clientId,
+        business_id:  businessId,
         lead_id:      selectedLeadId,
         lead_name:    lead?.name    ?? '',
         lead_company: lead?.company ?? '',

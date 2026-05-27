@@ -1,7 +1,6 @@
 /**
- * POST /api/appointments
- * Create a manual appointment (from dashboard "New Appointment" form).
- * Uses service-role client — never call from browser code.
+ * GET  /api/appointments?lead_id=<uuid>  — fetch all appointments for a lead
+ * POST /api/appointments                 — create a manual appointment
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -11,9 +10,38 @@ import { getActorRole } from '../../lib/getActorRole'
 import { getPermissions } from '../../lib/permissions'
 
 const DEMO_CLIENT_ID = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
+const BUSINESS_ID    = process.env.BUSINESS_ID    ?? '0616a47a-2c01-49ce-a798-385f8276b92b'
 
 const VALID_STATUSES  = new Set(['confirmed', 'pending', 'completed', 'cancelled'])
 const VALID_TYPES     = new Set(['demo_call', 'discovery_call', 'onboarding', 'follow_up'])
+
+/* ── GET ──────────────────────────────────────────────────────────── */
+
+export async function GET(req: NextRequest) {
+  const leadId = req.nextUrl.searchParams.get('lead_id')
+  if (!leadId) return NextResponse.json({ appointments: [] })
+
+  try {
+    const sb = createAdminClient()
+    const { data, error } = await sb
+      .from('appointments')
+      .select('id, lead_id, lead_name, lead_company, type, scheduled_at, status, notes')
+      .eq('lead_id', leadId)
+      .order('scheduled_at', { ascending: true })
+
+    if (error) {
+      console.error('[GET /api/appointments] error:', error.message, '| lead_id:', leadId)
+      return NextResponse.json({ appointments: [] })
+    }
+
+    return NextResponse.json({ appointments: data ?? [] })
+  } catch (err) {
+    console.error('[GET /api/appointments] unexpected error:', err)
+    return NextResponse.json({ appointments: [] })
+  }
+}
+
+/* ── POST ─────────────────────────────────────────────────────────── */
 
 export async function POST(req: NextRequest) {
   try {
@@ -49,6 +77,7 @@ export async function POST(req: NextRequest) {
 
     const insertPayload: Record<string, unknown> = {
       client_id:    clientId,
+      business_id:  BUSINESS_ID,
       type,
       scheduled_at: scheduledAt,
       status,

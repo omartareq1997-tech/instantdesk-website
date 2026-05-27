@@ -223,14 +223,14 @@ interface LeadRow {
 }
 
 interface AppointmentRow {
-  id: string; client_id: string; lead_id: string | null
-  lead_name: string | null; lead_company: string | null
-  type: string; scheduled_at: string; status: string; created_at: string
-  notes?: string | null  // optional — requires: ALTER TABLE appointments ADD COLUMN notes TEXT;
+  id: string; business_id?: string; client_id?: string; lead_id: string | null
+  lead_name: string | null; lead_company?: string | null
+  type?: string; scheduled_at: string; status: string; created_at: string
+  notes?: string | null
 }
 
 interface ActivityRow {
-  id: string; client_id: string; lead_id: string | null
+  id: string; business_id?: string; lead_id: string | null
   type: string; title: string; description: string | null; created_at: string
 }
 
@@ -250,19 +250,20 @@ interface IntegrationStatusRow {
 
 function mapLead(r: LeadRow): Lead {
   return {
-    id:            r.id,
-    name:          r.name,
-    company:       r.company        ?? '',
-    email:         r.email          ?? undefined,
-    phone:         r.phone          ?? undefined,
-    source:        r.source         ?? 'website_chat',
-    interest:      r.interest       ?? '',
-    assignedAgent: r.assigned_agent ?? 'Unassigned',
-    score:         r.score          ?? 0,
-    scoreLabel:   (r.score_label    as ScoreLabel) ?? 'cold',
-    status:       (r.status         as LeadStatus) ?? 'new',
-    date:          r.created_at,
-    metadata:      r.metadata       ?? undefined,
+    id:              r.id,
+    name:            r.name,
+    company:         r.company        ?? '',
+    email:           r.email          ?? undefined,
+    phone:           r.phone          ?? undefined,
+    source:          r.source         ?? 'website_chat',
+    interest:        r.interest       ?? '',
+    assignedAgent:   r.assigned_agent ?? 'Unassigned',
+    score:           r.score          ?? 0,
+    scoreLabel:     (r.score_label    as ScoreLabel) ?? 'cold',
+    status:         (r.status         as LeadStatus) ?? 'new',
+    date:            r.created_at,
+    conversation_id: r.conversation_id ?? null,
+    metadata:        r.metadata       ?? undefined,
     auto: {
       aiSms:       (r.ai_sms       as AutoState['aiSms'])       ?? 'off',
       emailSeq:    (r.email_seq    as AutoState['emailSeq'])    ?? 'not_started',
@@ -274,19 +275,22 @@ function mapLead(r: LeadRow): Lead {
 }
 
 function mapAppointment(r: AppointmentRow): Appointment {
-  const dt = new Date(r.scheduled_at)
+  // scheduled_at is NOT NULL in schema but guard against null/invalid values at runtime
+  const raw = r.scheduled_at ?? ''
+  const dt  = raw ? new Date(raw) : new Date()
+  const validDt = !isNaN(dt.getTime()) ? dt : new Date()
   const today = new Date()
   return {
     id:       r.id,
     name:     r.lead_name    ?? 'Unknown',
     company:  r.lead_company ?? '',
-    type:     r.type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-    date:     dt.toISOString().split('T')[0],
-    time:     dt.toTimeString().slice(0, 5),
+    type:     (r.type ?? 'demo_call').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+    date:     validDt.toISOString().split('T')[0],
+    time:     validDt.toTimeString().slice(0, 5),
     status:  (r.status as ApptStatus) ?? 'pending',
-    upcoming: dt > today,
-    leadId:   r.lead_id  ?? undefined,
-    notes:    r.notes    ?? undefined,
+    upcoming: validDt > today,
+    leadId:   r.lead_id ?? undefined,
+    notes:    r.notes   ?? undefined,
   }
 }
 
@@ -359,7 +363,7 @@ export async function getClientConversations(clientId = DEMO_CLIENT_ID) {
     const { data, error } = await sb
       .from('conversations')
       .select('id, lead_id, channel, status, last_message_at, unread_count, created_at')
-      .eq('client_id', clientId)
+      .eq('business_id', clientId)
       .order('last_message_at', { ascending: false })
     if (error) throw error
     return data ?? []
@@ -376,7 +380,7 @@ export async function getClientMessages(conversationId: string) {
     const sb = createAdminClient()
     const { data, error } = await sb
       .from('messages')
-      .select('id, from_role, content, response_time_ms, created_at')
+      .select('id, role, content, created_at')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: true })
     if (error) throw error
@@ -395,12 +399,25 @@ export async function getClientAppointments(clientId = DEMO_CLIENT_ID): Promise<
     const sb = createAdminClient()
     const { data, error } = await sb
       .from('appointments')
-      .select('*')
-      .eq('client_id', clientId)
+      .select('id, business_id, client_id, lead_id, lead_name, lead_company, type, scheduled_at, status, created_at, notes')
+      .eq('business_id', clientId)
       .order('scheduled_at', { ascending: true })
-    if (error) throw error
-    return (data ?? []).map(r => mapAppointment(r as AppointmentRow))
-  } catch {
+    if (error) {
+      console.error('[getClientAppointments] query error:', error.message, error.code, '| business_id filter:', clientId)
+      return []
+    }
+    const rows = data ?? []
+    console.log('[getClientAppointments] rows returned:', rows.length, '| business_id:', clientId)
+    return rows.flatMap(r => {
+      try {
+        return [mapAppointment(r as AppointmentRow)]
+      } catch (mapErr) {
+        console.error('[getClientAppointments] mapAppointment failed for row:', r.id, mapErr)
+        return []
+      }
+    })
+  } catch (err) {
+    console.error('[getClientAppointments] unexpected error:', err)
     return []
   }
 }
@@ -415,7 +432,7 @@ export async function getClientActivityEvents(clientId = DEMO_CLIENT_ID): Promis
     const { data, error } = await sb
       .from('activity_events')
       .select('*')
-      .eq('client_id', clientId)
+      .eq('business_id', clientId)
       .order('created_at', { ascending: false })
       .limit(50)
     if (error) throw error
@@ -486,25 +503,21 @@ export async function getAnalyticsSummary(clientId = DEMO_CLIENT_ID): Promise<An
       // count(conversations)
       sb.from('conversations')
         .select('*', { count: 'exact', head: true })
-        .eq('client_id', clientId),
+        .eq('business_id', clientId),
 
       // count(messages)
       sb.from('messages')
         .select('*', { count: 'exact', head: true })
-        .eq('client_id', clientId),
+        .eq('business_id', clientId),
 
-      // avg response_time_ms — fetch only the column for AI messages
-      sb.from('messages')
-        .select('response_time_ms')
-        .eq('client_id', clientId)
-        .eq('from_role', 'ai')
-        .not('response_time_ms', 'is', null),
+      // avg response_time_ms — column does not exist; stub returns empty so avgResponseMs stays 0
+      Promise.resolve({ data: [], error: null }),
 
-      // count(appointments) where demo_call OR confirmed
+      // count(appointments) where confirmed
       sb.from('appointments')
         .select('*', { count: 'exact', head: true })
-        .eq('client_id', clientId)
-        .or('type.eq.demo_call,status.eq.confirmed'),
+        .eq('business_id', clientId)
+        .eq('status', 'confirmed'),
 
       // total leads (uses business_id column)
       sb.from('leads')
@@ -598,13 +611,13 @@ export async function getOverviewMetrics(clientId = DEMO_CLIENT_ID): Promise<Ove
 
       // appointments scheduled this week
       sb.from('appointments').select('*', { count:'exact', head:true })
-        .eq('client_id', clientId)
+        .eq('business_id', clientId)
         .gte('scheduled_at', thisMondayISO)
         .lte('scheduled_at', thisSundayISO),
 
       // AI messages sent this week (used as proxy for emails/outreach)
       sb.from('messages').select('*', { count:'exact', head:true })
-        .eq('client_id', clientId).eq('from_role', 'ai').gte('created_at', thisMondayISO),
+        .eq('business_id', clientId).eq('role', 'assistant').gte('created_at', thisMondayISO),
 
       // total leads ever (business_id column)
       sb.from('leads').select('*', { count:'exact', head:true })
@@ -680,18 +693,18 @@ export async function getLiveAnalytics(clientId = DEMO_CLIENT_ID): Promise<LiveA
 
     const [convRes, msgRes, aiMsgRes, userMsgRes, leadsRes, msgDailyRes, leadDailyRes] = await Promise.all([
       // Total conversations
-      sb.from('conversations').select('*', { count: 'exact', head: true }).eq('client_id', clientId),
+      sb.from('conversations').select('*', { count: 'exact', head: true }).eq('business_id', clientId),
 
       // Total messages
-      sb.from('messages').select('*', { count: 'exact', head: true }).eq('client_id', clientId),
+      sb.from('messages').select('*', { count: 'exact', head: true }).eq('business_id', clientId),
 
       // AI messages only
       sb.from('messages').select('*', { count: 'exact', head: true })
-        .eq('client_id', clientId).eq('from_role', 'ai'),
+        .eq('business_id', clientId).eq('role', 'assistant'),
 
       // User messages only
       sb.from('messages').select('*', { count: 'exact', head: true })
-        .eq('client_id', clientId).eq('from_role', 'user'),
+        .eq('business_id', clientId).eq('role', 'user'),
 
       // All leads with source + interest (for breakdown)
       sb.from('leads').select('source, interest, created_at')
@@ -699,7 +712,7 @@ export async function getLiveAnalytics(clientId = DEMO_CLIENT_ID): Promise<LiveA
         .order('created_at', { ascending: false }),
 
       // Messages with timestamp for per-day grouping (last 30 days)
-      sb.from('messages').select('created_at').eq('client_id', clientId).gte('created_at', since),
+      sb.from('messages').select('created_at').eq('business_id', clientId).gte('created_at', since),
 
       // Leads with timestamp for per-day grouping (last 30 days)
       sb.from('leads').select('created_at').eq('business_id', clientId).gte('created_at', since),
@@ -793,25 +806,38 @@ export async function getActivityFromLiveData(clientId = DEMO_CLIENT_ID): Promis
   try {
     const sb = createAdminClient()
 
-    const [leadsRes, convsRes, msgsRes] = await Promise.all([
+    const [leadsRes, convsRes, aiMsgsRes, userMsgsRes, apptsRes] = await Promise.all([
       sb.from('leads')
-        .select('id, name, source, interest, created_at')
+        .select('id, name, source, created_at')
         .eq('business_id', clientId)
         .order('created_at', { ascending: false })
-        .limit(15),
+        .limit(12),
 
       sb.from('conversations')
         .select('id, channel, created_at')
-        .eq('client_id', clientId)
+        .eq('business_id', clientId)
         .order('created_at', { ascending: false })
-        .limit(15),
+        .limit(10),
 
       sb.from('messages')
         .select('id, content, created_at')
-        .eq('client_id', clientId)
-        .eq('from_role', 'ai')
+        .eq('business_id', clientId)
+        .eq('role', 'assistant')
         .order('created_at', { ascending: false })
-        .limit(15),
+        .limit(12),
+
+      sb.from('messages')
+        .select('id, content, created_at')
+        .eq('business_id', clientId)
+        .eq('role', 'user')
+        .order('created_at', { ascending: false })
+        .limit(12),
+
+      sb.from('appointments')
+        .select('id, lead_name, created_at')
+        .eq('business_id', clientId)
+        .order('created_at', { ascending: false })
+        .limit(10),
     ])
 
     const items: { ts: number; item: ActivityItem }[] = []
@@ -838,14 +864,37 @@ export async function getActivityFromLiveData(clientId = DEMO_CLIENT_ID): Promis
       }})
     }
 
-    for (const msg of (msgsRes.data ?? [])) {
+    for (const msg of (aiMsgsRes.data ?? [])) {
       const content = (msg.content as string) ?? ''
       const ts      = new Date(msg.created_at as string).getTime()
       items.push({ ts, item: {
-        id:   `msg-${msg.id}`,
+        id:   `aimsg-${msg.id}`,
         type: 'chat',
         text: 'AI replied',
         sub:  content.length > 80 ? content.slice(0, 77) + '…' : content,
+        time: relativeTime(ts),
+      }})
+    }
+
+    for (const msg of (userMsgsRes.data ?? [])) {
+      const content = (msg.content as string) ?? ''
+      const ts      = new Date(msg.created_at as string).getTime()
+      items.push({ ts, item: {
+        id:   `usermsg-${msg.id}`,
+        type: 'email',
+        text: 'User message received',
+        sub:  content.length > 80 ? content.slice(0, 77) + '…' : content,
+        time: relativeTime(ts),
+      }})
+    }
+
+    for (const appt of (apptsRes.data ?? [])) {
+      const ts = new Date(appt.created_at as string).getTime()
+      items.push({ ts, item: {
+        id:   `appt-${appt.id}`,
+        type: 'appointment',
+        text: `Viewing requested — ${(appt.lead_name as string | null) ?? 'Unknown'}`,
+        sub:  'AI chat · Pending confirmation',
         time: relativeTime(ts),
       }})
     }

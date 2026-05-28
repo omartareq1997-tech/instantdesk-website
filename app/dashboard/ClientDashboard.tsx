@@ -3491,9 +3491,11 @@ export default function ClientDashboard({
       const lead = mapped.find(l => l.id === leadId)
       if (!lead) return
 
-      // Guard: skip if Realtime already showed a toast for this lead
+      // Guard: skip if Realtime already showed a lead toast for this lead.
+      // Must also check t.type so an appointment toast with the same leadId
+      // does not suppress the lead toast (race condition on production).
       setToasts(prev => {
-        if (prev.some(t => t.leadId === leadId)) return prev
+        if (prev.some(t => t.leadId === leadId && t.type === 'lead')) return prev
         const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
         const badgeColor = lead.scoreLabel === 'hot' ? '#f87171'
           : lead.scoreLabel === 'warm' ? '#fb923c' : '#60a5fa'

@@ -924,7 +924,7 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    return NextResponse.json({
+    const bookingBody: Record<string, unknown> = {
       reply:                    bookingReply,
       conversation_id:          convId,
       intent:                   'booking',
@@ -933,7 +933,17 @@ export async function POST(req: NextRequest) {
       lead_insert_error:        bResult.insert_error,
       appointment_id:           bResult.appointment_id,
       appointment_insert_error: bResult.appointment_insert_error,
-    })
+    }
+    if (debugMode) {
+      bookingBody.debug = {
+        confirmedSlots: confirmed,
+        missingSlots:   missing.map(d => d.key),
+        isQualified:    true,
+        ai_summary:     null,
+        blocked:        false,
+      }
+    }
+    return NextResponse.json(bookingBody)
   }
 
   /* 9. Persist user message ──────────────────────────────────────────────── */

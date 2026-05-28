@@ -302,7 +302,7 @@ export async function POST(req: NextRequest) {
       // Load agent config
       const { data: agentData } = await sb
         .from('agents')
-        .select('id, name, persona, objective, tone, fallback_msg, model, temperature')
+        .select('id, name, persona, objective, tone, model, temperature')
         .eq('business_id', fu.business_id)
         .eq('active', true)
         .limit(1)

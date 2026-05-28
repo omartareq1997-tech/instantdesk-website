@@ -50,7 +50,8 @@ const CHANNEL_LABEL: Record<string, string> = {
 
 /* ── Helpers ─────────────────────────────────────────────────── */
 
-function initials(name: string) {
+function initials(name?: string | null): string {
+  if (!name?.trim()) return '?'
   return name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
 }
 

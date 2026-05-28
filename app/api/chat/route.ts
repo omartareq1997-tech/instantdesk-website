@@ -33,6 +33,9 @@ import { createAdminClient } from '../../lib/supabase-server'
 import { logEvent } from '../_lib/logEvent'
 import { getSessionBusinessId } from '../../lib/getSessionBusinessId'
 import { scheduleFollowUps } from '../../lib/scheduleFollowUps'
+import { retrieveRelevantChunks } from '../../lib/knowledgeChunks'
+import { getLimits, checkMonthlyMessageLimit } from '../../lib/usageLimits'
+import { loadLeadMemory, upsertLeadMemory, formatMemoryForPrompt } from '../../lib/leadMemory'
 
 /* ════════════════════════════════════════════════════════════════════════════
    TYPES
@@ -209,49 +212,55 @@ function extractViewingTime(text: string): string | null {
 }
 
 /* ── Name ──────────────────────────────────────────────────────────────── */
-//
-// Two-step extraction — finds the phrase case-insensitively, then matches
-// TitleCase words WITHOUT the /i flag so lowercase words (like "phone",
-// "email", "number") naturally stop the match.
-//
-// Guards against:
-//   "my name is Sally phone number 123…"  → "Sally"
-//   "my name is Omar, phone is 123…"       → "Omar"
-//   "I'm Anna, email anna@test.com"         → "Anna"
 
 const VERB_GUARD = /^(?:looking|searching|interested|ready|available|trying|want|hoping|here|calling|writing|just|also|currently|from|based|a|an|the)\b/i
-const TITLE_CASE_RE = /^([A-ZÀÁÂÃÄÅ][a-zà-ž]+(?:\s+[A-ZÀÁÂÃÄÅ][a-zà-ž]+)?)/
+
+// Normalise any capitalisation to Title Case ("jordan smith" → "Jordan Smith")
+function toTitleCase(s: string): string {
+  return s.replace(/\b([a-zA-ZÀ-ž])/g, c => c.toUpperCase())
+}
+
+// Capture 1–2 alpha words after a trigger phrase (any capitalisation).
+// Stops at punctuation, digits, or end of string.
+const NAME_AFTER_TRIGGER = /^([A-Za-zÀ-ž]+(?:\s+[A-Za-zÀ-ž]+)?)(?=[,.\s\d]|$)/
+
+// Words that signal the end of a name — strip them if they appear as the second word.
+const NAME_STOP_WORDS = new Set([
+  'phone','number','mobile','whatsapp','email','mail','budget','rent',
+  'looking','viewing','appointment','tomorrow','today','at','on',
+  'arrange','book','schedule','and','or','with','for',
+])
+function trimNameStop(raw: string): string {
+  const words = raw.trim().split(/\s+/)
+  if (words.length === 2 && NAME_STOP_WORDS.has(words[1].toLowerCase())) return words[0]
+  return raw
+}
 
 function extractName(text: string): string | null {
   let ph: RegExpMatchArray | null
 
-  // "my name is Sally" / "my name is Sally Smith"
+  // "my name is jordan" / "my name is Jordan Smith"
   ph = text.match(/\bmy name is\s+/i)
   if (ph?.index !== undefined) {
-    const after = text.slice(ph.index + ph[0].length)
-    const m = TITLE_CASE_RE.exec(after)
-    if (m) return m[1]
+    const m = NAME_AFTER_TRIGGER.exec(text.slice(ph.index + ph[0].length))
+    if (m) return toTitleCase(trimNameStop(m[1]))
   }
 
-  // "I'm Anna" / "I'm John Smith" — guard against "I'm looking for…"
+  // "I'm Jordan" / "I am jordan" — guard against "I'm looking for…"
   ph = text.match(/\bI(?:'m| am)\s+/i)
   if (ph?.index !== undefined) {
     const after = text.slice(ph.index + ph[0].length)
     if (!VERB_GUARD.test(after)) {
-      // Prefer two TitleCase words (first + last); accept one if followed by comma/end
-      const two = after.match(/^([A-ZÀÁÂÃÄÅ][a-zà-ž]+\s+[A-ZÀÁÂÃÄÅ][a-zà-ž]+)/)
-      if (two) return two[1]
-      const one = after.match(/^([A-ZÀÁÂÃÄÅ][a-zà-ž]+)(?=[,.\s]|$)/)
-      if (one) return one[1]
+      const m = NAME_AFTER_TRIGGER.exec(after)
+      if (m) return toTitleCase(trimNameStop(m[1]))
     }
   }
 
-  // "call me Sally"
+  // "call me Jordan"
   ph = text.match(/\bcall me\s+/i)
   if (ph?.index !== undefined) {
-    const after = text.slice(ph.index + ph[0].length)
-    const m = TITLE_CASE_RE.exec(after)
-    if (m) return m[1]
+    const m = NAME_AFTER_TRIGGER.exec(text.slice(ph.index + ph[0].length))
+    if (m) return toTitleCase(trimNameStop(m[1]))
   }
 
   // "name is X" / "name's X" / "this is X"
@@ -259,9 +268,16 @@ function extractName(text: string): string | null {
   if (ph?.index !== undefined) {
     const after = text.slice(ph.index + ph[0].length)
     if (!VERB_GUARD.test(after)) {
-      const m = TITLE_CASE_RE.exec(after)
-      if (m) return m[1]
+      const m = NAME_AFTER_TRIGGER.exec(after)
+      if (m) return toTitleCase(trimNameStop(m[1]))
     }
+  }
+
+  // "Jordan here" — name at start of sentence or after punctuation
+  ph = text.match(/(?:^|[,.;!?]\s+)([A-Za-zÀ-ž]{2,}(?:\s+[A-Za-zÀ-ž]{2,})?)\s+here\b/im)
+  if (ph) {
+    const candidate = ph[1].trim()
+    if (!VERB_GUARD.test(candidate)) return toTitleCase(candidate)
   }
 
   return null
@@ -269,15 +285,25 @@ function extractName(text: string): string | null {
 
 /* ── Phone ─────────────────────────────────────────────────────────────── */
 
+// Month names used to strip "30 May", "May 30", etc. before digit matching
+const _MONTHS = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)'
+
 function extractPhone(text: string): string | null {
+  // Strip date/time patterns so trailing day numbers don't bleed into the phone.
+  const stripped = text
+    .replace(/\bat\s*\d{1,2}:\d{2}\b/gi, ' ')
+    .replace(new RegExp(`\\b\\d{1,2}\\s+${_MONTHS}(?:\\s+\\d{2,4})?\\b`, 'gi'), ' ')
+    .replace(new RegExp(`\\b${_MONTHS}\\s+\\d{1,2}(?:,?\\s*\\d{2,4})?\\b`, 'gi'), ' ')
+    .replace(/\b\d{1,2}:\d{2}\b/g, ' ')
+
   // International or national with separators
-  const m = text.match(/(\+?\d[\d\s\-().]{8,18}\d)/)
+  const m = stripped.match(/(\+?\d[\d\s\-().]{8,18}\d)/)
   if (m) {
     const digits = m[1].replace(/\D/g, '')
     if (digits.length >= 9 && digits.length <= 15) return m[1].trim()
   }
   // Bare digit run
-  const bare = text.match(/\b(\d{9,12})\b/)
+  const bare = stripped.match(/\b(\d{9,12})\b/)
   if (bare) return bare[1]
   return null
 }
@@ -388,6 +414,30 @@ function computeMissingSlots(confirmed: Slots, slotDefs: SlotDef[]): SlotDef[] {
   return slotDefs.filter(def => !confirmed[def.key])
 }
 
+function computeQualificationStage(confirmed: Slots, missing: SlotDef[]): string {
+  const hasAnySlot = Object.values(confirmed).some(Boolean)
+
+  const hasContact =
+    Boolean(confirmed.name) ||
+    Boolean(confirmed.phone) ||
+    Boolean(confirmed.email)
+
+  const hasIntent =
+    Boolean(confirmed.city) ||
+    Boolean(confirmed.property_type) ||
+    Boolean(confirmed.deal_type) ||
+    Boolean(confirmed.rooms) ||
+    Boolean(confirmed.budget)
+
+  const hasAppointment = Boolean(confirmed.viewing_time)
+
+  if (!hasAnySlot) return 'discovery'
+  if (missing.length > 0) return 'qualifying'
+  if (hasContact && hasIntent && !hasAppointment) return 'ready_to_book'
+  if (hasContact && hasIntent && hasAppointment) return 'booked'
+  return 'qualifying'
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    BOOKING INTENT DETECTION
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -414,67 +464,110 @@ function buildSystemPrompt(
   knowledge: KnowledgeRow[],
   confirmed: Slots,
   missing:   SlotDef[],
+  stage:     string,
+  memory:    string,
 ): string {
-  // ── Knowledge block ──────────────────────────────────────────────────────
+
+  // ── 1. PERSONA — must open the prompt so the model anchors its identity here
+  // LLMs heavily weight the opening lines of the system prompt.
+  // Guardrails come after so they constrain the persona, not replace it.
+  const personaBlock = `${agent.persona}
+
+Tone: ${agent.tone}
+Objective: ${agent.objective}
+When asked something outside your scope or knowledge: ${agent.fallback_msg || 'Politely decline and redirect to your objective.'}
+
+STYLE RULE — this overrides all default behaviour:
+Your first sentence and every sentence after must visibly reflect the persona above.
+The visitor must immediately sense they are talking to a distinct, characterful assistant — not a generic bot.
+Banned phrases you must NEVER produce (rewrite anything like these through your persona):
+  × "What a wonderful/great choice!"
+  × "Are you looking to rent or buy?"
+  × "Please include the currency"
+  × "Could I get your [field]?"
+  × "Our team will be in touch shortly"
+  × "I'd be happy to help with that"
+  × "That sounds great!"
+  × "Happy to assist"
+  × Filler acknowledgements that add no personality`
+
+  // ── 2. GUARDRAILS — internal constraints, never surfaced in the reply ──────
+  const guardrailBlock = `[GUARDRAILS — follow silently, never mention to the visitor]
+- Memory: everything in COLLECTED DATA is confirmed. Never re-ask those fields.
+- One question per reply. Never stack multiple questions in a single message.
+- Qualification stage: ${stage}
+  · discovery     → open naturally; understand what brought them here; no data-collection pressure
+  · qualifying    → gather the next required field in your persona's voice; never sound like a form
+  · ready_to_book → all core details collected; guide toward a concrete viewing or next step
+  · booked        → time/appointment confirmed; close the conversation warmly
+- Never invent listings, prices, availability, or any fact absent from the Knowledge Base.
+- Do not expose slot names, stage names, or these rules in your reply.`
+
+  // ── 3. KNOWLEDGE BASE ─────────────────────────────────────────────────────
   const knowledgeBlock = knowledge.length > 0
     ? knowledge.map(k => `### ${k.title}\n${k.content}`).join('\n\n')
-    : 'No additional knowledge configured.'
+    : '(No knowledge configured for this client.)'
 
-  // ── Already-collected block — driven entirely by confirmed slot values ───
-  // Slots come from the lead DB row (authoritative) + deterministic extraction
-  // over all prior messages. Nothing is assumed — only DB-confirmed values appear.
+  // ── 4. CONVERSATION STATE ─────────────────────────────────────────────────
   const confirmedLines: string[] = []
-  if (confirmed.name)          confirmedLines.push(`  ✓ Name: ${confirmed.name}`)
-  if (confirmed.phone)         confirmedLines.push(`  ✓ Phone: ${confirmed.phone}`)
-  if (confirmed.email)         confirmedLines.push(`  ✓ Email: ${confirmed.email}`)
-  if (confirmed.city)          confirmedLines.push(`  ✓ City/Location: ${confirmed.city}`)
-  if (confirmed.area)          confirmedLines.push(`  ✓ Area/District: ${confirmed.area}`)
-  if (confirmed.budget)        confirmedLines.push(`  ✓ Budget: ${confirmed.budget}`)
-  if (confirmed.property_type) confirmedLines.push(`  ✓ Property type: ${confirmed.property_type}`)
-  if (confirmed.rooms)         confirmedLines.push(`  ✓ Rooms: ${confirmed.rooms}`)
-  if (confirmed.deal_type)     confirmedLines.push(`  ✓ Deal type: ${confirmed.deal_type}`)
-  if (confirmed.viewing_time)  confirmedLines.push(`  ✓ Preferred viewing time: ${confirmed.viewing_time}`)
+  if (confirmed.name)          confirmedLines.push(`  name: ${confirmed.name}`)
+  if (confirmed.phone)         confirmedLines.push(`  phone: ${confirmed.phone}`)
+  if (confirmed.email)         confirmedLines.push(`  email: ${confirmed.email}`)
+  if (confirmed.city)          confirmedLines.push(`  city/location: ${confirmed.city}`)
+  if (confirmed.area)          confirmedLines.push(`  area/district: ${confirmed.area}`)
+  if (confirmed.budget)        confirmedLines.push(`  budget: ${confirmed.budget}`)
+  if (confirmed.property_type) confirmedLines.push(`  property type: ${confirmed.property_type}`)
+  if (confirmed.rooms)         confirmedLines.push(`  rooms: ${confirmed.rooms}`)
+  if (confirmed.deal_type)     confirmedLines.push(`  deal type: ${confirmed.deal_type}`)
+  if (confirmed.viewing_time)  confirmedLines.push(`  preferred viewing time: ${confirmed.viewing_time}`)
 
-  const confirmedBlock = confirmedLines.length > 0
-    ? `ALREADY COLLECTED — NEVER ask for any of these again:\n${confirmedLines.join('\n')}`
-    : `ALREADY COLLECTED: Nothing yet — greet the visitor and begin qualifying.`
+  const collectedBlock = confirmedLines.length > 0
+    ? `COLLECTED DATA — do NOT ask for any of these again:\n${confirmedLines.join('\n')}`
+    : `COLLECTED DATA: nothing yet — open the conversation naturally.`
 
-  // ── Missing-fields block — first item is the EXACT next question to ask ──
-  let missingBlock: string
+  let nextFieldBlock: string
   if (missing.length === 0) {
-    missingBlock = `NEXT ACTION: All required fields are collected. Summarise what you know, confirm it with the visitor, and offer to proceed or schedule a next step.`
+    nextFieldBlock = `NEXT FIELD: none — all required fields collected.\nGuide toward confirming everything and offering a concrete next step.`
   } else {
     const [next, ...rest] = missing
-    const nextLine  = `  → ASK THIS NOW: ${next.label}\n     Use this phrasing (adapt naturally): "${next.question}"`
-    const restLines = rest.map(d => `  ○ ${d.label}${d.required ? ' (required)' : ' (optional)'}`).join('\n')
-    missingBlock    = `MISSING FIELDS — collect in this order:\n${nextLine}${rest.length ? '\n\nStill needed after that:\n' + restLines : ''}`
+    const restList = rest.length
+      ? `\nFields to collect after (do not ask yet):\n${rest.map(d => `  · ${d.label}${d.required ? '' : ' (optional)'}`).join('\n')}`
+      : ''
+    nextFieldBlock = `NEXT FIELD TO COLLECT: ${next.label}
+Compose this question entirely in your own persona's voice. Do not copy any template.${restList}`
   }
 
-  // ── Full prompt — persona/objective/tone come 100% from the agents table ─
-  return `${agent.persona}
+  // ── 5. OUTPUT TASK ────────────────────────────────────────────────────────
+  const outputTask = `[WRITE YOUR REPLY NOW]
+Respond to the visitor's last message.
+Your opening sentence must immediately sound like your persona — a reader should recognise the character from the first word.
+2–4 sentences maximum. One question only. Plain text — no JSON, bullets, or numbered lists.`
 
-YOUR OBJECTIVE: ${agent.objective}
-TONE: ${agent.tone}
+  const memoryBlock = memory
+    ? `[LEAD MEMORY — prior context, use to personalise replies]\n${memory}`
+    : ''
 
-KNOWLEDGE BASE:
+  return `${personaBlock}
+
+---
+
+${guardrailBlock}
+
+---
+
+[KNOWLEDGE BASE]
 ${knowledgeBlock}
 
 ---
+${memoryBlock ? `\n${memoryBlock}\n\n---\n` : ''}
+[CONVERSATION STATE — stage: ${stage}]
+${collectedBlock}
 
-${confirmedBlock}
-
-${missingBlock}
+${nextFieldBlock}
 
 ---
 
-RULES (absolute — follow without exception):
-1. NEVER ask for any field in ALREADY COLLECTED. It is confirmed. Do not re-confirm it.
-2. Your next question MUST be the field marked "→ ASK THIS NOW". Ask exactly one field per reply.
-3. Briefly acknowledge what the visitor just said, then ask the next field naturally.
-4. Keep your reply to 2–4 sentences. Be concise and warm.
-5. If the visitor volunteers information that matches a missing field, capture it — then ask the NEXT missing field.
-6. If asked something outside your knowledge base: ${agent.fallback_msg || 'Politely explain you cannot help with that and redirect to your objective.'}
-7. Reply in plain conversational text only. No JSON, no bullet lists, no numbered lists.`
+${outputTask}`
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -509,14 +602,14 @@ function guardReply(
     const triggered = check.patterns.some(p => p.test(reply))
     if (!triggered) continue
 
-    // Blocked: replace with next deterministic question
+    // Blocked: replace with a minimal field-label redirect (no hardcoded question text)
     if (missing.length === 0) {
       return {
-        reply:   "I have all the information I need. Our team will be in touch shortly to confirm the details and arrange your viewing.",
+        reply:   "I believe I have everything I need — our team will be in contact with you shortly to take this forward.",
         blocked: true,
       }
     }
-    return { reply: missing[0].question, blocked: true }
+    return { reply: `One more thing — could you share your ${missing[0].label.toLowerCase()}?`, blocked: true }
   }
   return { reply, blocked: false }
 }
@@ -595,6 +688,20 @@ export async function POST(req: NextRequest) {
   /* 3. Supabase ───────────────────────────────────────────────────────────── */
   const sb = createAdminClient()
 
+  /* 3a. Monthly message limit ─────────────────────────────────────────────── */
+  try {
+    const limits = await getLimits(sb, businessId)
+    const msgCheck = await checkMonthlyMessageLimit(sb, businessId, limits)
+    if (!msgCheck.ok) {
+      return NextResponse.json(
+        { error: msgCheck.message, reply: "I'm sorry, this assistant has reached its monthly message limit. Please try again next month." },
+        { status: 429 },
+      )
+    }
+  } catch (err) {
+    console.warn('[LIMITS] monthly check failed (non-fatal):', err instanceof Error ? err.message : err)
+  }
+
   /* 4. Load active agent ──────────────────────────────────────────────────── */
   // Try session businessId first; if not found, fall back to the widget's body business_id.
   // This handles the case where an authenticated owner tests the widget from their browser
@@ -659,12 +766,53 @@ export async function POST(req: NextRequest) {
   void agentLookupId  // consumed above
   const agent = agentRow as AgentRow
 
-  /* 4. Load knowledge ─────────────────────────────────────────────────────── */
-  const { data: knowledgeRows } = await sb
-    .from('knowledge_sources').select('title, content')
-    .eq('business_id', businessId).eq('is_active', true)
-    .order('created_at', { ascending: true })
-  const knowledge = (knowledgeRows ?? []) as KnowledgeRow[]
+  /* 4. Retrieve relevant knowledge ───────────────────────────────────────── */
+  // Priority: 1) vector chunks  2) capped fallback from knowledge_sources  3) empty
+  let knowledge: KnowledgeRow[] = []
+
+  let vectorOk = false
+  let ragCount = 0
+  let ragTitles = 'none'
+  try {
+    const ragChunks = await retrieveRelevantChunks(sb, businessId, message, 6)
+    ragCount  = ragChunks.length
+    ragTitles = [...new Set(ragChunks.map(c => c.title))].join(', ') || 'none'
+    if (ragChunks.length > 0) {
+      knowledge = ragChunks.map(c => ({ title: c.title, content: c.content }))
+      vectorOk = true
+    }
+  } catch (err) {
+    console.error('[RAG] error:', err instanceof Error ? err.message : String(err))
+  }
+
+  console.log('[RAG] retrieved chunk count:', ragCount)
+  console.log('[RAG] source titles:', ragTitles)
+
+  if (vectorOk) {
+    console.log('[KNOWLEDGE MODE] vector')
+  } else {
+    // Fallback: load knowledge_sources, cap total content at 3000 chars
+    const { data: fallbackRows } = await sb
+      .from('knowledge_sources').select('title, content')
+      .eq('business_id', businessId).eq('is_active', true)
+      .order('created_at', { ascending: true })
+
+    const capped: KnowledgeRow[] = []
+    let total = 0
+    for (const row of (fallbackRows ?? []) as KnowledgeRow[]) {
+      if (total >= 3000) break
+      const slice = row.content.slice(0, 3000 - total)
+      capped.push({ title: row.title, content: slice })
+      total += slice.length
+    }
+    knowledge = capped
+
+    if (knowledge.length > 0) {
+      console.log('[KNOWLEDGE MODE] fallback —', knowledge.length, 'sources,', total, 'chars')
+    } else {
+      console.log('[KNOWLEDGE MODE] empty')
+    }
+  }
 
   /* 5. Resolve / create conversation ─────────────────────────────────────── */
   let convId: string
@@ -728,11 +876,22 @@ export async function POST(req: NextRequest) {
     : DEFAULT_SLOT_DEFS
 
   /* 7. Build confirmedSlots deterministically ─────────────────────────────── */
-  const confirmed = buildConfirmedSlots(existingLead, history, message)
-  const missing   = computeMissingSlots(confirmed, slotDefs)
+  const confirmed          = buildConfirmedSlots(existingLead, history, message)
+  const missing            = computeMissingSlots(confirmed, slotDefs)
+  const qualificationStage = computeQualificationStage(confirmed, missing)
+
+  /* 7a. Load lead memory (non-blocking — null if table missing or no row yet) */
+  let leadMemoryStr = ''
+  if (existingLead?.id) {
+    try {
+      const mem = await loadLeadMemory(sb, businessId, existingLead.id)
+      leadMemoryStr = formatMemoryForPrompt(mem)
+    } catch { /* table may not exist yet — safe to ignore */ }
+  }
 
   console.log('[SLOTS] confirmedSlots:', JSON.stringify(confirmed))
   console.log('[SLOTS] missingSlots:',  missing.map(d => d.key).join(', ') || 'none')
+  console.log('[SLOTS] qualificationStage:', qualificationStage)
 
   /* 8. Check booking intent → short-circuit if ready ─────────────────────── */
   if (detectBookingIntent(message) && hasEnoughForBooking(confirmed)) {
@@ -750,7 +909,7 @@ export async function POST(req: NextRequest) {
 
     console.log('[GUARD] blockedRepeatedQuestion: false (booking short-circuit)')
     console.log('PERSIST IDS', { resolvedClientId: clientId, resolvedBusinessId: businessId, bodyBusinessId: business_id, fallbackUsed })
-    const bResult = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, 'qualified', bookingReply, message)
+    const bResult = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, 'qualified', qualificationStage, bookingReply, message)
 
     if (bResult.lead_id) {
       void scheduleFollowUps(sb, {
@@ -787,8 +946,17 @@ export async function POST(req: NextRequest) {
   const openaiKey = process.env.OPENAI_API_KEY
   if (!openaiKey) return NextResponse.json({ error: 'OPENAI_API_KEY is not configured' }, { status: 500 })
 
-  const openai      = new OpenAI({ apiKey: openaiKey })
-  const systemPrompt = buildSystemPrompt(agent, knowledge, confirmed, missing)
+  const openai       = new OpenAI({ apiKey: openaiKey })
+  const systemPrompt = buildSystemPrompt(agent, knowledge, confirmed, missing, qualificationStage, leadMemoryStr)
+
+  console.log('[PROMPT] qualificationStage:', qualificationStage, '| nextField:', missing[0]?.label ?? 'none')
+  if (process.env.DEBUG_PROMPT === 'true') {
+    console.log('[PROMPT] clientPersonaLoaded:',   agent.persona   ? agent.persona.slice(0, 120)   : 'none')
+    console.log('[PROMPT] clientObjectiveLoaded:', agent.objective ? agent.objective.slice(0, 120) : 'none')
+    console.log('[PROMPT] toneLoaded:',            agent.tone      || 'none')
+    console.log('[PROMPT] finalSystemPrompt:\n',   systemPrompt)
+  }
+
   const historyForLLM = history.map(r => ({
     role:    r.role === 'assistant' ? 'assistant' as const : 'user' as const,
     content: r.content,
@@ -821,11 +989,24 @@ export async function POST(req: NextRequest) {
   })
   const isQualified = !!(confirmed.name && confirmed.phone && confirmed.email)
   const intent      = detectDealType(message) ? 'inquiry' : 'greeting'
-  const persist = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, isQualified ? 'contacted' : 'new', finalReply, message)
+  const persist = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, isQualified ? 'contacted' : 'new', qualificationStage, finalReply, message)
 
-  /* 14. Fire webhook if fully qualified ──────────────────────────────────── */
-  const webhookUrl    = process.env.MAKE_WEBHOOK_URL
+  /* 14. Update lead memory (fire-and-forget) ──────────────────────────────── */
   const resolvedLeadId = persist.lead_id ?? existingLead?.id
+  if (resolvedLeadId) {
+    void upsertLeadMemory(sb, {
+      businessId,
+      leadId:         resolvedLeadId,
+      conversationId: convId,
+      confirmed,
+      stage:          qualificationStage,
+      messages:       history,
+      userMessage:    message,
+    })
+  }
+
+  /* 15. Fire webhook if fully qualified ──────────────────────────────────── */
+  const webhookUrl = process.env.MAKE_WEBHOOK_URL
   if (webhookUrl && isQualified && resolvedLeadId) {
     fetch(webhookUrl, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -953,14 +1134,15 @@ function detectDealType(text: string): boolean {
 }
 
 async function persistLead(
-  sb:           ReturnType<typeof createAdminClient>,
-  existing:     ExistingLead | null,
-  convId:       string,
-  clientId:     string,
-  businessId:   string,
-  confirmed:    Slots,
-  missing:      SlotDef[],
-  status:       string,
+  sb:                  ReturnType<typeof createAdminClient>,
+  existing:            ExistingLead | null,
+  convId:              string,
+  clientId:            string,
+  businessId:          string,
+  confirmed:           Slots,
+  missing:             SlotDef[],
+  status:              string,
+  qualificationStage:  string,
   lastReply:    string,
   message:      string,
 ): Promise<{
@@ -990,7 +1172,7 @@ async function persistLead(
 
   // Lead payload uses both direct columns and metadata for full compatibility
   const leadPayload = {
-    name:          confirmed.name  ?? existing?.name  ?? null,
+    name:          confirmed.name  ?? (existing?.name === 'Website Visitor' ? null : existing?.name) ?? null,
     phone:         confirmed.phone ?? existing?.phone ?? null,
     email:         confirmed.email ?? existing?.email ?? null,
     interest:      confirmed.property_type ?? confirmed.deal_type ?? existing?.interest ?? null,
@@ -1001,11 +1183,13 @@ async function persistLead(
     location:      confirmed.city ?? null,
     property_type: confirmed.property_type ?? null,
     preferred_time: confirmed.viewing_time ?? null,
-    missing_info:  missingKeys || null,
-    next_action:   nextAction || null,
+    missing_info:         missingKeys || null,
+    next_action:          nextAction || null,
+    qualification_stage:  qualificationStage,
     // Keep metadata for backwards compat (legacy reads)
     metadata:      {
       ...(existing?.metadata as Record<string, unknown> ?? {}),
+      ...(confirmed.name          && { name:          confirmed.name          }),
       ...(confirmed.city          && { city:          confirmed.city          }),
       ...(confirmed.area          && { area:          confirmed.area          }),
       ...(confirmed.budget        && { budget:        confirmed.budget        }),
@@ -1024,26 +1208,28 @@ async function persistLead(
   if (existing) {
     // UPDATE existing lead (conversation_id already set on it)
     const upd = await sb.from('leads').update({ ...leadPayload, conversation_id: convId }).eq('id', existing.id)
-    console.log('[persistLead] lead UPDATE:', existing.id, upd.error ? JSON.stringify(upd.error) : 'ok')
+    if (upd.error) console.error('[persistLead] lead UPDATE error:', JSON.stringify(upd.error))
     resolvedLeadId = existing.id
+    console.log('[LEAD] updated lead_id:', resolvedLeadId)
 
   } else if (hasMeaningfulSlot(confirmed)) {
     // INSERT new lead with conversation_id so the link is set immediately
     const ins = await sb.from('leads').insert({
       ...leadPayload,
-      name:            confirmed.name ?? 'Website Visitor',
+      name:            confirmed.name ?? null,
       business_id:     businessId,
       source:          'website_chat',
       status:          'new',
       conversation_id: convId,
     }).select('id').single()
 
-    console.log('[persistLead] lead INSERT:', ins.error ? JSON.stringify(ins.error) : ins.data?.id)
+    if (ins.error) console.error('[persistLead] lead INSERT error:', JSON.stringify(ins.error))
 
     if (ins.error) {
       insertError = ins.error.message
     } else if (ins.data?.id) {
       resolvedLeadId = ins.data.id
+      console.log('[LEAD] created lead_id:', resolvedLeadId)
       // Update conversation with lead contact info (conversations has no lead_id FK,
       // but does have lead_name/phone/email for display)
       const convUpd = await sb.from('conversations').update({
@@ -1063,6 +1249,8 @@ async function persistLead(
     } else {
       insertError = 'insert returned no row'
     }
+  } else {
+    console.log('[LEAD] skipped — no meaningful slot captured yet')
   }
 
   // ── Create appointment if booking intent or viewing_time captured ──────────
@@ -1072,23 +1260,35 @@ async function persistLead(
 
   const shouldBook = !!(confirmed.viewing_time || (detectBookingIntent(message) && hasEnoughForBooking(confirmed)))
 
-  if (shouldBook && resolvedLeadId) {
-    // Guard against duplicate appointments for the same lead
-    const { data: existingAppt } = await sb
-      .from('appointments').select('id')
-      .eq('lead_id', resolvedLeadId).eq('business_id', businessId)
-      .limit(1).maybeSingle()
+  if (!shouldBook) {
+    console.log('[APPOINTMENT] skipped reason: no viewing_time and no booking intent')
+  } else if (!resolvedLeadId) {
+    console.log('[APPOINTMENT] skipped reason: no lead resolved')
+  } else {
+    // Parse the desired time first so we can compare against existing appointments.
+    const scheduledAt = parseViewingTime(confirmed.viewing_time)
+    appointmentScheduledAt = scheduledAt.toISOString()
+
+    // Duplicate guard: same lead + same minute → skip.
+    // Different time (rescheduled) → create a new appointment.
+    const scheduledMinute = scheduledAt.toISOString().slice(0, 16) // "YYYY-MM-DDTHH:MM"
+    const { data: dupRows } = await sb
+      .from('appointments')
+      .select('id, scheduled_at')
+      .eq('lead_id', resolvedLeadId)
+      .eq('business_id', businessId)
+      .gte('scheduled_at', `${scheduledMinute}:00.000Z`)
+      .lt('scheduled_at',  `${scheduledMinute}:59.999Z`)
+      .limit(1)
+
+    const existingAppt = dupRows?.[0] ?? null
 
     if (existingAppt) {
       appointmentId = existingAppt.id as string
+      console.log('[APPOINTMENT] skipped reason: duplicate exists id:', existingAppt.id, 'scheduled_at:', existingAppt.scheduled_at)
     } else {
-      const scheduledAt  = parseViewingTime(confirmed.viewing_time)
-        appointmentScheduledAt = scheduledAt.toISOString()
+      // No duplicate at this time — create the appointment.
       const leadFullName = confirmed.name ?? 'Website Visitor'
-      // Match exact schema used by the manual Add Appointment modal (appointments/route.ts).
-      // Do NOT include `notes` — the column is optional and may not exist on older schemas.
-      // Use the same business_id as the manual appointment route so the row
-      // is found by getClientAppointments and the dashboard realtime filter.
       const apptPayload: Record<string, unknown> = {
         client_id:    clientId,
         business_id:  businessId,
@@ -1099,11 +1299,10 @@ async function persistLead(
         scheduled_at: scheduledAt.toISOString(),
         status:       'pending',
       }
-      console.log('[persistLead] appt payload:', JSON.stringify(apptPayload))
       const apptInsert = await sb.from('appointments').insert(apptPayload).select('*').single()
 
       if (apptInsert.error) {
-        console.error('[persistLead] APPOINTMENT INSERT FAILED:', JSON.stringify({
+        console.error('[APPOINTMENT] insert failed:', JSON.stringify({
           message: apptInsert.error.message,
           code:    apptInsert.error.code,
           details: apptInsert.error.details,
@@ -1112,8 +1311,8 @@ async function persistLead(
         }))
         appointmentInsertError = apptInsert.error.message
       } else if (apptInsert.data?.id) {
-        console.log('[persistLead] APPOINTMENT INSERT OK:', JSON.stringify(apptInsert.data))
         appointmentId = apptInsert.data.id as string
+        console.log('[APPOINTMENT] created appointment_id:', appointmentId)
         void logEvent({
           type:        'appointment',
           title:       `Viewing requested — ${leadFullName}`,

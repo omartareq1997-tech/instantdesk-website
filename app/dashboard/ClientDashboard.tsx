@@ -169,8 +169,14 @@ const SECTION_META: Record<Section,{title:string;sub:string}> = {
 
 /* ─── Helpers ────────────────────────────────────────────────── */
 
-function initials(name:string) { return name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase() }
-function agentInitials(n:string) { return n.trim().split(/[\s.]+/).filter(Boolean).map(p=>p[0]).join('').toUpperCase().slice(0,2) }
+function initials(name?: string | null): string {
+  if (!name?.trim()) return '?'
+  return name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
+}
+function agentInitials(n?: string | null): string {
+  if (!n?.trim()) return '?'
+  return n.trim().split(/[\s.]+/).filter(Boolean).map(p => p[0]).join('').toUpperCase().slice(0, 2)
+}
 function fmtDate(iso:string) { return new Date(iso).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) }
 function fmtApptDate(d:string) { return new Date(d).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}) }
 
@@ -3456,6 +3462,105 @@ export default function ClientDashboard({
     setAppointments(prev => prev.some(a => a.id === appt.id) ? prev : [appt, ...prev])
   }, [])
 
+  // Re-fetch ALL leads and replace local state (used after Test AI creates a lead).
+  const refreshLeads = useCallback(async () => {
+    try {
+      const res  = await fetch('/api/leads')
+      const data = await res.json() as { leads?: RawLeadRow[] }
+      if (!Array.isArray(data.leads)) return
+      const mapped = data.leads.flatMap((r: RawLeadRow) => {
+        try { return [mapLeadRow(r)] }
+        catch { return [] }
+      })
+      setLeads(mapped.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()))
+    } catch { /* silent */ }
+  }, [])
+
+  // Called by Test AI when a new lead is created — refreshes state AND shows toast/ring
+  // so the notification fires even when Supabase Realtime doesn't deliver the INSERT.
+  const handleTestAILeadCreated = useCallback(async (leadId: string) => {
+    try {
+      const res  = await fetch('/api/leads')
+      const data = await res.json() as { leads?: RawLeadRow[] }
+      if (!Array.isArray(data.leads)) return
+      const mapped = data.leads.flatMap((r: RawLeadRow) => {
+        try { return [mapLeadRow(r)] } catch { return [] }
+      })
+      setLeads(mapped.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()))
+
+      const lead = mapped.find(l => l.id === leadId)
+      if (!lead) return
+
+      // Guard: skip if Realtime already showed a toast for this lead
+      setToasts(prev => {
+        if (prev.some(t => t.leadId === leadId)) return prev
+        const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+        const badgeColor = lead.scoreLabel === 'hot' ? '#f87171'
+          : lead.scoreLabel === 'warm' ? '#fb923c' : '#60a5fa'
+        return [{
+          id: crypto.randomUUID(), type: 'lead' as const,
+          title:      lead.name || 'New Lead',
+          sub:        `AI Agent · Website Chat · Score ${lead.score}`,
+          badge:      cap(lead.scoreLabel),
+          badgeColor,
+          leadId:     lead.id,
+        }, ...prev.slice(0, 3)]
+      })
+      setNewLeadIds(prev => new Set([...prev, lead.id]))
+      setTimeout(() => setNewLeadIds(prev => { const s = new Set(prev); s.delete(lead.id); return s }), 4000)
+      if (soundEnabledRef.current) void playChime('lead alert')
+    } catch { /* silent */ }
+  }, [])
+
+  // Called by Test AI when a new appointment is created — mirrors handleTestAILeadCreated.
+  // Shows toast + ring even when Supabase Realtime doesn't deliver the INSERT.
+  const handleTestAIApptCreated = useCallback(async (apptId: string) => {
+    try {
+      const res  = await fetch('/api/appointments')
+      const data = await res.json() as { appointments?: RawAppointmentRow[] }
+      if (!Array.isArray(data.appointments)) return
+      const mapped = data.appointments.flatMap(r => {
+        try { return [mapAppointmentRow(r)] } catch { return [] }
+      })
+      setAppointments(mapped)
+
+      const appt = mapped.find(a => a.id === apptId)
+      if (!appt) return
+
+      // Guard: skip if Realtime already showed a toast for this appointment
+      setToasts(prev => {
+        if (prev.some(t => t.leadId === appt.leadId && t.type === 'appointment')) return prev
+        return [{
+          id:         crypto.randomUUID(),
+          type:       'appointment' as const,
+          title:      'Appointment booked',
+          sub:        `${appt.name} · ${appt.type} · ${appt.date} at ${appt.time}`,
+          badge:      appt.status.charAt(0).toUpperCase() + appt.status.slice(1),
+          badgeColor: '#34d399',
+          leadId:     appt.leadId,
+        }, ...prev.slice(0, 3)]
+      })
+      setActivityFeed(prev => [{
+        id:   `live-appt-${appt.id}`,
+        type: 'appointment' as ActivityType,
+        text: `Appointment booked — ${appt.name}`,
+        sub:  `${appt.type} · ${appt.date} at ${appt.time}`,
+        time: 'Just now',
+        live: true,
+      }, ...prev.map(i => ({ ...i, live: false })).slice(0, 14)])
+      setNotifs(prev => [{
+        id:   crypto.randomUUID(),
+        type: 'booking' as NotifType,
+        text: `Appointment booked — ${appt.name}`,
+        sub:  `${appt.type} · ${appt.date} at ${appt.time}`,
+        read: false,
+        time: 'Just now',
+      }, ...prev.slice(0, 19)])
+      if (soundEnabledRef.current) void playChime('appointment alert')
+      sendBrowserNotif('Appointment booked', `${appt.name} · ${appt.type} · ${appt.date} at ${appt.time}`)
+    } catch { /* silent */ }
+  }, [])
+
   // Re-fetch ALL appointments for the session from the server.
   // Replaces local state with the authoritative DB view.
   // Called: on section change to 'appointments', on window focus, and after realtime events
@@ -3979,7 +4084,12 @@ export default function ClientDashboard({
                 {section==='automation'   && <AutomationCenter can={can} />}
                 {section==='settings'     && <SettingsSection />}
                 {(section==='ai_overview' || section==='ai_instructions' || section==='ai_knowledge' || section==='ai_qualification' || section==='ai_test') && (
-                  <AIAgentSection section={section} />
+                  <AIAgentSection
+                    section={section}
+                    businessId={businessIdProp ?? '0616a47a-2c01-49ce-a798-385f8276b92b'}
+                    onLeadCreated={(leadId) => { void handleTestAILeadCreated(leadId) }}
+                    onAppointmentCreated={(apptId) => { void handleTestAIApptCreated(apptId) }}
+                  />
                 )}
               </motion.div>
             )}

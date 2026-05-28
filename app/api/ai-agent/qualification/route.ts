@@ -58,9 +58,10 @@ export async function PATCH(req: NextRequest) {
     .eq('business_id', clientId)
     .eq('field_key', body.field_key)
     .select('id, field_key, required')
-    .single()
+    .maybeSingle()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (!data) return NextResponse.json({ error: 'Field not found — open the Qualification page first to initialise your fields' }, { status: 404 })
   return NextResponse.json({ field: data })
 }
 

@@ -8,7 +8,7 @@ import {
   CheckCircle, XCircle, Users, Zap, Send, AlertTriangle,
   TrendingUp, DollarSign, Target, Plus, Save, ChevronDown,
   MessageSquare, Flame, Snowflake, ThumbsUp, Trash2, Pencil,
-  MapPin, Building2, Activity,
+  MapPin, Building2, Activity, Brain,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import type { TeamMember } from './types'
@@ -113,7 +113,8 @@ const SURFACED_META_KEYS = new Set([
 
 /* ─── Helpers ────────────────────────────────────────────────── */
 
-function initials(name: string) {
+function initials(name?: string | null): string {
+  if (!name?.trim()) return '?'
   return name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
 }
 
@@ -341,8 +342,12 @@ function isSpecificInterest(interest: string | undefined | null): boolean {
  *                  Bot messages often restate requirements in cleaner language.
  */
 function generateAISummary(lead: Lead, apptDate?: string, liveText?: string): AISummary {
-  const meta      = lead.metadata ?? {}
-  const firstName = lead.name.split(/\s+/)[0]
+  const meta      = (lead.metadata ?? {}) as Record<string, unknown>
+  const rawName   = lead.name
+    || (typeof meta.name      === 'string' ? meta.name      : undefined)
+    || (typeof meta.lead_name === 'string' ? meta.lead_name : undefined)
+    || ''
+  const firstName = rawName.trim().split(/\s+/)[0] || 'there'
 
   // ── Use pre-generated AI summary from Make.com when available ────
   // If Make sends ai_summary in the webhook, display it verbatim instead of
@@ -854,6 +859,67 @@ function TimelineView({ events }: { events: TimelineEvent[] }) {
   )
 }
 
+/* ─── Lead Memory ────────────────────────────────────────────── */
+
+interface LeadMemory {
+  preferences:       string | null
+  budget:            string | null
+  desired_location:  string | null
+  urgency:           string | null
+  objections:        string | null
+  viewed_properties: string | null
+  language:          string | null
+  summary:           string | null
+  last_user_intent:  string | null
+  next_best_action:  string | null
+  updated_at:        string
+}
+
+function LeadMemoryCard({ memory }: { memory: LeadMemory }) {
+  const rows: { label: string; value: string; color?: string }[] = [
+    memory.summary          && { label: 'Summary',     value: memory.summary },
+    memory.preferences      && { label: 'Preferences', value: memory.preferences },
+    memory.budget           && { label: 'Budget',      value: memory.budget },
+    memory.desired_location && { label: 'Location',    value: memory.desired_location },
+    memory.urgency          && { label: 'Urgency',     value: memory.urgency,
+      color: memory.urgency === 'high' ? '#f87171' : memory.urgency === 'medium' ? '#fbbf24' : '#60a5fa' },
+    memory.objections       && { label: 'Objections',  value: memory.objections, color: '#f87171' },
+    memory.viewed_properties && { label: 'Viewed',     value: memory.viewed_properties },
+    memory.language && memory.language !== 'English'
+                            && { label: 'Language',    value: memory.language },
+    memory.next_best_action && { label: 'Next action', value: memory.next_best_action, color: '#34d399' },
+    memory.last_user_intent && { label: 'Last intent', value: memory.last_user_intent },
+  ].filter(Boolean) as { label: string; value: string; color?: string }[]
+
+  if (rows.length === 0) return null
+
+  return (
+    <div className="rounded-2xl p-4 flex flex-col gap-3"
+      style={{ background:'rgba(99,102,241,0.06)', border:'1px solid rgba(99,102,241,0.18)' }}>
+      <div className="flex items-center gap-2">
+        <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0"
+          style={{ background:'rgba(99,102,241,0.2)' }}>
+          <Brain className="w-3.5 h-3.5 text-indigo-400" />
+        </div>
+        <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-400/70">AI Memory</span>
+        <span className="ml-auto text-[9px] text-white/20">
+          {new Date(memory.updated_at).toLocaleDateString('en-GB', { day:'numeric', month:'short' })}
+        </span>
+      </div>
+      <div className="flex flex-col gap-2">
+        {rows.map(row => (
+          <div key={row.label} className="flex gap-2 text-[11px]">
+            <span className="text-white/30 flex-shrink-0 w-20">{row.label}</span>
+            <span className="leading-relaxed" style={{ color: row.color ?? 'rgba(255,255,255,0.65)' }}>
+              {row.value}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /* ─── Main panel ─────────────────────────────────────────────── */
 
 export default function LeadPanel({
@@ -881,6 +947,16 @@ export default function LeadPanel({
   const statusCfg = STATUS_CFG[lead.status]
   const scoreCfg  = SCORE_CFG[lead.scoreLabel]
   const meta      = lead.metadata ?? {}
+
+  // Lead memory fetched from /api/lead-memory
+  const [leadMemory, setLeadMemory] = useState<LeadMemory | null>(null)
+
+  useEffect(() => {
+    fetch(`/api/lead-memory?lead_id=${encodeURIComponent(lead.id)}`)
+      .then(r => r.json())
+      .then((d: { memory?: LeadMemory | null }) => setLeadMemory(d.memory ?? null))
+      .catch(() => {})
+  }, [lead.id])
 
   // Fresh appointments fetched directly from the DB for this lead.
   // null = not yet fetched; [] = fetched with no results.
@@ -1520,6 +1596,9 @@ export default function LeadPanel({
 
               {/* Lead intelligence grid */}
               <LeadIntelligenceGrid ai={ai} lead={lead} />
+
+              {/* AI Memory */}
+              {leadMemory && <LeadMemoryCard memory={leadMemory} />}
 
               {/* Contact info — buttons only */}
               {(lead.phone || lead.email) && (

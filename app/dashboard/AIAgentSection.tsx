@@ -13,8 +13,6 @@ import { supabase } from '../lib/supabase'
 
 /* ─── Shared constants ───────────────────────────────────────── */
 
-const CLIENT_ID = '0616a47a-2c01-49ce-a798-385f8276b92b'
-
 const TONES = [
   { id: 'professional', label: 'Professional',  desc: 'Formal, precise, business-focused'   },
   { id: 'friendly',     label: 'Friendly',      desc: 'Warm, approachable, conversational'  },
@@ -43,14 +41,14 @@ const DEFAULT_SLOT_DEFS: SlotDef[] = [
 /* ─── Types ──────────────────────────────────────────────────── */
 
 interface AgentConfig {
-  id:          string
-  name:        string
-  persona:     string
-  objective:   string
-  tone:        string
-  fallback_msg:string
-  model:       string
-  temperature: number
+  id:           string
+  name:         string
+  persona:      string
+  objective:    string
+  tone:         string
+  fallback_msg: string
+  model:        string
+  temperature:  number
 }
 
 interface KnowledgeSource {
@@ -184,29 +182,33 @@ function MetricCard({ icon: Icon, value, label, sub, color }: { icon: React.Comp
    PAGE 1: AI OVERVIEW
 ══════════════════════════════════════════════════════════════ */
 
-function AIOverviewPage() {
-  const [agent, setAgent]   = useState<AgentConfig | null>(null)
-  const [kCount, setKCount] = useState(0)
+function AIOverviewPage({ businessId }: { businessId: string }) {
+  const [agent,     setAgent]     = useState<AgentConfig | null>(null)
+  const [kCount,    setKCount]    = useState(0)
   const [convCount, setConvCount] = useState(0)
-  const [loading, setLoading] = useState(true)
+  const [liveSlots, setLiveSlots] = useState<SlotDef[]>(DEFAULT_SLOT_DEFS)
+  const [loading,   setLoading]   = useState(true)
 
   useEffect(() => {
     async function load() {
       setLoading(true)
-      const [agentRes, kRes, convRes] = await Promise.all([
+      const [agentRes, kRes, convRes, qualRes] = await Promise.all([
         fetch('/api/ai-agent/agent'),
         fetch('/api/ai-agent/knowledge'),
-        supabase.from('conversations').select('id', { count:'exact', head:true }).eq('client_id', CLIENT_ID),
+        supabase.from('conversations').select('id', { count:'exact', head:true }).eq('business_id', businessId),
+        fetch('/api/ai-agent/qualification'),
       ])
       const agentData = await agentRes.json() as { agent: AgentConfig | null }
       const kData     = await kRes.json()     as { sources: KnowledgeSource[] }
+      const qualData  = await qualRes.json()  as { fields?: QualFieldRow[] }
       setAgent(agentData.agent)
       setKCount(kData.sources?.filter(s => s.is_active).length ?? 0)
       setConvCount(convRes.count ?? 0)
+      if (qualData.fields?.length) setLiveSlots(qualData.fields.map(mapQualRow))
       setLoading(false)
     }
     void load()
-  }, [])
+  }, [businessId])
 
   if (loading) return <Spinner />
 
@@ -250,8 +252,8 @@ function AIOverviewPage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard icon={BookOpen}     value={kCount}     label="Knowledge Sources"  sub="active & trained"    color="#a78bfa" />
         <MetricCard icon={MessageSquare} value={convCount}  label="Total Conversations" sub="all time"           color="#60a5fa" />
-        <MetricCard icon={Target}        value={DEFAULT_SLOT_DEFS.filter(s=>s.required).length} label="Required Slots" sub="to qualify a lead" color="#34d399" />
-        <MetricCard icon={Brain}         value={DEFAULT_SLOT_DEFS.length} label="Tracked Slots" sub="total data points" color="#fbbf24" />
+        <MetricCard icon={Target}        value={liveSlots.filter(s=>s.required).length} label="Required Slots" sub="to qualify a lead" color="#34d399" />
+        <MetricCard icon={Brain}         value={liveSlots.length} label="Tracked Slots" sub="total data points" color="#fbbf24" />
       </div>
 
       {/* Quick actions */}
@@ -282,7 +284,7 @@ function AIOverviewPage() {
       <PageCard>
         <h3 className="text-sm font-bold text-white mb-4">Slot Qualification Map</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {DEFAULT_SLOT_DEFS.map(slot => (
+          {liveSlots.map(slot => (
             <div key={slot.key} className="flex items-center gap-3 px-3 py-2.5 rounded-xl"
               style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.06)' }}>
               <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: slot.required ? '#a78bfa' : 'rgba(255,255,255,0.2)' }} />
@@ -547,7 +549,8 @@ function AIInstructionsPage() {
    PAGE 3: KNOWLEDGE BASE
 ══════════════════════════════════════════════════════════════ */
 
-type AddMode = 'url' | 'text' | 'file'
+type AddMode = 'url' | 'text' | 'file' | 'crawl'
+type CrawlResult = { url: string; title?: string; status: 'crawling' | 'done' | 'error'; error?: string }
 
 function KnowledgeBasePage() {
   const [sources,  setSources]  = useState<KnowledgeSource[]>([])
@@ -559,6 +562,11 @@ function KnowledgeBasePage() {
   const [url,      setUrl]      = useState('')
   const [error,    setError]    = useState<string | null>(null)
   const [success,  setSuccess]  = useState(false)
+  const [crawlUrl,      setCrawlUrl]      = useState('')
+  const [crawlMaxPages, setCrawlMaxPages] = useState(10)
+  const [crawlRunning,  setCrawlRunning]  = useState(false)
+  const [crawlResults,  setCrawlResults]  = useState<CrawlResult[]>([])
+  const [crawlDone,     setCrawlDone]     = useState<{ saved: number; failed: number; crawled: number } | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -586,10 +594,30 @@ function KnowledgeBasePage() {
 
   const handleAdd = async () => {
     setError(null)
-    const finalTitle   = title.trim()
-    const finalContent = addMode === 'url' ? url.trim() : content.trim()
+    const finalTitle = title.trim()
+
+    if (addMode === 'url') {
+      const rawUrl = url.trim()
+      if (!rawUrl) { setError('Please enter a URL'); return }
+      setSaving(true)
+      try {
+        const res  = await fetch('/api/ai-agent/knowledge', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ title: finalTitle || undefined, url: rawUrl, source_type: 'url' }),
+        })
+        const data = await res.json() as { error?: string }
+        if (!res.ok) { setError(data.error ?? 'Failed to fetch URL'); return }
+        setTitle(''); setUrl('')
+        setSuccess(true); setTimeout(() => setSuccess(false), 3000)
+        await load()
+      } catch { setError('Network error') }
+      finally { setSaving(false) }
+      return
+    }
+
+    const finalContent = content.trim()
     if (!finalTitle)   { setError('Please enter a title'); return }
-    if (!finalContent) { setError(addMode === 'url' ? 'Please enter a URL' : 'Please enter content'); return }
+    if (!finalContent) { setError('Please enter content'); return }
 
     setSaving(true)
     try {
@@ -599,7 +627,7 @@ function KnowledgeBasePage() {
       })
       const data = await res.json() as { error?: string }
       if (!res.ok) { setError(data.error ?? 'Failed to save'); return }
-      setTitle(''); setContent(''); setUrl('')
+      setTitle(''); setContent('')
       setSuccess(true); setTimeout(() => setSuccess(false), 3000)
       await load()
     } catch { setError('Network error') }
@@ -619,6 +647,51 @@ function KnowledgeBasePage() {
     setSources(prev => prev.map(s => s.id === id ? {...s, is_active} : s))
   }
 
+  const handleCrawl = async () => {
+    const rawUrl = crawlUrl.trim()
+    if (!rawUrl) { setError('Please enter a root URL to crawl'); return }
+    setError(null)
+    setCrawlRunning(true)
+    setCrawlResults([])
+    setCrawlDone(null)
+    try {
+      const res = await fetch('/api/ai-agent/knowledge/crawl', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: rawUrl, max_pages: crawlMaxPages }),
+      })
+      if (!res.ok || !res.body) {
+        const d = await res.json() as { error?: string }
+        setError(d.error ?? 'Crawl failed'); return
+      }
+      const reader  = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n'); buf = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.trim()) continue
+          try {
+            const ev = JSON.parse(line) as { type: string; url?: string; title?: string; error?: string; pages_saved?: number; pages_failed?: number; pages_crawled?: number }
+            if (ev.type === 'progress' && ev.url) {
+              setCrawlResults(p => [...p, { url: ev.url!, status: 'crawling' }])
+            } else if (ev.type === 'page_done' && ev.url) {
+              setCrawlResults(p => p.map(r => r.url === ev.url ? { ...r, title: ev.title, status: 'done' } : r))
+            } else if (ev.type === 'page_error' && ev.url) {
+              setCrawlResults(p => p.map(r => r.url === ev.url ? { ...r, error: ev.error, status: 'error' } : r))
+            } else if (ev.type === 'done') {
+              setCrawlDone({ saved: ev.pages_saved ?? 0, failed: ev.pages_failed ?? 0, crawled: ev.pages_crawled ?? 0 })
+              await load()
+            }
+          } catch { /* malformed line */ }
+        }
+      }
+    } catch { setError('Network error during crawl') }
+    finally { setCrawlRunning(false) }
+  }
+
   const sourceIcon = (content: string) => {
     if (/^https?:\/\//i.test(content)) return Globe
     if (content.startsWith('[PDF:'))    return File
@@ -634,7 +707,7 @@ function KnowledgeBasePage() {
         {/* Mode tabs */}
         <div className="flex gap-1 p-1 rounded-xl mb-5 w-fit"
           style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.07)' }}>
-          {([['text','Text / Paste'], ['url','Website URL'], ['file','Upload File']] as [AddMode, string][]).map(([mode, label]) => (
+          {([['text','Text / Paste'], ['url','Website URL'], ['file','Upload File'], ['crawl','Crawl Site']] as [AddMode, string][]).map(([mode, label]) => (
             <button key={mode} onClick={() => { setAddMode(mode); setError(null) }}
               className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-all"
               style={addMode === mode
@@ -645,56 +718,115 @@ function KnowledgeBasePage() {
           ))}
         </div>
 
-        {/* Title */}
-        <div className="mb-3">
-          <label className="block text-[10px] font-semibold text-white/35 uppercase tracking-widest mb-2">Title</label>
-          <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Property Listings Q2 2026"
-            className="w-full px-4 py-2.5 rounded-xl text-sm text-white/80 placeholder:text-white/20 outline-none"
-            style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }} />
-        </div>
-
-        {/* Content by mode */}
-        {addMode === 'url' && (
-          <div className="mb-4">
-            <label className="block text-[10px] font-semibold text-white/35 uppercase tracking-widest mb-2">Website URL</label>
-            <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl"
-              style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }}>
-              <Link className="w-3.5 h-3.5 text-white/30 flex-shrink-0" />
-              <input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://your-website.com/about"
-                className="flex-1 text-sm text-white/80 placeholder:text-white/20 outline-none bg-transparent" />
+        {/* Form body — one branch per mode, mutually exclusive */}
+        {addMode === 'crawl' ? (
+          <div className="mb-4 flex flex-col gap-3">
+            <div>
+              <label className="block text-[10px] font-semibold text-white/35 uppercase tracking-widest mb-2">Root URL</label>
+              <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl"
+                style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }}>
+                <Globe className="w-3.5 h-3.5 text-white/30 flex-shrink-0" />
+                <input value={crawlUrl} onChange={e => setCrawlUrl(e.target.value)}
+                  placeholder="https://example.com"
+                  className="flex-1 text-sm text-white/80 placeholder:text-white/20 outline-none bg-transparent" />
+              </div>
             </div>
-            <div className="text-[10px] text-white/25 mt-2">The URL will be stored as a knowledge reference</div>
-          </div>
-        )}
-
-        {addMode === 'text' && (
-          <div className="mb-4">
-            <label className="block text-[10px] font-semibold text-white/35 uppercase tracking-widest mb-2">Content</label>
-            <textarea value={content} onChange={e => setContent(e.target.value)} rows={6}
-              placeholder="Paste any text content here — property descriptions, FAQs, pricing details, policies…"
-              className="w-full px-4 py-3 rounded-xl text-sm text-white/80 placeholder:text-white/20 outline-none resize-none leading-relaxed"
-              style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }} />
-            <div className="text-[10px] text-white/25 mt-2">{content.length} chars</div>
-          </div>
-        )}
-
-        {addMode === 'file' && (
-          <div className="mb-4">
-            <input ref={fileRef} type="file" accept=".txt,.md,.pdf,.csv" onChange={handleFileChange} className="hidden" />
-            <button onClick={() => fileRef.current?.click()}
-              className="flex flex-col items-center justify-center w-full py-8 rounded-xl transition-all cursor-pointer border-dashed hover:border-blue-400/40"
-              style={{ background:'rgba(255,255,255,0.02)', border:'2px dashed rgba(255,255,255,0.10)' }}>
-              <Upload className="w-6 h-6 text-white/20 mb-2" />
-              <span className="text-sm text-white/40">Click to upload a file</span>
-              <span className="text-[10px] text-white/20 mt-1">.txt · .md · .csv · .pdf</span>
-            </button>
-            {content && (
-              <div className="mt-3 px-4 py-3 rounded-xl text-xs text-white/50 line-clamp-3"
-                style={{ background:'rgba(255,255,255,0.04)' }}>
-                {content.slice(0, 200)}{content.length > 200 ? '…' : ''}
+            <div className="flex items-center gap-3">
+              <div className="flex-1">
+                <label className="block text-[10px] font-semibold text-white/35 uppercase tracking-widest mb-2">Max Pages</label>
+                <input type="number" min={1} max={50} value={crawlMaxPages}
+                  onChange={e => setCrawlMaxPages(Math.min(50, Math.max(1, Number(e.target.value))))}
+                  className="w-full px-4 py-2.5 rounded-xl text-sm text-white/80 outline-none"
+                  style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }} />
+              </div>
+              <div className="text-[10px] text-white/25 mt-5">max 50 · same domain only</div>
+            </div>
+            {(crawlResults.length > 0 || crawlDone) && (
+              <div className="rounded-xl overflow-hidden" style={{ border:'1px solid rgba(255,255,255,0.07)' }}>
+                <div className="px-3 py-2 flex items-center justify-between"
+                  style={{ background:'rgba(255,255,255,0.04)', borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+                  <span className="text-[10px] font-semibold text-white/40 uppercase tracking-widest">
+                    {crawlRunning ? `Crawling… ${crawlResults.length}/${crawlMaxPages}` : `Crawled ${crawlResults.length} pages`}
+                  </span>
+                  {crawlDone && (
+                    <span className="text-[10px] text-emerald-400 font-semibold">
+                      {crawlDone.saved} saved · {crawlDone.failed} failed
+                    </span>
+                  )}
+                </div>
+                <div className="max-h-48 overflow-y-auto">
+                  {crawlResults.map((r, i) => (
+                    <div key={i} className="flex items-center gap-2 px-3 py-1.5 text-[11px]"
+                      style={{ borderBottom:'1px solid rgba(255,255,255,0.04)' }}>
+                      {r.status === 'crawling' && (
+                        <motion.span className="w-3 h-3 rounded-full border border-white/30 border-t-white/70 flex-shrink-0"
+                          animate={{ rotate: 360 }} transition={{ duration: 0.7, repeat: Infinity }} />
+                      )}
+                      {r.status === 'done'  && <CheckCircle  className="w-3 h-3 text-emerald-400 flex-shrink-0" />}
+                      {r.status === 'error' && <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0" />}
+                      <span className="truncate text-white/50" title={r.url}>
+                        {r.title ?? (new URL(r.url).pathname || '/')}
+                      </span>
+                      {r.error && <span className="ml-auto text-red-400/70 flex-shrink-0">{r.error.slice(0, 40)}</span>}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
+        ) : (
+          <>
+            {/* Title (text / url / file modes) */}
+            <div className="mb-3">
+              <label className="block text-[10px] font-semibold text-white/35 uppercase tracking-widest mb-2">Title</label>
+              <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Property Listings Q2 2026"
+                className="w-full px-4 py-2.5 rounded-xl text-sm text-white/80 placeholder:text-white/20 outline-none"
+                style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }} />
+            </div>
+
+            {addMode === 'url' && (
+              <div className="mb-4">
+                <label className="block text-[10px] font-semibold text-white/35 uppercase tracking-widest mb-2">Website URL</label>
+                <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl"
+                  style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }}>
+                  <Link className="w-3.5 h-3.5 text-white/30 flex-shrink-0" />
+                  <input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://your-website.com/about"
+                    className="flex-1 text-sm text-white/80 placeholder:text-white/20 outline-none bg-transparent" />
+                </div>
+                <div className="text-[10px] text-white/25 mt-2">The page will be fetched and its text extracted automatically. Title is optional — the page title will be used if left blank.</div>
+              </div>
+            )}
+
+            {addMode === 'text' && (
+              <div className="mb-4">
+                <label className="block text-[10px] font-semibold text-white/35 uppercase tracking-widest mb-2">Content</label>
+                <textarea value={content} onChange={e => setContent(e.target.value)} rows={6}
+                  placeholder="Paste any text content here — property descriptions, FAQs, pricing details, policies…"
+                  className="w-full px-4 py-3 rounded-xl text-sm text-white/80 placeholder:text-white/20 outline-none resize-none leading-relaxed"
+                  style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }} />
+                <div className="text-[10px] text-white/25 mt-2">{content.length} chars</div>
+              </div>
+            )}
+
+            {addMode === 'file' && (
+              <div className="mb-4">
+                <input ref={fileRef} type="file" accept=".txt,.md,.pdf,.csv" onChange={handleFileChange} className="hidden" />
+                <button onClick={() => fileRef.current?.click()}
+                  className="flex flex-col items-center justify-center w-full py-8 rounded-xl transition-all cursor-pointer border-dashed hover:border-blue-400/40"
+                  style={{ background:'rgba(255,255,255,0.02)', border:'2px dashed rgba(255,255,255,0.10)' }}>
+                  <Upload className="w-6 h-6 text-white/20 mb-2" />
+                  <span className="text-sm text-white/40">Click to upload a file</span>
+                  <span className="text-[10px] text-white/20 mt-1">.txt · .md · .csv · .pdf</span>
+                </button>
+                {content && (
+                  <div className="mt-3 px-4 py-3 rounded-xl text-xs text-white/50 line-clamp-3"
+                    style={{ background:'rgba(255,255,255,0.04)' }}>
+                    {content.slice(0, 200)}{content.length > 200 ? '…' : ''}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         )}
 
         {error && (
@@ -705,15 +837,20 @@ function KnowledgeBasePage() {
         )}
 
         <div className="flex items-center justify-between">
-          <div className={`flex items-center gap-1.5 text-xs font-semibold transition-all ${success ? 'text-emerald-400 opacity-100' : 'opacity-0'}`}>
-            <CheckCircle className="w-3.5 h-3.5" />Source added
+          <div className={`flex items-center gap-1.5 text-xs font-semibold transition-all ${success || crawlDone ? 'text-emerald-400 opacity-100' : 'opacity-0'}`}>
+            <CheckCircle className="w-3.5 h-3.5" />
+            {crawlDone ? `${crawlDone.saved} pages saved` : 'Source added'}
           </div>
-          <motion.button onClick={handleAdd} disabled={saving} whileTap={{ scale:0.97 }}
+          <motion.button
+            onClick={addMode === 'crawl' ? handleCrawl : handleAdd}
+            disabled={saving || crawlRunning}
+            whileTap={{ scale: 0.97 }}
             className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white"
             style={{ background:'rgba(96,165,250,0.85)', border:'1px solid rgba(147,197,253,0.4)' }}>
-            {saving
-              ? <><motion.span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white" animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity }} />Saving…</>
-              : <><Plus className="w-4 h-4" />Add Source</>}
+            {(saving || crawlRunning)
+              ? <><motion.span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white" animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity }} />
+                  {addMode === 'crawl' ? 'Crawling…' : addMode === 'url' ? 'Fetching…' : 'Saving…'}</>
+              : <><Plus className="w-4 h-4" />{addMode === 'crawl' ? 'Start Crawl' : 'Add Source'}</>}
           </motion.button>
         </div>
       </PageCard>
@@ -780,13 +917,11 @@ function KnowledgeBasePage() {
    PAGE 4: LEAD QUALIFICATION
 ══════════════════════════════════════════════════════════════ */
 
-const STORAGE_KEY = 'ai_qualification_config'
-
 function mapQualRow(r: QualFieldRow): SlotDef {
   return { key: r.field_key, label: r.label, required: r.required, question: r.prompt }
 }
 
-function LeadQualificationPage() {
+function LeadQualificationPage({ businessId }: { businessId: string }) {
   const [slots,        setSlots]        = useState<SlotDef[]>(DEFAULT_SLOT_DEFS)
   const [threshold,    setThreshold]    = useState(3)
   const [booking,      setBooking]      = useState({ requireCity: true, requireContact: true, requireProperty: true })
@@ -795,6 +930,9 @@ function LeadQualificationPage() {
   const [saving,       setSaving]       = useState(false)
   const [saved,        setSaved]        = useState(false)
   const [toggleErr,    setToggleErr]    = useState<string | null>(null)
+
+  // Per-business localStorage key so settings don't bleed between accounts
+  const storageKey = `ai_qualification_config_${businessId}`
 
   // Load from Supabase on mount; fall back to localStorage for threshold/booking/guard
   useEffect(() => {
@@ -809,7 +947,7 @@ function LeadQualificationPage() {
       .finally(() => setLoading(false))
 
     try {
-      const stored = localStorage.getItem(STORAGE_KEY)
+      const stored = localStorage.getItem(storageKey)
       if (stored) {
         const cfg = JSON.parse(stored) as { threshold?: number; booking?: typeof booking; guard?: boolean }
         if (cfg.threshold) setThreshold(cfg.threshold)
@@ -817,7 +955,8 @@ function LeadQualificationPage() {
         if (cfg.guard !== undefined) setGuard(cfg.guard)
       }
     } catch { /* ignore */ }
-  }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [businessId])
 
   const handleSave = async () => {
     setSaving(true)
@@ -829,8 +968,8 @@ function LeadQualificationPage() {
           fields: slots.map((s, i) => ({ field_key: s.key, required: s.required, sort_order: i })),
         }),
       })
-      // Persist threshold/booking/guard to localStorage
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ threshold, booking, guard })) } catch { /* ignore */ }
+      // Persist threshold/booking/guard to localStorage (scoped to this business)
+      try { localStorage.setItem(storageKey, JSON.stringify({ threshold, booking, guard })) } catch { /* ignore */ }
       setSaved(true); setTimeout(() => setSaved(false), 3000)
     } catch {
       /* ignore — user can retry */
@@ -1020,7 +1159,15 @@ function LeadQualificationPage() {
    PAGE 5: TEST AI
 ══════════════════════════════════════════════════════════════ */
 
-function TestAIPage() {
+function TestAIPage({
+  businessId,
+  onLeadCreated,
+  onAppointmentCreated,
+}: {
+  businessId:           string
+  onLeadCreated?:       (leadId: string) => void
+  onAppointmentCreated?:(apptId: string) => void
+}) {
   const [messages,     setMessages]     = useState<ChatMessage[]>([])
   const [input,        setInput]        = useState('')
   const [sending,      setSending]      = useState(false)
@@ -1028,8 +1175,11 @@ function TestAIPage() {
   const [lastDebug,    setLastDebug]    = useState<ChatMessage['debug'] | null>(null)
   const [showRaw,      setShowRaw]      = useState(false)
   const [rawResponse,  setRawResponse]  = useState<Record<string,unknown> | null>(null)
-  const endRef = useRef<HTMLDivElement>(null)
+  const endRef   = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  // Track IDs already reported so we call the callbacks only once per record
+  const reportedLeadRef = useRef<string | null>(null)
+  const reportedApptRef = useRef<string | null>(null)
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior:'smooth' })
@@ -1037,6 +1187,8 @@ function TestAIPage() {
 
   const reset = () => {
     setMessages([]); setInput(''); setConvId(null); setLastDebug(null); setRawResponse(null)
+    reportedLeadRef.current = null
+    reportedApptRef.current = null
     inputRef.current?.focus()
   }
 
@@ -1052,11 +1204,13 @@ function TestAIPage() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ business_id: CLIENT_ID, conversation_id: convId, message: text, debug: true }),
+        body: JSON.stringify({ business_id: businessId, conversation_id: convId, message: text, debug: true }),
       })
       const data = await res.json() as {
         reply?: string
         conversation_id?: string
+        lead_id?: string
+        appointment_id?: string
         debug?: ChatMessage['debug']
         error?: string
       }
@@ -1067,6 +1221,17 @@ function TestAIPage() {
 
       if (data.conversation_id) setConvId(data.conversation_id)
       if (debug) setLastDebug(debug)
+
+      // Notify parent to refresh state for newly created records.
+      // Guard with refs so we call once per unique ID, not on every message.
+      if (data.lead_id && data.lead_id !== reportedLeadRef.current) {
+        reportedLeadRef.current = data.lead_id
+        onLeadCreated?.(data.lead_id)
+      }
+      if (data.appointment_id && data.appointment_id !== reportedApptRef.current) {
+        reportedApptRef.current = data.appointment_id
+        onAppointmentCreated?.(data.appointment_id)
+      }
 
       setMessages(prev => [...prev, { role:'ai', content:reply, debug: debug ?? undefined }])
     } catch (e) {
@@ -1304,15 +1469,31 @@ function TestAIPage() {
    MAIN EXPORT
 ══════════════════════════════════════════════════════════════ */
 
-export default function AIAgentSection({ section }: { section: string }) {
+export default function AIAgentSection({
+  section,
+  businessId,
+  onLeadCreated,
+  onAppointmentCreated,
+}: {
+  section:               string
+  businessId:            string
+  onLeadCreated?:        (leadId: string) => void
+  onAppointmentCreated?: (apptId: string) => void
+}) {
   return (
     <AnimatePresence mode="wait">
       <motion.div key={section} initial={{ opacity:0, y:8 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-6 }} transition={{ duration:0.18 }}>
-        {section === 'ai_overview'      && <AIOverviewPage />}
+        {section === 'ai_overview'      && <AIOverviewPage     businessId={businessId} />}
         {section === 'ai_instructions'  && <AIInstructionsPage />}
         {section === 'ai_knowledge'     && <KnowledgeBasePage />}
-        {section === 'ai_qualification' && <LeadQualificationPage />}
-        {section === 'ai_test'          && <TestAIPage />}
+        {section === 'ai_qualification' && <LeadQualificationPage businessId={businessId} />}
+        {section === 'ai_test'          && (
+          <TestAIPage
+            businessId={businessId}
+            onLeadCreated={onLeadCreated}
+            onAppointmentCreated={onAppointmentCreated}
+          />
+        )}
       </motion.div>
     </AnimatePresence>
   )

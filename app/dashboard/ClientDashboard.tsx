@@ -10,10 +10,11 @@ import {
   DollarSign, Timer, Menu, ChevronLeft, ChevronRight, ChevronDown, LineChart, BellDot,
   MessageSquare, SlidersHorizontal, Volume2, VolumeX, ArrowUpDown, Plus,
   History, ScrollText, Undo2, Pencil, Trash2, CalendarPlus, MoveRight,
-  UserPlus, Copy, Check, UserCog, Crown, Eye, Bot, BookOpen, FlaskConical, Brain,
+  UserPlus, Copy, Check, UserCog, Crown, Eye, Bot, BookOpen, FlaskConical, Brain, Headphones,
 } from 'lucide-react'
 import LeadPanel from './LeadPanel'
 import AIAgentSection from './AIAgentSection'
+import LiveChatSection from './LiveChatSection'
 import AddLeadModal from './AddLeadModal'
 import AddAppointmentModal from './AddAppointmentModal'
 import AnalyticsSection from './AnalyticsSection'
@@ -26,7 +27,7 @@ import { getPermissions, type Permissions } from '../lib/permissions'
 /* ─── Types ──────────────────────────────────────────────────── */
 
 type Section      = 'overview' | 'analytics' | 'pipeline' | 'activity' | 'appointments' | 'automation' | 'settings' | 'log' | 'team'
-                  | 'ai_overview' | 'ai_instructions' | 'ai_knowledge' | 'ai_qualification' | 'ai_test'
+                  | 'live_chat' | 'ai_overview' | 'ai_instructions' | 'ai_knowledge' | 'ai_qualification' | 'ai_test'
 type LeadStatus   = 'new' | 'contacted' | 'demo_booked' | 'won' | 'lost'
 type ScoreLabel   = 'hot' | 'warm' | 'cold'
 type ApptStatus   = 'confirmed' | 'pending' | 'completed' | 'cancelled'
@@ -134,6 +135,7 @@ const NAV_ITEMS: {id:Section; label:string; Icon:React.ComponentType<{className?
   { id:'overview',     label:'Overview',      Icon:LayoutDashboard          },
   { id:'analytics',    label:'Analytics',     Icon:LineChart                },
   { id:'pipeline',     label:'Lead Pipeline', Icon:Users,       badge:10    },
+  { id:'live_chat',    label:'Live Chat',     Icon:Headphones              },
   { id:'activity',     label:'Activity Feed', Icon:Activity                 },
   { id:'appointments', label:'Appointments',  Icon:Calendar,    badge:4     },
   { id:'log',          label:'Audit Log',     Icon:History                  },
@@ -154,6 +156,7 @@ const SECTION_META: Record<Section,{title:string;sub:string}> = {
   overview:     { title:'Overview',       sub:'Performance snapshot and live activity'                },
   analytics:    { title:'Analytics',      sub:'Conversation metrics and conversion data'              },
   pipeline:     { title:'Lead Pipeline',  sub:'Click any lead to view full details'                  },
+  live_chat:    { title:'Live Chat',      sub:'Human handover inbox and real-time customer messages' },
   activity:     { title:'Activity Feed',  sub:'Automated events across all channels'                  },
   appointments: { title:'Appointments',   sub:'Weekly schedule and upcoming bookings'                 },
   log:          { title:'Audit Log',      sub:'Full history of every action — click Undo to reverse'  },
@@ -3314,7 +3317,7 @@ function TeamSection({
 /* ─── Hash persistence helpers ───────────────────────────────── */
 
 const VALID_SECTIONS = new Set<string>([
-  'overview','analytics','pipeline','activity','appointments','log','team','automation','settings',
+  'overview','analytics','pipeline','live_chat','activity','appointments','log','team','automation','settings',
   'ai_overview','ai_instructions','ai_knowledge','ai_qualification','ai_test',
 ])
 
@@ -4067,6 +4070,7 @@ export default function ClientDashboard({
                 {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={visibleLeads} appointments={appointments} activity={activityFeed} overviewMetrics={overviewMetrics} />}
                 {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} liveAnalytics={liveAnalytics} />}
                 {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={visibleLeads} newLeadIds={newLeadIds} onAddLead={can.canAddLead ? () => setShowAddLead(true) : undefined} teamMembers={teamMembers} />}
+                {section==='live_chat'    && <LiveChatSection businessId={businessIdProp ?? '0616a47a-2c01-49ce-a798-385f8276b92b'} />}
                 {section==='activity'     && <ActivitySection feed={activityFeed} />}
                 {section==='appointments' && <AppointmentsSection appointments={appointments} leads={visibleLeads} onSelectLead={handleSelectLead} onApptUpdated={handleApptUpdated} onAddAppointment={can.canAddAppt ? () => openAddAppt() : undefined} actorName={currentUser.name} />}
                 {section==='log'          && <LogSection can={can} actorName={currentUser.name} onToast={(title, sub, ok) =>

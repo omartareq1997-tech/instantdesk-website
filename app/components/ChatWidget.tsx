@@ -20,7 +20,7 @@ const GREETING: Msg = {
 
 /* ─── Types ─────────────────────────────────────────────── */
 
-type Role = 'ai' | 'user'
+type Role = 'ai' | 'user' | 'human' | 'system'
 type Msg  = { id: string; role: Role; text: string }
 
 /* ─── Static UI data ─────────────────────────────────────── */
@@ -54,7 +54,20 @@ function TypingDots() {
 /* ─── Message bubble ─────────────────────────────────────── */
 
 function Bubble({ msg }: { msg: Msg }) {
-  const isAI = msg.role === 'ai'
+  if (msg.role === 'system') {
+    return (
+      <div className="flex justify-center">
+        <div
+          className="max-w-[86%] px-3 py-1.5 rounded-full text-[11px] text-white/35 text-center"
+          style={{ background: 'rgba(255,255,255,0.045)', border: '1px solid rgba(255,255,255,0.06)' }}
+        >
+          {msg.text}
+        </div>
+      </div>
+    )
+  }
+
+  const isAI = msg.role === 'ai' || msg.role === 'human'
   return (
     <motion.div
       initial={{ opacity: 0, y: 10, scale: 0.96 }}
@@ -85,6 +98,9 @@ function Bubble({ msg }: { msg: Msg }) {
           boxShadow: '0 4px 16px rgba(124,58,237,0.2)',
         }}
       >
+        {msg.role === 'human' && (
+          <div className="text-[10px] text-emerald-300/70 font-semibold mb-1">Team reply</div>
+        )}
         {msg.text}
       </div>
     </motion.div>
@@ -101,6 +117,7 @@ export default function ChatWidget() {
   const [input,     setInput]     = useState('')
   const [hasOpened, setHasOpened] = useState(false)
   const [showLabel, setShowLabel] = useState(false)
+  const [handoverActive, setHandoverActive] = useState(false)
 
   const endRef          = useRef<HTMLDivElement>(null)
   const inputRef        = useRef<HTMLInputElement>(null)
@@ -124,6 +141,46 @@ export default function ChatWidget() {
     const t = setTimeout(() => setShowLabel(true), 3000)
     return () => clearTimeout(t)
   }, [])
+
+  useEffect(() => {
+    if (!isOpen || !conversationRef.current) return
+
+    let cancelled = false
+    const loadMessages = async () => {
+      const conversationId = conversationRef.current
+      if (!conversationId) return
+      try {
+        const res = await fetch(`/api/live-chat/widget/messages?conversation_id=${encodeURIComponent(conversationId)}`)
+        if (!res.ok) return
+        const data = await res.json() as {
+          status?: string
+          messages?: { id: string; role: string; content: string; metadata?: { sender_type?: string } | null }[]
+        }
+        if (cancelled) return
+        setHandoverActive(data.status === 'handover_requested' || data.status === 'live_chat')
+        if (data.messages?.length) {
+          setMessages(data.messages.map((msg) => ({
+            id: msg.id,
+            role: msg.role === 'user'
+              ? 'user'
+              : msg.role === 'human' || msg.metadata?.sender_type === 'human'
+                ? 'human'
+                : msg.role === 'system'
+                  ? 'system'
+                  : 'ai',
+            text: msg.content,
+          })))
+        }
+      } catch { /* polling is best-effort */ }
+    }
+
+    void loadMessages()
+    const interval = window.setInterval(() => { void loadMessages() }, 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [isOpen])
 
   const open = useCallback(() => {
     setMessages([GREETING])
@@ -163,10 +220,15 @@ export default function ChatWidget() {
         reply?:           string
         conversation_id?: string
         error?:           string
+        status?:          string
+        handover?:        boolean
       }
 
       // Persist the conversation_id for subsequent messages
       if (data.conversation_id) conversationRef.current = data.conversation_id
+      if (data.handover || data.status === 'handover_requested' || data.status === 'live_chat') {
+        setHandoverActive(true)
+      }
 
       const replyText = data.reply ?? data.error ?? 'Sorry, something went wrong. Please try again.'
       setMessages(prev => [...prev, { id: nextId(), role: 'ai', text: replyText }])
@@ -303,10 +365,10 @@ export default function ChatWidget() {
               {/* Channel pills */}
               <div className="flex items-center gap-2">
                 <span className="text-[9px] uppercase tracking-widest text-white/20 font-semibold flex-shrink-0">
-                  Active on
+                  {handoverActive ? 'Handover active' : 'Active on'}
                 </span>
                 <div className="flex gap-1.5 flex-wrap">
-                  {CHANNELS.map(({ Icon, color, bg, label }) => (
+                  {(handoverActive ? CHANNELS.slice(0, 1) : CHANNELS).map(({ Icon, color, bg, label }) => (
                     <motion.div
                       key={label}
                       whileHover={{ scale: 1.1, y: -1 }}
@@ -402,7 +464,8 @@ export default function ChatWidget() {
               <div className="flex items-center justify-center gap-1.5 mt-3">
                 <Sparkles className="w-3 h-3 text-violet-500/50" />
                 <span className="text-[10px] text-white/20 font-medium">
-                  Powered by <span className="text-violet-400/60">InstantDesk AI</span>
+                  {handoverActive ? 'Connected to ' : 'Powered by '}
+                  <span className="text-violet-400/60">{handoverActive ? 'the team' : 'InstantDesk AI'}</span>
                 </span>
               </div>
             </div>

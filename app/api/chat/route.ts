@@ -36,6 +36,15 @@ import { scheduleFollowUps } from '../../lib/scheduleFollowUps'
 import { retrieveRelevantChunks } from '../../lib/knowledgeChunks'
 import { getLimits, checkMonthlyMessageLimit } from '../../lib/usageLimits'
 import { loadLeadMemory, upsertLeadMemory, formatMemoryForPrompt } from '../../lib/leadMemory'
+import {
+  HANDOVER_REPLY,
+  aiCannotAnswer,
+  customerRequestedHuman,
+  getLiveChatSettings,
+  insertStatusEvent,
+  markConversationStatus,
+  normalizeConversationStatus,
+} from '../../lib/live-chat'
 
 /* ════════════════════════════════════════════════════════════════════════════
    TYPES
@@ -688,6 +697,97 @@ export async function POST(req: NextRequest) {
   /* 3. Supabase ───────────────────────────────────────────────────────────── */
   const sb = createAdminClient()
 
+  const liveChatSettings = await getLiveChatSettings(sb, businessId)
+
+  let resolvedConversation: { convId: string; status: string | null; isNewConv: boolean } | null = null
+  async function resolveConversation() {
+    if (resolvedConversation) return resolvedConversation
+
+    let convId: string
+    let status: string | null = null
+
+    if (conversation_id) {
+      const { data: existing } = await sb
+        .from('conversations').select('id, status').eq('id', conversation_id).maybeSingle()
+      convId = existing?.id ?? crypto.randomUUID()
+      status = typeof existing?.status === 'string' ? existing.status : null
+    } else {
+      convId = crypto.randomUUID()
+    }
+
+    const isNewConv = convId !== conversation_id
+    if (isNewConv) {
+      const { error: ce } = await sb.from('conversations').insert({
+        id:              convId,
+        business_id:     businessId,
+        channel:         'website',
+        status:          'ai_active',
+        unread_count:    1,
+        last_message_at: new Date().toISOString(),
+      })
+      if (ce) {
+        const { error: fallbackError } = await sb.from('conversations').insert({
+          id:              convId,
+          business_id:     businessId,
+          channel:         'website',
+          status:          'open',
+          last_message_at: new Date().toISOString(),
+        })
+        if (fallbackError) {
+          console.error('[POST /api/chat] conversation insert failed:', JSON.stringify(fallbackError))
+          throw new Error(`Failed to create conversation: ${fallbackError.message}`)
+        }
+      }
+      status = 'ai_active'
+    } else {
+      await sb
+        .from('conversations')
+        .update({ last_message_at: new Date().toISOString() })
+        .eq('id', convId)
+    }
+
+    resolvedConversation = { convId, status, isNewConv }
+    return resolvedConversation
+  }
+
+  async function incrementUnread(convId: string) {
+    try {
+      const { data } = await sb.from('conversations').select('unread_count').eq('id', convId).maybeSingle()
+      const current = typeof data?.unread_count === 'number' ? data.unread_count : 0
+      await sb.from('conversations').update({ unread_count: current + 1 }).eq('id', convId)
+    } catch { /* unread counter is best-effort */ }
+  }
+
+  if (!liveChatSettings.ai_auto_replies_enabled && liveChatSettings.live_chat_enabled) {
+    let convId: string
+    try {
+      ;({ convId } = await resolveConversation())
+    } catch (err) {
+      return NextResponse.json({ error: err instanceof Error ? err.message : 'Failed to create conversation' }, { status: 500 })
+    }
+
+    const { error: userMsgErr } = await sb.from('messages').insert({
+      conversation_id: convId, business_id: businessId, role: 'user', content: message,
+    })
+    if (userMsgErr) console.error('[POST /api/chat] live-chat user message insert failed:', JSON.stringify(userMsgErr))
+    const { error: assistantMsgErr } = await sb.from('messages').insert({
+      conversation_id: convId, business_id: businessId, role: 'assistant', content: HANDOVER_REPLY,
+    })
+    if (assistantMsgErr) console.error('[POST /api/chat] live-chat assistant message insert failed:', JSON.stringify(assistantMsgErr))
+    await incrementUnread(convId)
+    await markConversationStatus(sb, convId, businessId, 'live_chat')
+    await insertStatusEvent(sb, convId, businessId, 'Live chat active. AI auto-replies are off.', 'live_chat_active')
+
+    return NextResponse.json({
+      reply: HANDOVER_REPLY,
+      conversation_id: convId,
+      status: 'live_chat',
+      handover: true,
+      ai_reply_skipped: true,
+      message_insert_error: userMsgErr?.message ?? null,
+    })
+  }
+
   /* 3a. Monthly message limit ─────────────────────────────────────────────── */
   try {
     const limits = await getLimits(sb, businessId)
@@ -816,30 +916,34 @@ export async function POST(req: NextRequest) {
 
   /* 5. Resolve / create conversation ─────────────────────────────────────── */
   let convId: string
-
-  if (conversation_id) {
-    const { data: existing } = await sb
-      .from('conversations').select('id').eq('id', conversation_id).maybeSingle()
-    convId = existing?.id ?? crypto.randomUUID()
-  } else {
-    convId = crypto.randomUUID()
+  let conversationStatus: string | null = null
+  try {
+    const resolved = await resolveConversation()
+    convId = resolved.convId
+    conversationStatus = resolved.status
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : 'Failed to create conversation' }, { status: 500 })
   }
 
-  const isNewConv = convId !== conversation_id
-  if (isNewConv) {
-    const { error: ce } = await sb.from('conversations').insert({
-      id:              convId,
-      business_id:     businessId,
-      channel:         'website',
-      status:          'open',
-      last_message_at: new Date().toISOString(),
+  const normalizedStatus = normalizeConversationStatus(conversationStatus)
+  if (normalizedStatus === 'live_chat' || normalizedStatus === 'handover_requested' || normalizedStatus === 'resolved') {
+    const { error: userMsgErr } = await sb.from('messages').insert({
+      conversation_id: convId, business_id: businessId, role: 'user', content: message,
     })
-    if (ce) {
-      console.error('[POST /api/chat] conversation insert failed:', JSON.stringify(ce))
-      return NextResponse.json({ error: 'Failed to create conversation', details: ce.message }, { status: 500 })
+    if (userMsgErr) console.error('[POST /api/chat] handover user message insert failed:', JSON.stringify(userMsgErr))
+    await incrementUnread(convId)
+    if (normalizedStatus === 'resolved') {
+      await markConversationStatus(sb, convId, businessId, 'handover_requested')
+      await insertStatusEvent(sb, convId, businessId, 'Conversation reopened by customer message.', 'conversation_reopened')
     }
-  } else {
-    await sb.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', convId)
+    return NextResponse.json({
+      reply: HANDOVER_REPLY,
+      conversation_id: convId,
+      status: normalizedStatus === 'resolved' ? 'handover_requested' : normalizedStatus,
+      handover: true,
+      ai_reply_skipped: true,
+      message_insert_error: userMsgErr?.message ?? null,
+    })
   }
 
   /* 6. Load existing lead, message history, and qualification fields ─────── */
@@ -894,6 +998,27 @@ export async function POST(req: NextRequest) {
   console.log('[SLOTS] qualificationStage:', qualificationStage)
 
   /* 8. Check booking intent → short-circuit if ready ─────────────────────── */
+  if (customerRequestedHuman(message, liveChatSettings) && liveChatSettings.live_chat_enabled) {
+    const { error: userMsgErr } = await sb.from('messages').insert({
+      conversation_id: convId, business_id: businessId, role: 'user', content: message,
+    })
+    if (userMsgErr) console.error('[POST /api/chat] handover-request user message insert failed:', JSON.stringify(userMsgErr))
+    const { error: assistantMsgErr } = await sb.from('messages').insert({
+      conversation_id: convId, business_id: businessId, role: 'assistant', content: HANDOVER_REPLY,
+    })
+    if (assistantMsgErr) console.error('[POST /api/chat] handover assistant message insert failed:', JSON.stringify(assistantMsgErr))
+    await incrementUnread(convId)
+    await markConversationStatus(sb, convId, businessId, 'handover_requested')
+    await insertStatusEvent(sb, convId, businessId, 'Customer requested a human handover.', 'handover_requested')
+    return NextResponse.json({
+      reply: HANDOVER_REPLY,
+      conversation_id: convId,
+      status: 'handover_requested',
+      handover: true,
+      message_insert_error: userMsgErr?.message ?? null,
+    })
+  }
+
   if (detectBookingIntent(message) && hasEnoughForBooking(confirmed)) {
     const stillNeedContact = !confirmed.phone && !confirmed.email
     const bookingReply = stillNeedContact
@@ -951,6 +1076,7 @@ export async function POST(req: NextRequest) {
     conversation_id: convId, business_id: businessId, role: 'user', content: message,
   })
   if (userMsgErr) console.error('[POST /api/chat] user message insert failed:', JSON.stringify(userMsgErr))
+  await incrementUnread(convId)
 
   /* 10. Build prompt + call OpenAI ───────────────────────────────────────── */
   const openaiKey = process.env.OPENAI_API_KEY
@@ -983,6 +1109,22 @@ export async function POST(req: NextRequest) {
   /* 11. Guard reply — block any answer that re-asks confirmed slots ───────── */
   const { reply: finalReply, blocked } = guardReply(rawReply, confirmed, missing)
   console.log('[GUARD] blockedRepeatedQuestion:', blocked)
+
+  if (aiCannotAnswer(finalReply, liveChatSettings, agent.fallback_msg) && liveChatSettings.live_chat_enabled) {
+    const { error: assistantMsgErr } = await sb.from('messages').insert({
+      conversation_id: convId, business_id: businessId, role: 'assistant', content: HANDOVER_REPLY,
+    })
+    if (assistantMsgErr) console.error('[POST /api/chat] cannot-answer handover message insert failed:', JSON.stringify(assistantMsgErr))
+    await markConversationStatus(sb, convId, businessId, 'handover_requested')
+    await insertStatusEvent(sb, convId, businessId, 'AI could not answer and requested human handover.', 'ai_cannot_answer')
+    return NextResponse.json({
+      reply: HANDOVER_REPLY,
+      conversation_id: convId,
+      status: 'handover_requested',
+      handover: true,
+      message_insert_error: userMsgErr?.message ?? null,
+    })
+  }
 
   /* 12. Persist assistant reply ──────────────────────────────────────────── */
   const { error: aiMsgErr } = await sb.from('messages').insert({

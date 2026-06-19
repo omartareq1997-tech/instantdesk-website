@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, Suspense } from 'react'
+import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { createBrowserClient } from '@supabase/ssr'
 import { Zap, Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react'
@@ -15,14 +16,24 @@ function createClient() {
 function LoginForm() {
   const searchParams  = useSearchParams()
   const nextPath      = searchParams.get('next') ?? '/dashboard'
+  const authError     = searchParams.get('error')
+  const status        = searchParams.get('status')
 
   const [mode,     setMode]     = useState<'login' | 'signup'>('login')
   const [email,    setEmail]    = useState('')
   const [password, setPassword] = useState('')
   const [showPw,   setShowPw]   = useState(false)
   const [loading,  setLoading]  = useState(false)
-  const [error,    setError]    = useState<string | null>(null)
-  const [message,  setMessage]  = useState<string | null>(null)
+  const [error,    setError]    = useState<string | null>(
+    authError === 'auth_callback_failed'
+      ? 'The sign-in link is invalid or has expired. Please try again.'
+      : null,
+  )
+  const [message,  setMessage]  = useState<string | null>(
+    status === 'password_updated'
+      ? 'Your password has been updated. Sign in with your new password.'
+      : null,
+  )
 
   useEffect(() => {
     // If user is already logged in, redirect immediately
@@ -137,6 +148,14 @@ function LoginForm() {
                 {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
+
+            {mode === 'login' && (
+              <div className="-mt-1 text-right">
+                <Link href="/forgot-password" className="text-xs text-[#7C3AED] hover:text-[#9F5FFF]">
+                  Forgot password?
+                </Link>
+              </div>
+            )}
 
             <button
               type="submit"

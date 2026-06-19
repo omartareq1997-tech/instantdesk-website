@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, type ReactNode } from 'react'
+import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   X, User, Building2, Mail, Phone, Globe, MessageSquare,
@@ -219,13 +220,13 @@ function SuccessView({ name, onClose }: { name: string; onClose: () => void }) {
         >
           Close
         </button>
-        <a
+        <Link
           href="/"
           className="flex-1 py-3 rounded-xl text-sm font-semibold text-white/50 hover:text-white/80 transition-colors text-center"
           style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}
         >
           Back to home
-        </a>
+        </Link>
       </motion.div>
 
       {/* Info row */}

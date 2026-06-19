@@ -1048,7 +1048,7 @@ function LeadQualificationPage({ businessId }: { businessId: string }) {
                 style={{ background:'rgba(255,255,255,0.05)' }}>{i + 1}</div>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-semibold text-white/80">{slot.label}</div>
-                <div className="text-[10px] text-white/35 mt-0.5 truncate italic">"{slot.question}"</div>
+                <div className="text-[10px] text-white/35 mt-0.5 truncate italic">&quot;{slot.question}&quot;</div>
               </div>
               {toggleErr === slot.key && (
                 <span className="text-[10px] text-red-400 mr-1">Failed</span>
@@ -1292,7 +1292,7 @@ function TestAIPage({
                   <button key={s} onClick={() => { setInput(s); inputRef.current?.focus() }}
                     className="px-3 py-2 rounded-xl text-left text-[11px] text-white/40 hover:text-white/70 transition-all"
                     style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.07)' }}>
-                    "{s}"
+                    &quot;{s}&quot;
                   </button>
                 ))}
               </div>

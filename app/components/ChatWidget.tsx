@@ -109,9 +109,6 @@ export default function ChatWidget() {
 
   const nextId = () => String(++msgIdRef.current)
 
-  /* Hide on admin pages */
-  if (pathname?.startsWith('/admin')) return null
-
   /* Scroll to bottom on new messages */
   useEffect(() => {
     if (isOpen) endRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -195,6 +192,9 @@ export default function ChatWidget() {
       void sendMessage(input)
     }
   }
+
+  /* Hide on admin pages */
+  if (pathname?.startsWith('/admin')) return null
 
   return (
     <>

@@ -308,7 +308,7 @@ export default function DashboardPreview() {
                     </div>
 
                     {/* Nav */}
-                    <nav className="flex flex-col gap-0.5 px-3 flex-1">
+                    <div className="flex flex-col gap-0.5 px-3 flex-1" aria-hidden="true">
                       {NAV.map(({ icon: Icon, label, active, badge }) => (
                         <div
                           key={label}
@@ -340,7 +340,7 @@ export default function DashboardPreview() {
                           )}
                         </div>
                       ))}
-                    </nav>
+                    </div>
 
                     {/* Bottom AI status */}
                     <div

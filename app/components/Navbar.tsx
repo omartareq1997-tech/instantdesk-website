@@ -73,6 +73,7 @@ export default function Navbar() {
         </div>
 
         <button
+          aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
           className="md:hidden text-white/70 hover:text-white"
           onClick={() => setMobileOpen(!mobileOpen)}
         >

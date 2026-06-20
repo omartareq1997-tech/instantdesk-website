@@ -27,10 +27,33 @@ function FacebookIcon({ className }: { className?: string }) {
 }
 
 const footerLinks = {
-  Product: ['AI Receptionist', 'Website Chatbot', 'WhatsApp Automation', 'Booking Systems', 'Review Automation'],
-  Company: ['About', 'Blog', 'Careers', 'Press', 'Contact'],
-  Industries: ['Healthcare', 'Real Estate', 'Law Firms', 'Trades', 'Fitness'],
-  Legal: ['Privacy Policy', 'Terms of Service', 'GDPR', 'Cookie Policy'],
+  Product: [
+    { label: 'AI Receptionist', href: '#features' },
+    { label: 'Website Chatbot', href: '#omnichannel' },
+    { label: 'WhatsApp Automation', href: '#omnichannel' },
+    { label: 'Booking Systems', href: '#how-it-works' },
+    { label: 'Review Automation', href: '#features' },
+  ],
+  Company: [
+    { label: 'About', href: '#how-it-works' },
+    { label: 'Blog', href: '#testimonials' },
+    { label: 'Careers', href: 'mailto:hello@instantdesk.pl?subject=Careers' },
+    { label: 'Press', href: 'mailto:hello@instantdesk.pl?subject=Press' },
+    { label: 'Contact', href: 'mailto:hello@instantdesk.pl' },
+  ],
+  Industries: [
+    { label: 'Healthcare', href: '#features' },
+    { label: 'Real Estate', href: '#interactive-demo' },
+    { label: 'Law Firms', href: '#testimonials' },
+    { label: 'Trades', href: '#features' },
+    { label: 'Fitness', href: '#interactive-demo' },
+  ],
+  Legal: [
+    { label: 'Privacy Policy', href: 'mailto:hello@instantdesk.pl?subject=Privacy%20Policy' },
+    { label: 'Terms of Service', href: 'mailto:hello@instantdesk.pl?subject=Terms%20of%20Service' },
+    { label: 'GDPR', href: 'mailto:hello@instantdesk.pl?subject=GDPR' },
+    { label: 'Cookie Policy', href: 'mailto:hello@instantdesk.pl?subject=Cookie%20Policy' },
+  ],
 }
 
 export default function Footer() {
@@ -77,12 +100,12 @@ export default function Footer() {
               <h4 className="text-xs font-bold tracking-widest uppercase text-white/30 mb-5">{group}</h4>
               <ul className="flex flex-col gap-3">
                 {links.map((link) => (
-                  <li key={link}>
+                  <li key={link.label}>
                     <a
-                      href="#"
+                      href={link.href}
                       className="text-sm text-white/40 hover:text-white/80 transition-colors"
                     >
-                      {link}
+                      {link.label}
                     </a>
                   </li>
                 ))}
@@ -97,13 +120,13 @@ export default function Footer() {
             © {new Date().getFullYear()} InstantDesk. All rights reserved. Registered in Poland.
           </p>
           <div className="flex items-center gap-4">
-            <a href="#" aria-label="X (Twitter)" className="text-white/25 hover:text-white/60 transition-colors">
+            <a href="mailto:hello@instantdesk.pl?subject=InstantDesk%20social" aria-label="X (Twitter)" className="text-white/25 hover:text-white/60 transition-colors">
               <XIcon className="w-4 h-4" />
             </a>
-            <a href="#" aria-label="LinkedIn" className="text-white/25 hover:text-white/60 transition-colors">
+            <a href="mailto:hello@instantdesk.pl?subject=InstantDesk%20LinkedIn" aria-label="LinkedIn" className="text-white/25 hover:text-white/60 transition-colors">
               <LinkedInIcon className="w-4 h-4" />
             </a>
-            <a href="#" aria-label="Facebook" className="text-white/25 hover:text-white/60 transition-colors">
+            <a href="mailto:hello@instantdesk.pl?subject=InstantDesk%20Facebook" aria-label="Facebook" className="text-white/25 hover:text-white/60 transition-colors">
               <FacebookIcon className="w-4 h-4" />
             </a>
           </div>

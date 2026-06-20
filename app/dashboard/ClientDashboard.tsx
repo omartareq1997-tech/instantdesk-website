@@ -377,18 +377,19 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
 
       <aside
         className={`
-          fixed md:relative inset-y-0 left-0 z-40 md:z-auto w-[260px] flex-shrink-0 flex flex-col h-screen
-          transition-transform duration-300 ease-in-out
+          group fixed md:relative inset-y-0 left-0 z-40 md:z-auto w-[260px] md:w-[76px] md:hover:w-[260px]
+          flex-shrink-0 flex flex-col h-screen overflow-hidden
+          transition-[width,transform,box-shadow] duration-300 ease-out
           ${open ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
         `}
-        style={{ background:'rgba(5,5,20,0.98)', borderRight:'1px solid rgba(255,255,255,0.06)' }}
+        style={{ background:'rgba(5,5,20,0.98)', borderRight:'1px solid rgba(255,255,255,0.06)', boxShadow:'18px 0 50px rgba(0,0,0,0.16)' }}
       >
-        <div className="flex items-center gap-3 px-6 py-5" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+        <div className="flex items-center gap-3 px-5 md:px-[22px] py-5" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
           <div className="w-8 h-8 rounded-lg flex items-center justify-center"
             style={{ background:'linear-gradient(135deg,#7c3aed,#2563eb)', boxShadow:'0 0 16px rgba(124,58,237,0.4)' }}>
             <Zap className="w-4 h-4 text-white" />
           </div>
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 overflow-hidden transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[160px] md:group-hover:opacity-100">
             <div className="text-sm font-bold text-white leading-none">InstantDesk</div>
             <div className="text-[10px] text-white/30 mt-0.5">Client Portal</div>
           </div>
@@ -398,7 +399,7 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
           </button>
         </div>
 
-        <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto">
+        <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-x-hidden overflow-y-auto">
           {NAV_ITEMS.map(item => {
             const isActive = active === item.id
             const badge = badges[item.id] ?? item.badge
@@ -409,12 +410,13 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
                     style={{ background:'linear-gradient(180deg,#7c3aed,#2563eb)' }} />
                 )}
                 <button onClick={() => { onNav(item.id); onClose() }}
-                  className="flex items-center gap-3 w-full pl-4 pr-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150"
+                  title={item.label}
+                  className="flex items-center gap-3 w-full pl-4 pr-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200"
                   style={isActive ? { background:'rgba(139,92,246,0.10)', color:'#c4b5fd' } : { color:'rgba(255,255,255,0.40)' }}>
                   <item.Icon className="w-4 h-4 flex-shrink-0" />
-                  <span className="flex-1 text-left">{item.label}</span>
+                  <span className="flex-1 overflow-hidden whitespace-nowrap text-left opacity-100 transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[150px] md:group-hover:opacity-100">{item.label}</span>
                   {badge !== undefined && (
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full transition-all duration-200 ease-out md:max-w-0 md:overflow-hidden md:px-0 md:opacity-0 md:group-hover:max-w-[40px] md:group-hover:px-1.5 md:group-hover:opacity-100"
                       style={{ background:isActive?'rgba(167,139,250,0.2)':'rgba(255,255,255,0.08)', color:isActive?'#c4b5fd':'rgba(255,255,255,0.35)' }}>
                       {badge}
                     </span>
@@ -427,7 +429,7 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
           {/* AI Agent group */}
           <div className="mx-1 mt-3 mb-1 flex items-center gap-2">
             <div className="flex-1 h-px" style={{ background:'rgba(255,255,255,0.07)' }} />
-            <span className="text-[9px] font-bold tracking-[0.15em] uppercase"
+            <span className="overflow-hidden whitespace-nowrap text-[9px] font-bold tracking-[0.15em] uppercase transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[80px] md:group-hover:opacity-100"
               style={{ color:'rgba(167,139,250,0.5)' }}>AI Agent</span>
             <div className="flex-1 h-px" style={{ background:'rgba(255,255,255,0.07)' }} />
           </div>
@@ -441,10 +443,11 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
                     style={{ background:'linear-gradient(180deg,#a78bfa,#7c3aed)' }} />
                 )}
                 <button onClick={() => { onNav(item.id); onClose() }}
-                  className="flex items-center gap-3 w-full pl-4 pr-3 py-2 rounded-xl text-sm font-medium transition-all duration-150"
+                  title={item.label}
+                  className="flex items-center gap-3 w-full pl-4 pr-3 py-2 rounded-xl text-sm font-medium transition-all duration-200"
                   style={isActive ? { background:'rgba(167,139,250,0.10)', color:'#c4b5fd' } : { color:'rgba(255,255,255,0.35)' }}>
                   <item.Icon className="w-4 h-4 flex-shrink-0" />
-                  <span className="flex-1 text-left text-[13px]">{item.label}</span>
+                  <span className="flex-1 overflow-hidden whitespace-nowrap text-left text-[13px] opacity-100 transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[150px] md:group-hover:opacity-100">{item.label}</span>
                 </button>
               </div>
             )
@@ -457,15 +460,17 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
               style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.6),rgba(37,99,235,0.5))' }}>
               {userName.slice(0, 2).toUpperCase()}
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 overflow-hidden transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[150px] md:group-hover:opacity-100">
               <div className="text-xs font-semibold text-white/80 truncate">{userName}</div>
               <div className="text-[10px] text-white/30 truncate">{businessName}</div>
             </div>
           </div>
           <button
             onClick={onLogout}
+            title="Log out"
             className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs text-white/35 hover:text-red-400 hover:bg-red-500/8 transition-all w-full">
-            <LogOut className="w-3.5 h-3.5" />Log out
+            <LogOut className="w-3.5 h-3.5 flex-shrink-0" />
+            <span className="overflow-hidden whitespace-nowrap transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[80px] md:group-hover:opacity-100">Log out</span>
           </button>
         </div>
       </aside>

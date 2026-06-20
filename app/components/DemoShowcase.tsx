@@ -214,7 +214,7 @@ export default function DemoShowcase() {
   const demo = demos[active]
 
   return (
-    <section id="demo" className="relative py-32 overflow-hidden">
+    <section id="interactive-demo" className="relative py-32 overflow-hidden">
       {/* Background */}
       <div className="absolute inset-0 -z-10">
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-slate-950/40 to-transparent" />

@@ -11,6 +11,7 @@
     "test:e2e:report": "playwright show-report"
   },
   "dependencies": {
+    "@mendable/firecrawl-js": "^4.28.2",
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.106.1",
     "framer-motion": "^12.39.0",

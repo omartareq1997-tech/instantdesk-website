@@ -1,7 +1,7 @@
 /**
  * POST /api/follow-ups/worker  — AI follow-up cron worker
  *
- * Designed to be called by an external cron (Vercel Cron, Railway, etc.) every 5–15 minutes.
+ * Designed to be called by an external cron every 5–15 minutes.
  * Optionally accepts { business_id } to scope to one tenant; without it, processes all tenants.
  *
  * Per execution:

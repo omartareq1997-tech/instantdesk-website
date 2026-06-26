@@ -37,7 +37,7 @@ interface ChatMessage {
 const STATUS_CFG: Record<ApptStatus, { label: string; color: string; bg: string; border: string }> = {
   confirmed:  { label:'Confirmed',  color:'#34d399', bg:'rgba(52,211,153,0.10)',  border:'rgba(52,211,153,0.25)'  },
   pending:    { label:'Pending',    color:'#fbbf24', bg:'rgba(251,191,36,0.10)',  border:'rgba(251,191,36,0.25)'  },
-  completed:  { label:'Completed',  color:'#60a5fa', bg:'rgba(96,165,250,0.10)',  border:'rgba(96,165,250,0.25)'  },
+  completed:  { label:'Completed',  color:'#948f88', bg:'rgba(148,145,140,0.10)',  border:'rgba(148,145,140,0.25)'  },
   cancelled:  { label:'Cancelled',  color:'#f87171', bg:'rgba(248,113,113,0.10)', border:'rgba(248,113,113,0.25)' },
 }
 
@@ -85,7 +85,7 @@ function ConvSkeleton() {
           <div className="rounded-2xl animate-pulse"
             style={{
               width: `${w}%`, height: 34,
-              background: i % 2 === 0 ? 'rgba(255,255,255,0.05)' : 'rgba(139,92,246,0.08)',
+              background: i % 2 === 0 ? 'rgba(255,255,255,0.05)' : 'rgba(244,122,99,0.08)',
             }} />
         </div>
       ))}
@@ -161,17 +161,17 @@ export default function ApptDrawer({
         transition={{ type: 'spring', stiffness: 300, damping: 30 }}
         className="fixed right-0 top-0 bottom-0 z-50 w-full max-w-md overflow-y-auto"
         style={{
-          background:    'rgba(7,7,25,0.97)',
+          background:    'rgba(18,17,15,0.97)',
           backdropFilter:'blur(24px)',
-          borderLeft:    '1px solid rgba(139,92,246,0.18)',
+          borderLeft:    '1px solid rgba(244,122,99,0.18)',
           boxShadow:     '-32px 0 80px rgba(0,0,0,0.6)',
         }}
       >
         {/* Header */}
         <div className="flex items-start gap-4 px-6 py-5 sticky top-0 z-10"
-          style={{ background:'rgba(7,7,25,0.97)', borderBottom:'1px solid rgba(255,255,255,0.07)' }}>
+          style={{ background:'rgba(18,17,15,0.97)', borderBottom:'1px solid rgba(255,255,255,0.07)' }}>
           <div className="w-11 h-11 rounded-xl flex items-center justify-center text-sm font-black text-white flex-shrink-0"
-            style={{ background:'linear-gradient(135deg,#7c3aed,#2563eb)' }}>
+            style={{ background:'linear-gradient(135deg,#171412,#f89a57)' }}>
             {initials(appt.name)}
           </div>
           <div className="flex-1 min-w-0">
@@ -278,10 +278,10 @@ export default function ApptDrawer({
                       {msg.from !== 'user' && (
                         <div className="flex items-center gap-1.5 mb-1.5">
                           <div className="w-4 h-4 rounded flex items-center justify-center"
-                            style={{ background:'rgba(139,92,246,0.25)' }}>
-                            <Bot className="w-2.5 h-2.5 text-violet-400" />
+                            style={{ background:'rgba(244,122,99,0.25)' }}>
+                            <Bot className="w-2.5 h-2.5 text-orange-400" />
                           </div>
-                          <span className="text-[9px] font-bold text-violet-400/60 uppercase tracking-wider">
+                          <span className="text-[9px] font-bold text-orange-400/60 uppercase tracking-wider">
                             {msg.from === 'agent' ? 'Agent' : 'InstantDesk AI'}
                           </span>
                           {fmtSpeed(msg.response_time_ms) && (
@@ -293,8 +293,8 @@ export default function ApptDrawer({
                       )}
                       <div className="rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed"
                         style={msg.from !== 'user' ? {
-                          background:          'rgba(139,92,246,0.12)',
-                          border:              '1px solid rgba(139,92,246,0.2)',
+                          background:          'rgba(244,122,99,0.12)',
+                          border:              '1px solid rgba(244,122,99,0.2)',
                           color:               'rgba(255,255,255,0.75)',
                           borderTopLeftRadius:  4,
                         } : {

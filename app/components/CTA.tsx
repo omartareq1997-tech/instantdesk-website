@@ -23,18 +23,18 @@ export default function CTA() {
             className="absolute inset-0 opacity-40"
             style={{
               backgroundImage: `
-                linear-gradient(rgba(139,92,246,0.08) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(139,92,246,0.08) 1px, transparent 1px)
+                linear-gradient(rgba(244,122,99,0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(244,122,99,0.08) 1px, transparent 1px)
               `,
               backgroundSize: '48px 48px',
             }}
           />
           {/* Glow orbs */}
-          <div className="absolute -top-24 left-1/4 w-96 h-96 rounded-full blur-3xl" style={{ background: 'rgba(139,92,246,0.18)' }} />
-          <div className="absolute -bottom-24 right-1/4 w-96 h-96 rounded-full blur-3xl" style={{ background: 'rgba(37,99,235,0.18)' }} />
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full max-w-2xl max-h-64 rounded-full blur-3xl opacity-20" style={{ background: 'radial-gradient(ellipse, rgba(139,92,246,0.6), transparent)' }} />
+          <div className="absolute -top-24 left-1/4 w-96 h-96 rounded-full blur-3xl" style={{ background: 'rgba(244,122,99,0.18)' }} />
+          <div className="absolute -bottom-24 right-1/4 w-96 h-96 rounded-full blur-3xl" style={{ background: 'rgba(248,154,87,0.18)' }} />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full max-w-2xl max-h-64 rounded-full blur-3xl opacity-20" style={{ background: 'radial-gradient(ellipse, rgba(244,122,99,0.6), transparent)' }} />
           {/* Border */}
-          <div className="absolute inset-0 rounded-[2rem]" style={{ border: '1px solid rgba(139,92,246,0.25)' }} />
+          <div className="absolute inset-0 rounded-[2rem]" style={{ border: '1px solid rgba(244,122,99,0.25)' }} />
 
           <div className="relative px-8 md:px-16 py-20 text-center">
             {/* Icon */}
@@ -45,11 +45,11 @@ export default function CTA() {
               transition={{ delay: 0.1, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
               className="inline-flex w-16 h-16 rounded-2xl items-center justify-center mb-8 mx-auto"
               style={{
-                background: 'linear-gradient(135deg, rgba(139,92,246,0.3), rgba(37,99,235,0.3))',
-                border: '1px solid rgba(139,92,246,0.4)',
+                background: 'linear-gradient(135deg, rgba(244,122,99,0.3), rgba(248,154,87,0.3))',
+                border: '1px solid rgba(244,122,99,0.4)',
               }}
             >
-              <Sparkles className="w-7 h-7 text-violet-300" />
+              <Sparkles className="w-7 h-7 text-orange-300" />
             </motion.div>
 
             <motion.span
@@ -57,7 +57,7 @@ export default function CTA() {
               whileInView={{ opacity: 1 }}
               viewport={{ once: true }}
               transition={{ delay: 0.15 }}
-              className="inline-block text-xs font-bold tracking-[0.2em] uppercase text-violet-400 mb-6"
+              className="inline-block text-xs font-bold tracking-[0.2em] uppercase text-orange-400 mb-6"
             >
               Ready to transform your business?
             </motion.span>
@@ -133,12 +133,12 @@ export default function CTA() {
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </button>
               <a
-                href="tel:+48000000000"
+                href="mailto:contact@instantdesk.pl"
                 className="group flex items-center gap-3 px-10 py-5 rounded-xl font-bold text-base text-white/80 hover:text-white transition-all duration-300 hover:-translate-y-0.5"
                 style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.13)' }}
               >
-                <Phone className="w-4 h-4 group-hover:text-violet-300 transition-colors" />
-                Book a Call
+                <Phone className="w-4 h-4 group-hover:text-orange-300 transition-colors" />
+                Email us
               </a>
             </motion.div>
 

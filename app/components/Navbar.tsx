@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Menu, X, Zap } from 'lucide-react'
+import { Menu, X } from 'lucide-react'
 import { useDemoModal } from '../context/DemoModal'
 
 const navLinks = [
@@ -12,6 +12,8 @@ const navLinks = [
   { label: 'Pricing', href: '#pricing' },
   { label: 'Testimonials', href: '#testimonials' },
 ]
+
+const signupHref = '/login?mode=signup'
 
 export default function Navbar() {
   const [scrolled, setScrolled] = useState(false)
@@ -37,12 +39,7 @@ export default function Navbar() {
     >
       <div className="max-w-7xl mx-auto px-6 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2 group">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center glow-purple">
-            <Zap className="w-4 h-4 text-white" />
-          </div>
-          <span className="font-bold text-xl tracking-tight text-white">
-            Instant<span className="text-gradient-blue">Desk</span>
-          </span>
+          <img src="/assets/instantdesk-logo.png" alt="InstantDesk" className="h-8 w-auto" />
         </Link>
 
         <div className="hidden md:flex items-center gap-8">
@@ -64,9 +61,15 @@ export default function Navbar() {
           >
             Log in
           </Link>
+          <Link
+            href={signupHref}
+            className="rounded-lg border border-white/12 px-5 py-2.5 text-sm font-medium text-white/72 transition-colors hover:border-white/24 hover:bg-white/[0.06] hover:text-white"
+          >
+            Sign Up
+          </Link>
           <button
             onClick={() => openDemo('navbar')}
-            className="text-sm font-semibold px-5 py-2.5 rounded-lg bg-gradient-to-r from-violet-600 to-blue-600 text-white hover:from-violet-500 hover:to-blue-500 transition-all duration-200 shadow-lg shadow-violet-500/20 hover:shadow-violet-500/40"
+            className="text-sm font-semibold px-5 py-2.5 rounded-lg bg-gradient-to-r from-orange-600 to-stone-600 text-white hover:from-orange-500 hover:to-stone-500 transition-all duration-200 shadow-lg shadow-orange-500/20 hover:shadow-orange-500/40"
           >
             Get Demo
           </button>
@@ -107,9 +110,16 @@ export default function Navbar() {
               >
                 Log in
               </Link>
+              <Link
+                href={signupHref}
+                onClick={() => setMobileOpen(false)}
+                className="rounded-lg border border-white/12 px-5 py-3 text-center text-sm font-medium text-white/72 transition-colors hover:bg-white/[0.06] hover:text-white"
+              >
+                Sign Up
+              </Link>
               <button
                 onClick={() => { openDemo('navbar'); setMobileOpen(false) }}
-                className="text-sm font-semibold px-5 py-3 rounded-lg bg-gradient-to-r from-violet-600 to-blue-600 text-white text-center mt-2 w-full"
+                className="text-sm font-semibold px-5 py-3 rounded-lg bg-gradient-to-r from-orange-600 to-stone-600 text-white text-center mt-2 w-full"
               >
                 Get Personalized Demo
               </button>

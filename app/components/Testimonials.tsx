@@ -13,7 +13,7 @@ const testimonials = [
     quote:
       'We were losing 30–40 leads a week just because our front desk was overloaded. InstantDesk set up an AI receptionist that books appointments around the clock. Our revenue went up 22% in the first 2 months.',
     metric: '+22% Revenue',
-    color: 'from-blue-500 to-cyan-400',
+    color: 'from-stone-500 to-orange-400',
   },
   {
     name: 'Anna Wróblewska',
@@ -46,7 +46,7 @@ const testimonials = [
     quote:
       'Our intake process was a bottleneck. InstantDesk automated pre-qualification, document collection, and CRM sync. We saved 15 hours/week of admin and closed 40% more cases.',
     metric: '40% More Cases',
-    color: 'from-violet-500 to-purple-400',
+    color: 'from-orange-500 to-orange-400',
   },
   {
     name: 'Tomasz Bielski',
@@ -76,8 +76,8 @@ export default function Testimonials() {
   return (
     <section id="testimonials" className="relative py-32 overflow-hidden">
       <div className="absolute inset-0 -z-10">
-        <div className="absolute bottom-0 left-0 w-72 h-72 rounded-full bg-violet-900/15 blur-3xl" />
-        <div className="absolute top-20 right-0 w-72 h-72 rounded-full bg-blue-900/15 blur-3xl" />
+        <div className="absolute bottom-0 left-0 w-72 h-72 rounded-full bg-orange-900/15 blur-3xl" />
+        <div className="absolute top-20 right-0 w-72 h-72 rounded-full bg-stone-900/15 blur-3xl" />
       </div>
 
       <div className="max-w-7xl mx-auto px-6">
@@ -88,7 +88,7 @@ export default function Testimonials() {
           transition={{ duration: 0.6 }}
           className="text-center mb-20"
         >
-          <span className="inline-block text-xs font-semibold tracking-widest uppercase text-violet-400 mb-4">
+          <span className="inline-block text-xs font-semibold tracking-widest uppercase text-orange-400 mb-4">
             Client results
           </span>
           <h2 className="text-4xl md:text-5xl font-black text-white mb-5 leading-tight">
@@ -121,7 +121,7 @@ export default function Testimonials() {
                     <div className="text-xs text-white/35">{t.role} · {t.company}</div>
                   </div>
                 </div>
-                <Quote className="w-5 h-5 text-violet-500/50 flex-shrink-0" />
+                <Quote className="w-5 h-5 text-orange-500/50 flex-shrink-0" />
               </div>
 
               <div className="flex gap-0.5">

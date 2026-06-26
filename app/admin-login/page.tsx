@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Zap, ArrowLeft, Lock, Eye, EyeOff, ArrowRight, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, Lock, Eye, EyeOff, ArrowRight, ShieldCheck } from 'lucide-react'
 import { loginAction } from '../admin/auth-actions'
 
 export default function LoginPage() {
@@ -34,31 +34,8 @@ export default function LoginPage() {
 
   return (
     <div
-      className="min-h-screen flex flex-col items-center justify-center relative overflow-hidden px-4 py-16"
-      style={{ background: '#050510' }}
+      className="auth-premium-bg min-h-screen flex flex-col items-center justify-center px-4 py-16"
     >
-      {/* Background */}
-      <div className="absolute inset-0 -z-10">
-        <div
-          className="absolute inset-0 opacity-[0.06]"
-          style={{
-            backgroundImage: `
-              linear-gradient(rgba(139,92,246,1) 1px, transparent 1px),
-              linear-gradient(90deg, rgba(139,92,246,1) 1px, transparent 1px)
-            `,
-            backgroundSize: '56px 56px',
-          }}
-        />
-        <div
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[700px] rounded-full"
-          style={{
-            background: 'radial-gradient(circle, rgba(124,58,237,0.10) 0%, rgba(37,99,235,0.05) 50%, transparent 70%)',
-          }}
-        />
-        <div className="absolute top-0 left-1/4 w-80 h-80 rounded-full bg-violet-700/8 blur-3xl" />
-        <div className="absolute bottom-0 right-1/4 w-96 h-96 rounded-full bg-blue-700/8 blur-3xl" />
-      </div>
-
       {/* Back to home */}
       <motion.div
         initial={{ opacity: 0, y: -12 }}
@@ -83,46 +60,21 @@ export default function LoginPage() {
         className="w-full max-w-sm"
       >
         {/* Logo */}
-        <div className="flex items-center justify-center gap-2.5 mb-10">
-          <div
-            className="w-9 h-9 rounded-xl flex items-center justify-center"
-            style={{
-              background: 'linear-gradient(135deg,#7c3aed,#2563eb)',
-              boxShadow: '0 0 24px rgba(124,58,237,0.5)',
-            }}
-          >
-            <Zap className="w-[18px] h-[18px] text-white" />
-          </div>
-          <span className="text-xl font-bold tracking-tight text-white">
-            Instant<span
-              style={{
-                background: 'linear-gradient(135deg,#818cf8,#60a5fa)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                backgroundClip: 'text',
-              }}
-            >Desk</span>
-          </span>
+        <div className="flex items-center justify-center mb-10">
+          <img src="/assets/instantdesk-logo.png" alt="InstantDesk" className="h-9 w-auto" />
         </div>
 
         {/* Glass card */}
         <div
-          className="rounded-2xl p-8"
-          style={{
-            background: 'rgba(255,255,255,0.03)',
-            backdropFilter: 'blur(24px)',
-            WebkitBackdropFilter: 'blur(24px)',
-            border: '1px solid rgba(255,255,255,0.07)',
-            boxShadow: '0 32px 80px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06)',
-          }}
+          className="auth-premium-card rounded-2xl p-8"
         >
           {/* Heading */}
           <div className="flex items-center gap-3 mb-8">
             <div
               className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-              style={{ background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.2)' }}
+              style={{ background: 'rgba(244,122,99,0.12)', border: '1px solid rgba(244,122,99,0.2)' }}
             >
-              <ShieldCheck className="w-5 h-5 text-violet-400" />
+              <ShieldCheck className="w-5 h-5 text-orange-400" />
             </div>
             <div>
               <h1 className="text-xl font-black text-white tracking-tight">Admin Access</h1>
@@ -155,10 +107,10 @@ export default function LoginPage() {
                   onFocus={e => {
                     e.currentTarget.style.border = error
                       ? '1px solid rgba(248,113,113,0.6)'
-                      : '1px solid rgba(139,92,246,0.45)'
+                      : '1px solid rgba(244,122,99,0.45)'
                     e.currentTarget.style.boxShadow = error
                       ? '0 0 0 3px rgba(248,113,113,0.1)'
-                      : '0 0 0 3px rgba(139,92,246,0.1)'
+                      : '0 0 0 3px rgba(244,122,99,0.1)'
                   }}
                   onBlur={e => {
                     e.currentTarget.style.border = error
@@ -201,8 +153,8 @@ export default function LoginPage() {
               whileTap={{ scale: 0.985 }}
               className="relative w-full py-3.5 rounded-xl text-sm font-bold text-white mt-1 overflow-hidden transition-all duration-300 disabled:opacity-50"
               style={{
-                background: 'linear-gradient(135deg,#7c3aed 0%,#4f46e5 50%,#2563eb 100%)',
-                boxShadow: '0 8px 24px rgba(99,102,241,0.35)',
+                background: 'linear-gradient(135deg,#171412 0%,#f47a63 50%,#f89a57 100%)',
+                boxShadow: '0 8px 24px rgba(244,122,99,0.35)',
               }}
             >
               <span

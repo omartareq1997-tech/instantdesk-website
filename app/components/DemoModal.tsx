@@ -108,10 +108,10 @@ function makeHandlers(hasError: boolean, onBlurExtra?: () => void) {
     onFocus: (e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       e.currentTarget.style.border = hasError
         ? '1px solid rgba(239,68,68,0.6)'
-        : '1px solid rgba(139,92,246,0.5)'
+        : '1px solid rgba(244,122,99,0.5)'
       e.currentTarget.style.boxShadow = hasError
         ? '0 0 0 3px rgba(239,68,68,0.1)'
-        : '0 0 0 3px rgba(139,92,246,0.12)'
+        : '0 0 0 3px rgba(244,122,99,0.12)'
     },
     onBlur: (e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       onBlurExtra?.()
@@ -214,8 +214,8 @@ function SuccessView({ name, onClose }: { name: string; onClose: () => void }) {
           onClick={onClose}
           className="flex-1 py-3 rounded-xl text-sm font-bold text-white transition-all duration-200 hover:-translate-y-0.5"
           style={{
-            background: 'linear-gradient(135deg,#7c3aed,#2563eb)',
-            boxShadow: '0 8px 24px rgba(99,102,241,0.35)',
+            background: 'linear-gradient(135deg,#171412,#f89a57)',
+            boxShadow: '0 8px 24px rgba(244,122,99,0.35)',
           }}
         >
           Close
@@ -337,7 +337,7 @@ export default function DemoModal({ isOpen, onClose, source }: Props) {
     } catch (err) {
       console.error('[DemoModal] Submission failed:', err)
       setSubmitError(
-        "Something went wrong sending your request. Your details have been saved — we'll follow up shortly, or email us at hello@instantdesk.pl"
+        "Something went wrong sending your request. Your details have been saved — we'll follow up shortly, or email us at contact@instantdesk.pl"
       )
     } finally {
       setLoading(false)
@@ -373,22 +373,22 @@ export default function DemoModal({ isOpen, onClose, source }: Props) {
                 background: 'rgba(7,7,20,0.98)',
                 backdropFilter: 'blur(40px)',
                 WebkitBackdropFilter: 'blur(40px)',
-                border: '1px solid rgba(139,92,246,0.2)',
+                border: '1px solid rgba(244,122,99,0.2)',
                 boxShadow: [
                   '0 40px 100px rgba(0,0,0,0.8)',
                   '0 0 0 1px rgba(255,255,255,0.03)',
                   'inset 0 1px 0 rgba(255,255,255,0.07)',
-                  '0 0 80px rgba(99,102,241,0.06)',
+                  '0 0 80px rgba(244,122,99,0.06)',
                 ].join(','),
                 scrollbarWidth: 'thin',
-                scrollbarColor: 'rgba(139,92,246,0.2) transparent',
+                scrollbarColor: 'rgba(244,122,99,0.2) transparent',
               }}
               onClick={e => e.stopPropagation()}
             >
               {/* Top gradient accent */}
               <motion.div
                 className="absolute top-0 left-0 right-0 h-[2px] rounded-t-2xl"
-                style={{ background: 'linear-gradient(90deg,#7c3aed,#4f46e5,#2563eb,#4f46e5,#7c3aed)' }}
+                style={{ background: 'linear-gradient(90deg,#171412,#f47a63,#f89a57,#f47a63,#171412)' }}
                 animate={{ backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] }}
                 transition={{ duration: 5, repeat: Infinity, ease: 'linear' }}
               />
@@ -413,9 +413,9 @@ export default function DemoModal({ isOpen, onClose, source }: Props) {
                       <div className="mb-7">
                         <div
                           className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold mb-5"
-                          style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)', color: '#c4b5fd' }}
+                          style={{ background: 'rgba(244,122,99,0.1)', border: '1px solid rgba(244,122,99,0.2)', color: '#f8a36d' }}
                         >
-                          <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
+                          <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse" />
                           Personalised demo · response in 24h
                         </div>
                         <h2 className="text-2xl font-black text-white mb-2 leading-tight">
@@ -542,8 +542,8 @@ export default function DemoModal({ isOpen, onClose, source }: Props) {
                             whileTap={{ scale: 0.985 }}
                             className="relative w-full py-4 rounded-xl text-sm font-bold text-white overflow-hidden transition-all duration-300 disabled:opacity-70 mt-1"
                             style={{
-                              background: 'linear-gradient(135deg,#7c3aed 0%,#4f46e5 50%,#2563eb 100%)',
-                              boxShadow: '0 8px 32px rgba(99,102,241,0.35)',
+                              background: 'linear-gradient(135deg,#171412 0%,#f47a63 50%,#f89a57 100%)',
+                              boxShadow: '0 8px 32px rgba(244,122,99,0.35)',
                             }}
                           >
                             <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/8 to-transparent -skew-x-12 translate-x-[-200%] hover:translate-x-[200%] transition-transform duration-700 pointer-events-none" />
@@ -590,7 +590,7 @@ export default function DemoModal({ isOpen, onClose, source }: Props) {
                           { icon: CheckCircle, text: 'No commitment' },
                         ].map(({ icon: Icon, text }) => (
                           <span key={text} className="flex items-center gap-1.5 text-[10px] text-white/22">
-                            <Icon className="w-3 h-3 text-violet-500/60" />
+                            <Icon className="w-3 h-3 text-orange-500/60" />
                             {text}
                           </span>
                         ))}

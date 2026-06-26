@@ -16,16 +16,23 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "InstantDesk — AI Receptionist & Automation Systems",
+  title: "InstantDesk — AI Receptionist + Live Chat for Local Businesses",
   description:
-    "AI receptionists, website chatbots, WhatsApp/SMS automation, lead capture, booking systems, and review automation for ambitious businesses. Go live in 72 hours.",
+    "AI receptionist and live chat for local businesses that cannot afford missed leads. Website chat, lead capture, Google Sheet CRM, SMS follow-up, and review requests.",
+  icons: {
+    icon: "/favicon.png",
+    shortcut: "/favicon.png",
+    apple: "/apple-touch-icon.png",
+  },
   keywords: [
     "AI receptionist",
+    "live chat for small businesses",
+    "website chat",
     "business automation",
     "chatbot",
-    "WhatsApp automation",
     "lead capture",
-    "booking system",
+    "Google reviews automation",
+    "Google Sheet CRM",
   ],
 };
 
@@ -40,7 +47,7 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col bg-[#050510]" suppressHydrationWarning>
+      <body className="min-h-full flex flex-col bg-[#080807]" suppressHydrationWarning>
         <DemoModalProvider>
           {children}
           <ChatWidget />

@@ -10,6 +10,13 @@ export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
   const code = searchParams.get('code')
   const next = searchParams.get('next') ?? '/dashboard'
+  const type = searchParams.get('type')
+
+  if (code && (type === 'recovery' || next === '/reset-password')) {
+    const resetUrl = new URL('/reset-password', origin)
+    resetUrl.searchParams.set('code', code)
+    return NextResponse.redirect(resetUrl)
+  }
 
   if (code) {
     const supabase = await createSSRClient()

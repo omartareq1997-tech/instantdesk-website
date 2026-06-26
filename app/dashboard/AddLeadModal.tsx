@@ -26,7 +26,7 @@ function scoreLabel(s: number): 'hot' | 'warm' | 'cold' {
 
 function scoreLabelColor(s: number) {
   const l = scoreLabel(s)
-  return l === 'hot' ? '#f87171' : l === 'warm' ? '#fb923c' : '#60a5fa'
+  return l === 'hot' ? '#f87171' : l === 'warm' ? '#fb923c' : '#948f88'
 }
 
 const inputBase = {
@@ -35,7 +35,7 @@ const inputBase = {
 } as const
 
 function focusViolet(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) {
-  e.currentTarget.style.borderColor = 'rgba(139,92,246,0.5)'
+  e.currentTarget.style.borderColor = 'rgba(244,122,99,0.5)'
 }
 function blurDefault(e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) {
   e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'
@@ -109,15 +109,15 @@ export default function AddLeadModal({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{   opacity: 0, scale: 0.95, y: 16 }}
         className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-[90] w-[min(480px,calc(100vw-2rem))] rounded-2xl flex flex-col max-h-[90vh]"
-        style={{ background: 'rgba(10,10,30,0.99)', border: '1px solid rgba(139,92,246,0.25)', boxShadow: '0 32px 80px rgba(0,0,0,0.8)' }}
+        style={{ background: 'rgba(18,17,15,0.99)', border: '1px solid rgba(244,122,99,0.25)', boxShadow: '0 32px 80px rgba(0,0,0,0.8)' }}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 flex-shrink-0"
           style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-              style={{ background: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.25)' }}>
-              <UserPlus className="w-[18px] h-[18px] text-violet-400" />
+              style={{ background: 'rgba(244,122,99,0.12)', border: '1px solid rgba(244,122,99,0.25)' }}>
+              <UserPlus className="w-[18px] h-[18px] text-orange-400" />
             </div>
             <div>
               <div className="text-sm font-bold text-white">Add Lead</div>
@@ -188,7 +188,7 @@ export default function AddLeadModal({
                 className="w-full px-3 py-2 rounded-xl text-sm text-white outline-none transition-all appearance-none cursor-pointer"
                 style={inputBase} onFocus={focusViolet} onBlur={blurDefault}>
                 {SOURCES.map(s => (
-                  <option key={s} value={s} style={{ background: '#0a0a1e' }}>
+                  <option key={s} value={s} style={{ background: '#121416' }}>
                     {s.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
                   </option>
                 ))}
@@ -201,7 +201,7 @@ export default function AddLeadModal({
                 className="w-full px-3 py-2 rounded-xl text-sm text-white outline-none transition-all appearance-none cursor-pointer"
                 style={inputBase} onFocus={focusViolet} onBlur={blurDefault}>
                 {STATUSES.map(s => (
-                  <option key={s.value} value={s.value} style={{ background: '#0a0a1e' }}>{s.label}</option>
+                  <option key={s.value} value={s.value} style={{ background: '#121416' }}>{s.label}</option>
                 ))}
               </select>
             </div>
@@ -269,9 +269,9 @@ export default function AddLeadModal({
           </button>
           <button onClick={handleSave} disabled={saving || !name.trim()}
             className="flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-semibold transition-all disabled:opacity-40"
-            style={{ background: 'rgba(167,139,250,0.18)', border: '1px solid rgba(167,139,250,0.4)', color: '#c4b5fd' }}>
+            style={{ background: 'rgba(244,122,99,0.18)', border: '1px solid rgba(244,122,99,0.4)', color: '#f8a36d' }}>
             {saving
-              ? <motion.span className="w-4 h-4 rounded-full border-2 border-violet-400/30 border-t-violet-400"
+              ? <motion.span className="w-4 h-4 rounded-full border-2 border-orange-400/30 border-t-orange-400"
                   animate={{ rotate: 360 }} transition={{ duration: 0.7, repeat: Infinity, ease: 'linear' }} />
               : <UserPlus className="w-3.5 h-3.5" />}
             {saving ? 'Adding…' : 'Add Lead'}

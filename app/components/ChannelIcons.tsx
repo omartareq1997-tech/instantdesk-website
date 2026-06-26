@@ -48,10 +48,10 @@ export const channels = [
     name: 'Website Chat',
     handle: 'instantdesk.pl',
     Icon: GlobeIcon,
-    color: '#60a5fa',
+    color: '#948f88',
     bg: 'rgba(96, 165, 250, 0.12)',
     border: 'rgba(96, 165, 250, 0.25)',
-    gradient: 'from-blue-500 to-cyan-400',
+    gradient: 'from-stone-500 to-orange-400',
   },
   {
     name: 'WhatsApp',
@@ -78,7 +78,7 @@ export const channels = [
     color: '#0084FF',
     bg: 'rgba(0, 132, 255, 0.12)',
     border: 'rgba(0, 132, 255, 0.25)',
-    gradient: 'from-blue-600 to-indigo-500',
+    gradient: 'from-stone-600 to-stone-500',
   },
   {
     name: 'Telegram',
@@ -87,6 +87,6 @@ export const channels = [
     color: '#229ED9',
     bg: 'rgba(34, 158, 217, 0.12)',
     border: 'rgba(34, 158, 217, 0.25)',
-    gradient: 'from-sky-500 to-blue-400',
+    gradient: 'from-sky-500 to-stone-400',
   },
 ]

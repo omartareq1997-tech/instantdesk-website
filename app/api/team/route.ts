@@ -28,7 +28,7 @@ export async function GET() {
       id:           PROTECTED_OWNER_ID,
       client_id:    clientId,
       name:         ownerName,
-      email:        userEmail || (fromSession ? '' : 'alex@instantdesk.io'),
+      email:        userEmail || (fromSession ? '' : 'contact@instantdesk.pl'),
       role:         'owner',
       status:       'active',
       invited_by:   null,

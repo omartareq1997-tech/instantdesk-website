@@ -148,7 +148,7 @@ export default function AddAppointmentModal({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{   opacity: 0, scale: 0.95, y: 16 }}
         className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-[90] w-[min(440px,calc(100vw-2rem))] rounded-2xl flex flex-col max-h-[90vh]"
-        style={{ background: 'rgba(10,10,30,0.99)', border: '1px solid rgba(52,211,153,0.2)', boxShadow: '0 32px 80px rgba(0,0,0,0.8)' }}
+        style={{ background: 'rgba(18,17,15,0.99)', border: '1px solid rgba(52,211,153,0.2)', boxShadow: '0 32px 80px rgba(0,0,0,0.8)' }}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 flex-shrink-0"
@@ -210,7 +210,7 @@ export default function AddAppointmentModal({
                     <button key={l.id} type="button" onMouseDown={() => selectLead(l)}
                       className="w-full text-left px-4 py-2.5 flex items-center gap-3 hover:bg-white/5 transition-colors">
                       <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[9px] font-black text-white flex-shrink-0"
-                        style={{ background: 'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
+                        style={{ background: 'linear-gradient(135deg,rgba(244,122,99,0.5),rgba(248,154,87,0.4))' }}>
                         {l.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
                       </div>
                       <div>

@@ -22,7 +22,7 @@ const features = [
     icon: Phone,
     title: 'AI Phone Receptionist',
     description: 'Handles inbound calls around the clock — qualifies leads, answers FAQs, books appointments, and never puts a caller on hold.',
-    gradient: 'from-violet-500 to-purple-600',
+    gradient: 'from-orange-500 to-orange-600',
     glow: 'rgba(139, 92, 246, 0.3)',
     tag: 'Voice AI',
   },
@@ -30,7 +30,7 @@ const features = [
     icon: MessageSquare,
     title: 'Website Chatbot',
     description: 'Converts visitors into booked leads with intelligent flows trained on your brand voice and services. Engages and captures 24/7.',
-    gradient: 'from-blue-500 to-cyan-500',
+    gradient: 'from-stone-500 to-orange-500',
     glow: 'rgba(96, 165, 250, 0.3)',
     tag: 'Web',
   },
@@ -70,7 +70,7 @@ const features = [
     icon: Workflow,
     title: 'AI Workflow Engine',
     description: 'Connect your entire stack — Zapier, Make, Slack, Notion, invoicing — with AI agents that orchestrate complex multi-step processes.',
-    gradient: 'from-violet-500 to-blue-500',
+    gradient: 'from-orange-500 to-stone-500',
     glow: 'rgba(99, 102, 241, 0.3)',
     tag: 'Enterprise',
   },
@@ -97,7 +97,7 @@ export default function Features() {
   return (
     <section id="features" className="relative py-32 overflow-hidden">
       <div className="absolute inset-0 -z-10">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1px] h-full bg-gradient-to-b from-transparent via-violet-500/15 to-transparent" />
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1px] h-full bg-gradient-to-b from-transparent via-orange-500/15 to-transparent" />
       </div>
 
       <div className="max-w-7xl mx-auto px-6">
@@ -108,7 +108,7 @@ export default function Features() {
           transition={{ duration: 0.6 }}
           className="text-center mb-16"
         >
-          <span className="inline-block text-xs font-semibold tracking-widest uppercase text-violet-400 mb-4">
+          <span className="inline-block text-xs font-semibold tracking-widest uppercase text-orange-400 mb-4">
             Everything you need
           </span>
           <h2 className="text-4xl md:text-5xl font-black text-white mb-5 leading-tight">
@@ -128,24 +128,24 @@ export default function Features() {
           transition={{ duration: 0.7 }}
           className="relative rounded-3xl overflow-hidden mb-5 group"
           style={{
-            background: 'linear-gradient(135deg, rgba(99,102,241,0.12) 0%, rgba(139,92,246,0.08) 50%, rgba(59,130,246,0.12) 100%)',
-            border: '1px solid rgba(139,92,246,0.2)',
+            background: 'linear-gradient(135deg, rgba(244,122,99,0.12) 0%, rgba(244,122,99,0.08) 50%, rgba(148,145,140,0.12) 100%)',
+            border: '1px solid rgba(244,122,99,0.2)',
           }}
         >
           {/* Glow on hover */}
           <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-700"
-            style={{ background: 'radial-gradient(ellipse at 50% 0%, rgba(139,92,246,0.15) 0%, transparent 70%)' }}
+            style={{ background: 'radial-gradient(ellipse at 50% 0%, rgba(244,122,99,0.15) 0%, transparent 70%)' }}
           />
           {/* Corner decoration */}
           <div className="absolute top-0 right-0 w-96 h-96 opacity-20"
-            style={{ background: 'radial-gradient(circle at top right, rgba(99,102,241,0.5), transparent 70%)' }}
+            style={{ background: 'radial-gradient(circle at top right, rgba(244,122,99,0.5), transparent 70%)' }}
           />
 
           <div className="relative grid grid-cols-1 lg:grid-cols-2 gap-0">
             {/* Left: text */}
             <div className="p-10 md:p-12">
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-violet-500/10 border border-violet-500/20 text-xs font-bold text-violet-300 mb-6">
-                <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-orange-500/10 border border-orange-500/20 text-xs font-bold text-orange-300 mb-6">
+                <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse" />
                 Core Technology
               </div>
               <h3 className="text-2xl md:text-3xl font-black text-white mb-4 leading-snug">
@@ -161,12 +161,12 @@ export default function Features() {
                     key={i}
                     className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full"
                     style={{
-                      background: 'rgba(139,92,246,0.08)',
-                      border: '1px solid rgba(139,92,246,0.18)',
+                      background: 'rgba(244,122,99,0.08)',
+                      border: '1px solid rgba(244,122,99,0.18)',
                       color: 'rgba(196,181,253,0.9)',
                     }}
                   >
-                    <span className="w-1 h-1 rounded-full bg-violet-400" />
+                    <span className="w-1 h-1 rounded-full bg-orange-400" />
                     {cap}
                   </span>
                 ))}

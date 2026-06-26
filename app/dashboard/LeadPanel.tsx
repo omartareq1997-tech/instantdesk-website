@@ -67,8 +67,8 @@ interface AISummary {
 /* ─── Config ─────────────────────────────────────────────────── */
 
 const STATUS_CFG: Record<LeadStatus, { label: string; color: string; bg: string; border: string }> = {
-  new:         { label:'New',         color:'#a78bfa', bg:'rgba(167,139,250,0.10)', border:'rgba(167,139,250,0.25)' },
-  contacted:   { label:'Contacted',   color:'#60a5fa', bg:'rgba(96,165,250,0.10)',  border:'rgba(96,165,250,0.25)'  },
+  new:         { label:'New',         color:'#f8a36d', bg:'rgba(244,122,99,0.10)', border:'rgba(244,122,99,0.25)' },
+  contacted:   { label:'Contacted',   color:'#948f88', bg:'rgba(148,145,140,0.10)',  border:'rgba(148,145,140,0.25)'  },
   demo_booked: { label:'Demo Booked', color:'#fbbf24', bg:'rgba(251,191,36,0.10)',  border:'rgba(251,191,36,0.25)'  },
   won:         { label:'Won',         color:'#34d399', bg:'rgba(52,211,153,0.10)',  border:'rgba(52,211,153,0.25)'  },
   lost:        { label:'Lost',        color:'#f87171', bg:'rgba(248,113,113,0.10)', border:'rgba(248,113,113,0.25)' },
@@ -77,13 +77,13 @@ const STATUS_CFG: Record<LeadStatus, { label: string; color: string; bg: string;
 const SCORE_CFG: Record<ScoreLabel, { color: string; label: string; bg: string }> = {
   hot:  { color:'#f87171', label:'Hot',  bg:'rgba(248,113,113,0.12)' },
   warm: { color:'#fb923c', label:'Warm', bg:'rgba(251,146,60,0.12)'  },
-  cold: { color:'#60a5fa', label:'Cold', bg:'rgba(96,165,250,0.12)'  },
+  cold: { color:'#948f88', label:'Cold', bg:'rgba(148,145,140,0.12)'  },
 }
 
 const APPT_STATUS_CFG: Record<ApptStatus, { label: string; color: string; bg: string; border: string }> = {
   confirmed: { label:'Confirmed', color:'#34d399', bg:'rgba(52,211,153,0.07)',  border:'rgba(52,211,153,0.22)'  },
   pending:   { label:'Pending',   color:'#fbbf24', bg:'rgba(251,191,36,0.07)',  border:'rgba(251,191,36,0.22)'  },
-  completed: { label:'Completed', color:'#60a5fa', bg:'rgba(96,165,250,0.07)',  border:'rgba(96,165,250,0.22)'  },
+  completed: { label:'Completed', color:'#948f88', bg:'rgba(148,145,140,0.07)',  border:'rgba(148,145,140,0.22)'  },
   cancelled: { label:'Cancelled', color:'#f87171', bg:'rgba(248,113,113,0.07)', border:'rgba(248,113,113,0.22)' },
 }
 
@@ -583,7 +583,7 @@ function ConvSkeleton() {
         <div key={i} className={`flex ${i%2===0?'justify-end':'justify-start'}`}>
           <div className="rounded-2xl animate-pulse"
             style={{ width:`${w}%`, height:36,
-              background: i%2===0 ? 'rgba(255,255,255,0.05)' : 'rgba(139,92,246,0.08)' }} />
+              background: i%2===0 ? 'rgba(255,255,255,0.05)' : 'rgba(244,122,99,0.08)' }} />
         </div>
       ))}
     </div>
@@ -602,10 +602,10 @@ function ChatBubbles({ messages, endRef }: { messages: ChatMessage[]; endRef: Re
             {msg.from !== 'user' && (
               <div className="flex items-center gap-1.5 mb-1.5">
                 <div className="w-4 h-4 rounded flex items-center justify-center"
-                  style={{ background:'rgba(139,92,246,0.25)' }}>
-                  <Bot className="w-2.5 h-2.5 text-violet-400" />
+                  style={{ background:'rgba(244,122,99,0.25)' }}>
+                  <Bot className="w-2.5 h-2.5 text-orange-400" />
                 </div>
-                <span className="text-[9px] font-bold text-violet-400/60 uppercase tracking-wider">
+                <span className="text-[9px] font-bold text-orange-400/60 uppercase tracking-wider">
                   {msg.from==='agent'?'Agent':'InstantDesk AI'}
                 </span>
                 {fmtSpeed(msg.response_time_ms) && (
@@ -615,7 +615,7 @@ function ChatBubbles({ messages, endRef }: { messages: ChatMessage[]; endRef: Re
             )}
             <div className="rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed whitespace-pre-wrap"
               style={msg.from!=='user' ? {
-                background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.2)',
+                background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.2)',
                 color:'rgba(255,255,255,0.78)', borderTopLeftRadius:4,
               } : {
                 background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.1)',
@@ -709,7 +709,7 @@ function ApptCard({
 /* ─── Lead Intelligence Grid ─────────────────────────────────── */
 
 function LeadIntelligenceGrid({ ai, lead }: { ai: AISummary; lead: Lead }) {
-  const urgencyColor = ai.urgency === 'high' ? '#f87171' : ai.urgency === 'medium' ? '#fbbf24' : '#60a5fa'
+  const urgencyColor = ai.urgency === 'high' ? '#f87171' : ai.urgency === 'medium' ? '#fbbf24' : '#948f88'
 
   const rows: { icon: React.ElementType; label: string; value: string; color?: string }[] = [
     ai.budget         ? { icon: DollarSign, label: 'Budget',    value: ai.budget,          color: '#34d399' } : null,
@@ -775,7 +775,7 @@ function buildTimelineEvents(
     label: 'Lead created',
     sub:   lead.source && !/^unknown$/i.test(lead.source) ? `via ${lead.source}` : undefined,
     time:  lead.date,
-    color: '#a78bfa',
+    color: '#f8a36d',
     Icon:  Users,
   })
 
@@ -784,7 +784,7 @@ function buildTimelineEvents(
       id:    'conv-started',
       label: 'Conversation started',
       time:  messages[0].created_at || lead.date,
-      color: '#60a5fa',
+      color: '#948f88',
       Icon:  MessageCircle,
     })
   }
@@ -805,7 +805,7 @@ function buildTimelineEvents(
         label: 'AI replied',
         sub:   msg.content.length > 80 ? msg.content.slice(0, 78) + '…' : msg.content,
         time:  msg.created_at,
-        color: '#818cf8',
+        color: '#f47a63',
         Icon:  Bot,
       })
     }
@@ -882,7 +882,7 @@ function LeadMemoryCard({ memory }: { memory: LeadMemory }) {
     memory.budget           && { label: 'Budget',      value: memory.budget },
     memory.desired_location && { label: 'Location',    value: memory.desired_location },
     memory.urgency          && { label: 'Urgency',     value: memory.urgency,
-      color: memory.urgency === 'high' ? '#f87171' : memory.urgency === 'medium' ? '#fbbf24' : '#60a5fa' },
+      color: memory.urgency === 'high' ? '#f87171' : memory.urgency === 'medium' ? '#fbbf24' : '#948f88' },
     memory.objections       && { label: 'Objections',  value: memory.objections, color: '#f87171' },
     memory.viewed_properties && { label: 'Viewed',     value: memory.viewed_properties },
     memory.language && memory.language !== 'English'
@@ -895,13 +895,13 @@ function LeadMemoryCard({ memory }: { memory: LeadMemory }) {
 
   return (
     <div className="rounded-2xl p-4 flex flex-col gap-3"
-      style={{ background:'rgba(99,102,241,0.06)', border:'1px solid rgba(99,102,241,0.18)' }}>
+      style={{ background:'rgba(244,122,99,0.06)', border:'1px solid rgba(244,122,99,0.18)' }}>
       <div className="flex items-center gap-2">
         <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0"
-          style={{ background:'rgba(99,102,241,0.2)' }}>
-          <Brain className="w-3.5 h-3.5 text-indigo-400" />
+          style={{ background:'rgba(244,122,99,0.2)' }}>
+          <Brain className="w-3.5 h-3.5 text-stone-400" />
         </div>
-        <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-400/70">AI Memory</span>
+        <span className="text-[10px] font-bold uppercase tracking-widest text-stone-400/70">AI Memory</span>
         <span className="ml-auto text-[9px] text-white/20">
           {new Date(memory.updated_at).toLocaleDateString('en-GB', { day:'numeric', month:'short' })}
         </span>
@@ -1349,7 +1349,7 @@ export default function LeadPanel({
       liveText || undefined,
     )
   }, [lead, localStatus, firstUpcomingAppt?.date, displayMessages])
-  const urgencyColor = ai.urgency === 'high' ? '#f87171' : ai.urgency === 'medium' ? '#fbbf24' : '#60a5fa'
+  const urgencyColor = ai.urgency === 'high' ? '#f87171' : ai.urgency === 'medium' ? '#fbbf24' : '#948f88'
 
   /* ── Custom metadata table (excludes surfaced keys) ────────── */
   const metaEntries = Object.entries(meta).filter(([k]) => !SURFACED_META_KEYS.has(k))
@@ -1390,19 +1390,19 @@ export default function LeadPanel({
         transition={{ type:'spring', stiffness:300, damping:30 }}
         className="fixed right-0 top-0 bottom-0 z-50 w-full max-w-lg overflow-y-auto"
         style={{
-          background:'rgba(7,7,25,0.98)', backdropFilter:'blur(24px)',
-          borderLeft:'1px solid rgba(139,92,246,0.18)',
+          background:'rgba(18,17,15,0.98)', backdropFilter:'blur(24px)',
+          borderLeft:'1px solid rgba(244,122,99,0.18)',
           boxShadow:'-32px 0 80px rgba(0,0,0,0.6)',
         }}
       >
         {/* ── Sticky header block ─────────────────────────────── */}
         <div className="sticky top-0 z-10"
-          style={{ background:'rgba(7,7,25,0.98)', borderBottom:'1px solid rgba(255,255,255,0.07)' }}>
+          style={{ background:'rgba(18,17,15,0.98)', borderBottom:'1px solid rgba(255,255,255,0.07)' }}>
 
           {/* Identity row */}
           <div className="flex items-start gap-4 px-4 sm:px-6 py-4">
             <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-sm font-black text-white flex-shrink-0"
-              style={{ background:'linear-gradient(135deg,#7c3aed,#2563eb)' }}>
+              style={{ background:'linear-gradient(135deg,#171412,#f89a57)' }}>
               {initials(lead.name)}
             </div>
             <div className="flex-1 min-w-0">
@@ -1458,7 +1458,7 @@ export default function LeadPanel({
                 <button type="button"
                   onClick={e => { e.stopPropagation(); window.open(`mailto:${lead.email}`) }}
                   className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold transition-all hover:opacity-90"
-                  style={{ background:'rgba(96,165,250,0.10)', border:'1px solid rgba(96,165,250,0.2)', color:'#60a5fa' }}>
+                  style={{ background:'rgba(148,145,140,0.10)', border:'1px solid rgba(148,145,140,0.2)', color:'#948f88' }}>
                   <Mail className="w-3.5 h-3.5" /> Email
                 </button>
               )}
@@ -1515,12 +1515,12 @@ export default function LeadPanel({
             {TABS.map(t => (
               <button key={t.id} onClick={() => setActiveTab(t.id)}
                 className="flex-1 py-2.5 text-xs font-bold transition-all relative"
-                style={{ color: activeTab===t.id ? '#c4b5fd' : 'rgba(255,255,255,0.30)' }}>
+                style={{ color: activeTab===t.id ? '#f8a36d' : 'rgba(255,255,255,0.30)' }}>
                 {t.label}
                 {activeTab===t.id && (
                   <motion.div layoutId="tab-line"
                     className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full"
-                    style={{ background:'linear-gradient(90deg,#7c3aed,#2563eb)' }} />
+                    style={{ background:'linear-gradient(90deg,#171412,#f89a57)' }} />
                 )}
               </button>
             ))}
@@ -1535,15 +1535,15 @@ export default function LeadPanel({
             <>
               {/* AI Summary */}
               <div className="rounded-2xl p-4 flex flex-col gap-3"
-                style={{ background:'rgba(139,92,246,0.07)', border:'1px solid rgba(139,92,246,0.18)' }}>
+                style={{ background:'rgba(244,122,99,0.07)', border:'1px solid rgba(244,122,99,0.18)' }}>
 
                 {/* Header */}
                 <div className="flex items-center gap-2">
                   <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{ background:'rgba(139,92,246,0.2)' }}>
-                    <Bot className="w-3.5 h-3.5 text-violet-400" />
+                    style={{ background:'rgba(244,122,99,0.2)' }}>
+                    <Bot className="w-3.5 h-3.5 text-orange-400" />
                   </div>
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-violet-400/70">AI Analysis</span>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-orange-400/70">AI Analysis</span>
                   <span className="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded-full capitalize"
                     style={{ background:`${urgencyColor}20`, color:urgencyColor, border:`1px solid ${urgencyColor}30` }}>
                     {ai.urgency} · {ai.urgencyReason}
@@ -1558,8 +1558,8 @@ export default function LeadPanel({
                 {/* First client message — verbatim quote; suppressed when ai_summary is present */}
                 {!aiSummary && ai.firstClientMessage && (
                   <div className="flex items-start gap-2 px-3 py-2 rounded-xl"
-                    style={{ background:'rgba(255,255,255,0.03)', borderLeft:'2px solid rgba(139,92,246,0.35)' }}>
-                    <MessageCircle className="w-3 h-3 text-violet-400/40 flex-shrink-0 mt-0.5" />
+                    style={{ background:'rgba(255,255,255,0.03)', borderLeft:'2px solid rgba(244,122,99,0.35)' }}>
+                    <MessageCircle className="w-3 h-3 text-orange-400/40 flex-shrink-0 mt-0.5" />
                     <p className="text-[11px] text-white/50 leading-relaxed italic">
                       &ldquo;{ai.firstClientMessage}&rdquo;
                     </p>
@@ -1588,7 +1588,7 @@ export default function LeadPanel({
                 )}
 
                 {/* Recommended action */}
-                <div className="flex items-start gap-2 pt-2" style={{ borderTop:'1px solid rgba(139,92,246,0.15)' }}>
+                <div className="flex items-start gap-2 pt-2" style={{ borderTop:'1px solid rgba(244,122,99,0.15)' }}>
                   <Lightbulb className="w-3.5 h-3.5 text-amber-400/70 flex-shrink-0 mt-0.5" />
                   <p className="text-[11px] text-amber-400/80 leading-relaxed">{ai.action}</p>
                 </div>
@@ -1617,7 +1617,7 @@ export default function LeadPanel({
                       onClick={e => { e.stopPropagation(); window.open(`mailto:${lead.email}`) }}
                       className="flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors hover:bg-white/5 w-full text-left"
                       style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)' }}>
-                      <Mail className="w-3.5 h-3.5 text-blue-400/70 flex-shrink-0" />
+                      <Mail className="w-3.5 h-3.5 text-stone-400/70 flex-shrink-0" />
                       <span className="text-xs font-medium text-white/65 truncate">{lead.email}</span>
                     </button>
                   )}
@@ -1627,8 +1627,8 @@ export default function LeadPanel({
               {/* Key details grid / edit form */}
               {editMode ? (
                 <div className="rounded-2xl p-4 flex flex-col gap-3"
-                  style={{ background:'rgba(139,92,246,0.04)', border:'1px solid rgba(139,92,246,0.18)' }}>
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-violet-400/60">Edit Details</div>
+                  style={{ background:'rgba(244,122,99,0.04)', border:'1px solid rgba(244,122,99,0.18)' }}>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-orange-400/60">Edit Details</div>
                   <div className="grid grid-cols-2 gap-2">
                     {([
                       { label:'Name',    val:editName,    set:setEditName,    type:'text'  },
@@ -1644,7 +1644,7 @@ export default function LeadPanel({
                           min={f.type==='number'?0:undefined} max={f.type==='number'?100:undefined}
                           className="w-full px-3 py-2 rounded-lg text-xs text-white/80 outline-none"
                           style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }}
-                          onFocus={e=>{e.currentTarget.style.border='1px solid rgba(139,92,246,0.4)'}}
+                          onFocus={e=>{e.currentTarget.style.border='1px solid rgba(244,122,99,0.4)'}}
                           onBlur={e=>{e.currentTarget.style.border='1px solid rgba(255,255,255,0.1)'}} />
                       </div>
                     ))}
@@ -1654,9 +1654,9 @@ export default function LeadPanel({
                       className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-all disabled:opacity-40"
                       style={editSaved
                         ? { background:'rgba(52,211,153,0.12)', border:'1px solid rgba(52,211,153,0.3)', color:'#34d399' }
-                        : { background:'rgba(139,92,246,0.15)', border:'1px solid rgba(139,92,246,0.3)', color:'#c4b5fd' }}>
+                        : { background:'rgba(244,122,99,0.15)', border:'1px solid rgba(244,122,99,0.3)', color:'#f8a36d' }}>
                       {savingEdit
-                        ? <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-violet-400/30 border-t-violet-400"
+                        ? <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-orange-400/30 border-t-orange-400"
                             animate={{rotate:360}} transition={{duration:0.7,repeat:Infinity,ease:'linear'}} />
                         : editSaved
                           ? <><CheckCircle className="w-3.5 h-3.5" />Saved</>
@@ -1694,7 +1694,7 @@ export default function LeadPanel({
                             onChange={e => void handleAssignAgent(e.target.value)}
                             onBlur={() => setAssigningAgent(false)}
                             className="text-xs outline-none appearance-none rounded-lg px-2 py-0.5 -ml-2"
-                            style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.3)', color:'#c4b5fd', colorScheme:'dark' }}>
+                            style={{ background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.3)', color:'#f8a36d', colorScheme:'dark' }}>
                             <option value="Unassigned">Unassigned</option>
                             {teamMembers.map(m => (
                               <option key={m.id} value={m.name}>{m.name}</option>
@@ -1702,7 +1702,7 @@ export default function LeadPanel({
                           </select>
                         ) : (
                           <button type="button" onClick={() => setAssigningAgent(true)}
-                            className="flex items-center gap-1.5 text-xs text-white/65 font-medium hover:text-violet-300 transition-colors group"
+                            className="flex items-center gap-1.5 text-xs text-white/65 font-medium hover:text-orange-300 transition-colors group"
                             title="Click to reassign">
                             <span>{localAgent}</span>
                             <ChevronDown className="w-3 h-3 opacity-0 group-hover:opacity-60 transition-opacity" />
@@ -1716,7 +1716,7 @@ export default function LeadPanel({
                   {canEdit && (
                     <button type="button" onClick={()=>setEditMode(true)}
                       className="flex items-center gap-1.5 self-start text-[11px] font-semibold px-3 py-1.5 rounded-lg transition-all"
-                      style={{ background:'rgba(139,92,246,0.08)', border:'1px solid rgba(139,92,246,0.18)', color:'rgba(167,139,250,0.7)' }}>
+                      style={{ background:'rgba(244,122,99,0.08)', border:'1px solid rgba(244,122,99,0.18)', color:'rgba(244,122,99,0.7)' }}>
                       <Pencil className="w-3 h-3" /> Edit details
                     </button>
                   )}
@@ -1768,7 +1768,7 @@ export default function LeadPanel({
                   </span>
                   {displayMessages.length > 0 && (
                     <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
-                      style={{ background:'rgba(139,92,246,0.14)', color:'rgba(167,139,250,0.7)' }}>
+                      style={{ background:'rgba(244,122,99,0.14)', color:'rgba(244,122,99,0.7)' }}>
                       {displayMessages.length} msg{displayMessages.length !== 1 ? 's' : ''}
                     </span>
                   )}
@@ -1831,16 +1831,16 @@ export default function LeadPanel({
                   rows={6}
                   className="w-full rounded-xl px-4 py-3 text-xs text-white/70 placeholder-white/20 outline-none resize-none leading-relaxed"
                   style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)' }}
-                  onFocus={e => { e.currentTarget.style.border='1px solid rgba(139,92,246,0.35)' }}
+                  onFocus={e => { e.currentTarget.style.border='1px solid rgba(244,122,99,0.35)' }}
                   onBlur={e  => { e.currentTarget.style.border='1px solid rgba(255,255,255,0.08)' }}
                 />
                 <button onClick={saveNotesAndTags} disabled={savingNotes || (!notesDirty && !savingNotes)}
                   className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition-all self-end disabled:opacity-40"
                   style={notesSaved
                     ? { background:'rgba(52,211,153,0.12)', border:'1px solid rgba(52,211,153,0.25)', color:'#34d399' }
-                    : { background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.25)', color:'#c4b5fd' }}>
+                    : { background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.25)', color:'#f8a36d' }}>
                   {savingNotes ? (
-                    <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-violet-400/30 border-t-violet-400"
+                    <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-orange-400/30 border-t-orange-400"
                       animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity, ease:'linear' }} />
                   ) : notesSaved ? (
                     <><CheckCircle className="w-3.5 h-3.5" />Saved</>
@@ -1861,7 +1861,7 @@ export default function LeadPanel({
                     <motion.span key={t} layout
                       initial={{ scale:0 }} animate={{ scale:1 }}
                       className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold cursor-pointer group"
-                      style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.22)', color:'#c4b5fd' }}
+                      style={{ background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.22)', color:'#f8a36d' }}
                       onClick={() => removeTag(t)}>
                       {t}
                       <X className="w-2.5 h-2.5 opacity-50 group-hover:opacity-100 transition-opacity" />
@@ -1879,7 +1879,7 @@ export default function LeadPanel({
                     />
                     <button onClick={addTag}
                       className="w-6 h-6 rounded-full flex items-center justify-center transition-all"
-                      style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.22)', color:'#c4b5fd' }}>
+                      style={{ background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.22)', color:'#f8a36d' }}>
                       <Plus className="w-3 h-3" />
                     </button>
                   </div>
@@ -1887,7 +1887,7 @@ export default function LeadPanel({
                 {(tags.length > 0 || notesDirty) && (
                   <button onClick={saveNotesAndTags} disabled={savingNotes}
                     className="flex items-center gap-1.5 text-[10px] font-semibold self-start"
-                    style={{ color: savingTags ? '#34d399' : 'rgba(139,92,246,0.7)' }}>
+                    style={{ color: savingTags ? '#34d399' : 'rgba(244,122,99,0.7)' }}>
                     {savingNotes ? <><CheckCircle className="w-3 h-3" />Saved</> : <><Save className="w-3 h-3" />Save tags</>}
                   </button>
                 )}
@@ -1925,7 +1925,7 @@ export default function LeadPanel({
                   </div>
                   <button onClick={() => setShowApptForm(v => !v)}
                     className="flex items-center gap-1 text-[10px] font-semibold px-2.5 py-1 rounded-lg transition-all"
-                    style={{ background:'rgba(167,139,250,0.08)', border:'1px solid rgba(167,139,250,0.2)', color:'#a78bfa' }}>
+                    style={{ background:'rgba(244,122,99,0.08)', border:'1px solid rgba(244,122,99,0.2)', color:'#f8a36d' }}>
                     <Plus className="w-3 h-3" /> New
                   </button>
                 </div>
@@ -1936,8 +1936,8 @@ export default function LeadPanel({
                     <motion.div initial={{ opacity:0, height:0 }} animate={{ opacity:1, height:'auto' }} exit={{ opacity:0, height:0 }}
                       className="overflow-hidden">
                       <div className="rounded-2xl p-4 flex flex-col gap-3"
-                        style={{ background:'rgba(167,139,250,0.05)', border:'1px solid rgba(167,139,250,0.18)' }}>
-                        <div className="text-xs font-bold text-violet-400/70">Create Appointment</div>
+                        style={{ background:'rgba(244,122,99,0.05)', border:'1px solid rgba(244,122,99,0.18)' }}>
+                        <div className="text-xs font-bold text-orange-400/70">Create Appointment</div>
                         <div className="grid grid-cols-2 gap-2">
                           <div>
                             <div className="text-[10px] text-white/35 mb-1">Date</div>
@@ -1966,9 +1966,9 @@ export default function LeadPanel({
                         <div className="flex gap-2">
                           <button onClick={createAppointment} disabled={savingAppt || !apptDate}
                             className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold disabled:opacity-40 transition-all"
-                            style={{ background:'rgba(167,139,250,0.15)', border:'1px solid rgba(167,139,250,0.3)', color:'#c4b5fd' }}>
+                            style={{ background:'rgba(244,122,99,0.15)', border:'1px solid rgba(244,122,99,0.3)', color:'#f8a36d' }}>
                             {savingAppt ? (
-                              <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-violet-400/30 border-t-violet-400"
+                              <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-orange-400/30 border-t-orange-400"
                                 animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity, ease:'linear' }} />
                             ) : apptSaved ? (
                               <><CheckCircle className="w-3.5 h-3.5" />Booked!</>
@@ -2000,8 +2000,8 @@ export default function LeadPanel({
                         {editingApptId === appt.id ? (
                           /* ── Inline edit form ── */
                           <div className="rounded-2xl p-4 flex flex-col gap-3"
-                            style={{ background:'rgba(167,139,250,0.05)', border:'1px solid rgba(167,139,250,0.2)' }}>
-                            <div className="text-xs font-bold text-violet-400/70">Edit Appointment</div>
+                            style={{ background:'rgba(244,122,99,0.05)', border:'1px solid rgba(244,122,99,0.2)' }}>
+                            <div className="text-xs font-bold text-orange-400/70">Edit Appointment</div>
                             <div className="grid grid-cols-2 gap-2">
                               <div>
                                 <div className="text-[10px] text-white/35 mb-1">Date</div>
@@ -2050,9 +2050,9 @@ export default function LeadPanel({
                             <div className="flex gap-2">
                               <button onClick={saveApptEdit} disabled={savingApptEdit || !apptEditDate}
                                 className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold disabled:opacity-40 transition-all"
-                                style={{ background:'rgba(167,139,250,0.15)', border:'1px solid rgba(167,139,250,0.3)', color:'#c4b5fd' }}>
+                                style={{ background:'rgba(244,122,99,0.15)', border:'1px solid rgba(244,122,99,0.3)', color:'#f8a36d' }}>
                                 {savingApptEdit
-                                  ? <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-violet-400/30 border-t-violet-400"
+                                  ? <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-orange-400/30 border-t-orange-400"
                                       animate={{rotate:360}} transition={{duration:0.7,repeat:Infinity,ease:'linear'}} />
                                   : <><Save className="w-3.5 h-3.5" />Save</>}
                               </button>
@@ -2121,7 +2121,7 @@ export default function LeadPanel({
               animate={{ opacity:1, scale:1,    y:0   }}
               exit={{   opacity:0, scale:0.95, y:16  }}
               className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-[70] w-[min(360px,calc(100vw-2rem))] rounded-2xl p-6 flex flex-col gap-4"
-              style={{ background:'rgba(10,10,30,0.99)', border:'1px solid rgba(248,113,113,0.3)', boxShadow:'0 32px 80px rgba(0,0,0,0.8)' }}>
+              style={{ background:'rgba(18,17,15,0.99)', border:'1px solid rgba(248,113,113,0.3)', boxShadow:'0 32px 80px rgba(0,0,0,0.8)' }}>
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
                   style={{ background:'rgba(248,113,113,0.12)', border:'1px solid rgba(248,113,113,0.25)' }}>

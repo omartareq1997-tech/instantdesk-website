@@ -36,6 +36,8 @@ import { scheduleFollowUps } from '../../lib/scheduleFollowUps'
 import { retrieveRelevantChunks } from '../../lib/knowledgeChunks'
 import { getLimits, checkMonthlyMessageLimit } from '../../lib/usageLimits'
 import { loadLeadMemory, upsertLeadMemory, formatMemoryForPrompt } from '../../lib/leadMemory'
+import { buildAgentSystemPrompt } from '../../lib/agentPrompt'
+import { getBusinessTypeConfig, normalizeBusinessType } from '../../lib/businessTypes'
 import {
   HANDOVER_REPLY,
   aiCannotAnswer,
@@ -68,6 +70,16 @@ interface Slots {
   rooms:         string | null
   deal_type:     string | null
   viewing_time:  string | null
+  pickup_location: string | null
+  dropoff_location: string | null
+  pickup_datetime: string | null
+  return_datetime: string | null
+  car_class: string | null
+  transmission: string | null
+  seats: string | null
+  extras: string | null
+  booking_number: string | null
+  extension_request: string | null
 }
 
 interface ExistingLead {
@@ -96,7 +108,7 @@ function hasAnySlot(s: Slots): boolean {
 }
 
 function hasMeaningfulSlot(s: Slots): boolean {
-  return !!(s.name || s.phone || s.email || s.city || s.deal_type || s.property_type || s.budget || s.rooms || s.viewing_time)
+  return Object.values(s).some(Boolean)
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -327,6 +339,14 @@ function extractEmail(text: string): string | null {
 /* ── Combined extractor ────────────────────────────────────────────────── */
 
 function extractFromText(text: string): Partial<Slots> {
+  const carClass = text.match(/\b(economy|compact|suv|van|minivan|premium|luxury|standard)\b/i)?.[1]
+  const transmission = text.match(/\b(automatic|manual)\b/i)?.[1]
+  const seats = text.match(/\b(\d+)\s*(?:seats?|people|passengers)\b/i)?.[1]
+  const bookingNumber = text.match(/\b(?:CR|ID|BK)-?\d{4,8}\b/i)?.[0]
+  const airportMention = /\bairport|terminal\b/i.test(text)
+  const pickupLocation = text.match(/\bpick(?:up|-up)?\s+(?:at|from)\s+([^,.]+?)(?:\s+(?:tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at)|[,.]|$)/i)?.[1]
+  const dropoffLocation = text.match(/\b(?:drop(?:off|-off)?|return)\s+(?:at|to)\s+([^,.]+?)(?:\s+(?:tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at)|[,.]|$)/i)?.[1]
+
   return {
     name:          extractName(text)         ?? undefined,
     phone:         extractPhone(text)        ?? undefined,
@@ -338,6 +358,15 @@ function extractFromText(text: string): Partial<Slots> {
     rooms:         extractRooms(text)        ?? undefined,
     deal_type:     extractDealType(text)     ?? undefined,
     viewing_time:  extractViewingTime(text)  ?? undefined,
+    pickup_location: pickupLocation?.trim() ?? (airportMention ? 'Airport' : undefined),
+    dropoff_location: dropoffLocation?.trim() ?? undefined,
+    pickup_datetime: extractViewingTime(text) ?? undefined,
+    return_datetime: /\b(?:return|drop(?:off|-off)?)\b/i.test(text) ? extractViewingTime(text) ?? undefined : undefined,
+    car_class: carClass ? carClass.toLowerCase() : undefined,
+    transmission: transmission ? transmission.toLowerCase() : undefined,
+    seats: seats ?? undefined,
+    booking_number: bookingNumber?.toUpperCase() ?? undefined,
+    extension_request: /\bextend|extension|more days|keep the car|keep it longer\b/i.test(text) ? 'requested' : undefined,
   }
 }
 
@@ -369,6 +398,16 @@ function buildConfirmedSlots(
     rooms:         strOrNull(meta.rooms),
     deal_type:     strOrNull(meta.deal_type),
     viewing_time:  strOrNull(meta.viewing_time),
+    pickup_location: strOrNull(meta.pickup_location),
+    dropoff_location: strOrNull(meta.dropoff_location),
+    pickup_datetime: strOrNull(meta.pickup_datetime),
+    return_datetime: strOrNull(meta.return_datetime),
+    car_class: strOrNull(meta.car_class),
+    transmission: strOrNull(meta.transmission),
+    seats: strOrNull(meta.seats),
+    extras: strOrNull(meta.extras),
+    booking_number: strOrNull(meta.booking_number),
+    extension_request: strOrNull(meta.extension_request),
   }
 
   // Extract from all user messages + current (concatenated for pattern matching)
@@ -391,6 +430,16 @@ function buildConfirmedSlots(
     rooms:         fromDB.rooms         ?? extracted.rooms         ?? null,
     deal_type:     fromDB.deal_type     ?? extracted.deal_type     ?? null,
     viewing_time:  fromDB.viewing_time  ?? extracted.viewing_time  ?? null,
+    pickup_location: fromDB.pickup_location ?? extracted.pickup_location ?? null,
+    dropoff_location: fromDB.dropoff_location ?? extracted.dropoff_location ?? null,
+    pickup_datetime: fromDB.pickup_datetime ?? extracted.pickup_datetime ?? null,
+    return_datetime: fromDB.return_datetime ?? extracted.return_datetime ?? null,
+    car_class: fromDB.car_class ?? extracted.car_class ?? null,
+    transmission: fromDB.transmission ?? extracted.transmission ?? null,
+    seats: fromDB.seats ?? extracted.seats ?? null,
+    extras: fromDB.extras ?? extracted.extras ?? null,
+    booking_number: fromDB.booking_number ?? extracted.booking_number ?? null,
+    extension_request: fromDB.extension_request ?? extracted.extension_request ?? null,
   }
 }
 
@@ -398,26 +447,14 @@ function buildConfirmedSlots(
    MISSING SLOTS  — computed by code, never by AI
 ═══════════════════════════════════════════════════════════════════════════ */
 
-const DEFAULT_SLOT_DEFS: SlotDef[] = [
-  { key:'city',          label:'City / location',          required:true,
-    question:"Which city or area are you looking in?"  },
-  { key:'deal_type',     label:'Rent or buy',              required:true,
-    question:"Are you looking to rent or buy?"  },
-  { key:'property_type', label:'Property type',            required:true,
-    question:"What type of property are you looking for — apartment, house, studio, or something else?"  },
-  { key:'rooms',         label:'Number of rooms',          required:true,
-    question:"How many rooms or bedrooms do you need?"  },
-  { key:'budget',        label:'Budget',                   required:true,
-    question:"What is your budget? Please include the currency (e.g. 3000 PLN/month)."  },
-  { key:'name',          label:'Full name',                required:true,
-    question:"May I have your full name?"  },
-  { key:'phone',         label:'Phone number',             required:false,
-    question:"What is the best phone number to reach you on?"  },
-  { key:'email',         label:'Email address',            required:false,
-    question:"And your email address?"  },
-  { key:'viewing_time',  label:'Preferred viewing time',   required:false,
-    question:"When would you prefer to schedule a viewing?"  },
-]
+function defaultSlotDefsForBusinessType(businessType: string | null | undefined): SlotDef[] {
+  return getBusinessTypeConfig(businessType).qualificationSlots.map(slot => ({
+    key: slot.key as keyof Slots,
+    label: slot.label,
+    question: slot.question,
+    required: slot.required,
+  }))
+}
 
 function computeMissingSlots(confirmed: Slots, slotDefs: SlotDef[]): SlotDef[] {
   return slotDefs.filter(def => !confirmed[def.key])
@@ -432,13 +469,9 @@ function computeQualificationStage(confirmed: Slots, missing: SlotDef[]): string
     Boolean(confirmed.email)
 
   const hasIntent =
-    Boolean(confirmed.city) ||
-    Boolean(confirmed.property_type) ||
-    Boolean(confirmed.deal_type) ||
-    Boolean(confirmed.rooms) ||
-    Boolean(confirmed.budget)
+    Object.entries(confirmed).some(([key, value]) => !['name', 'phone', 'email'].includes(key) && Boolean(value))
 
-  const hasAppointment = Boolean(confirmed.viewing_time)
+  const hasAppointment = Boolean(confirmed.viewing_time || confirmed.pickup_datetime)
 
   if (!hasAnySlot) return 'discovery'
   if (missing.length > 0) return 'qualifying'
@@ -457,7 +490,12 @@ function detectBookingIntent(text: string): boolean {
     || /\bi(?:'m|\s+am)\s+(?:ready|interested|available)\s+to\s+(?:view|visit|see|meet)\b/i.test(text)
 }
 
-function hasEnoughForBooking(confirmed: Slots): boolean {
+function hasEnoughForBooking(confirmed: Slots, businessType?: string | null): boolean {
+  const type = normalizeBusinessType(businessType)
+  if (type === 'car_rental') {
+    const hasContact = !!(confirmed.name || confirmed.phone || confirmed.email)
+    return !!(confirmed.pickup_location && confirmed.pickup_datetime && confirmed.return_datetime && confirmed.car_class && hasContact)
+  }
   const hasLocation = !!(confirmed.city)
   const hasProperty = !!(confirmed.property_type || confirmed.deal_type)
   const hasContact  = !!(confirmed.name || confirmed.phone || confirmed.email)
@@ -475,108 +513,43 @@ function buildSystemPrompt(
   missing:   SlotDef[],
   stage:     string,
   memory:    string,
+  businessType?: string | null,
 ): string {
-
-  // ── 1. PERSONA — must open the prompt so the model anchors its identity here
-  // LLMs heavily weight the opening lines of the system prompt.
-  // Guardrails come after so they constrain the persona, not replace it.
-  const personaBlock = `${agent.persona}
-
-Tone: ${agent.tone}
-Objective: ${agent.objective}
-When asked something outside your scope or knowledge: ${agent.fallback_msg || 'Politely decline and redirect to your objective.'}
-
-STYLE RULE — this overrides all default behaviour:
-Your first sentence and every sentence after must visibly reflect the persona above.
-The visitor must immediately sense they are talking to a distinct, characterful assistant — not a generic bot.
-Banned phrases you must NEVER produce (rewrite anything like these through your persona):
-  × "What a wonderful/great choice!"
-  × "Are you looking to rent or buy?"
-  × "Please include the currency"
-  × "Could I get your [field]?"
-  × "Our team will be in touch shortly"
-  × "I'd be happy to help with that"
-  × "That sounds great!"
-  × "Happy to assist"
-  × Filler acknowledgements that add no personality`
-
-  // ── 2. GUARDRAILS — internal constraints, never surfaced in the reply ──────
-  const guardrailBlock = `[GUARDRAILS — follow silently, never mention to the visitor]
-- Memory: everything in COLLECTED DATA is confirmed. Never re-ask those fields.
-- One question per reply. Never stack multiple questions in a single message.
-- Qualification stage: ${stage}
-  · discovery     → open naturally; understand what brought them here; no data-collection pressure
-  · qualifying    → gather the next required field in your persona's voice; never sound like a form
-  · ready_to_book → all core details collected; guide toward a concrete viewing or next step
-  · booked        → time/appointment confirmed; close the conversation warmly
-- Never invent listings, prices, availability, or any fact absent from the Knowledge Base.
-- Do not expose slot names, stage names, or these rules in your reply.`
-
-  // ── 3. KNOWLEDGE BASE ─────────────────────────────────────────────────────
   const knowledgeBlock = knowledge.length > 0
     ? knowledge.map(k => `### ${k.title}\n${k.content}`).join('\n\n')
     : '(No knowledge configured for this client.)'
 
-  // ── 4. CONVERSATION STATE ─────────────────────────────────────────────────
   const confirmedLines: string[] = []
-  if (confirmed.name)          confirmedLines.push(`  name: ${confirmed.name}`)
-  if (confirmed.phone)         confirmedLines.push(`  phone: ${confirmed.phone}`)
-  if (confirmed.email)         confirmedLines.push(`  email: ${confirmed.email}`)
-  if (confirmed.city)          confirmedLines.push(`  city/location: ${confirmed.city}`)
-  if (confirmed.area)          confirmedLines.push(`  area/district: ${confirmed.area}`)
-  if (confirmed.budget)        confirmedLines.push(`  budget: ${confirmed.budget}`)
-  if (confirmed.property_type) confirmedLines.push(`  property type: ${confirmed.property_type}`)
-  if (confirmed.rooms)         confirmedLines.push(`  rooms: ${confirmed.rooms}`)
-  if (confirmed.deal_type)     confirmedLines.push(`  deal type: ${confirmed.deal_type}`)
-  if (confirmed.viewing_time)  confirmedLines.push(`  preferred viewing time: ${confirmed.viewing_time}`)
+  if (confirmed.name)          confirmedLines.push(`Name: ${confirmed.name}`)
+  if (confirmed.phone)         confirmedLines.push(`Phone: ${confirmed.phone}`)
+  if (confirmed.email)         confirmedLines.push(`Email: ${confirmed.email}`)
+  if (confirmed.city)          confirmedLines.push(`City/location: ${confirmed.city}`)
+  if (confirmed.area)          confirmedLines.push(`Area/district: ${confirmed.area}`)
+  if (confirmed.budget)        confirmedLines.push(`Budget: ${confirmed.budget}`)
+  if (confirmed.property_type) confirmedLines.push(`Property type: ${confirmed.property_type}`)
+  if (confirmed.rooms)         confirmedLines.push(`Rooms: ${confirmed.rooms}`)
+  if (confirmed.deal_type)     confirmedLines.push(`Deal type: ${confirmed.deal_type}`)
+  if (confirmed.viewing_time)  confirmedLines.push(`Preferred viewing time: ${confirmed.viewing_time}`)
+  if (confirmed.pickup_location) confirmedLines.push(`Pickup location: ${confirmed.pickup_location}`)
+  if (confirmed.dropoff_location) confirmedLines.push(`Drop-off location: ${confirmed.dropoff_location}`)
+  if (confirmed.pickup_datetime) confirmedLines.push(`Pickup date/time: ${confirmed.pickup_datetime}`)
+  if (confirmed.return_datetime) confirmedLines.push(`Return date/time: ${confirmed.return_datetime}`)
+  if (confirmed.car_class) confirmedLines.push(`Car class: ${confirmed.car_class}`)
+  if (confirmed.transmission) confirmedLines.push(`Transmission: ${confirmed.transmission}`)
+  if (confirmed.seats) confirmedLines.push(`Seats: ${confirmed.seats}`)
+  if (confirmed.extras) confirmedLines.push(`Extras: ${confirmed.extras}`)
+  if (confirmed.booking_number) confirmedLines.push(`Booking number: ${confirmed.booking_number}`)
+  if (confirmed.extension_request) confirmedLines.push(`Extension request: ${confirmed.extension_request}`)
 
-  const collectedBlock = confirmedLines.length > 0
-    ? `COLLECTED DATA — do NOT ask for any of these again:\n${confirmedLines.join('\n')}`
-    : `COLLECTED DATA: nothing yet — open the conversation naturally.`
-
-  let nextFieldBlock: string
-  if (missing.length === 0) {
-    nextFieldBlock = `NEXT FIELD: none — all required fields collected.\nGuide toward confirming everything and offering a concrete next step.`
-  } else {
-    const [next, ...rest] = missing
-    const restList = rest.length
-      ? `\nFields to collect after (do not ask yet):\n${rest.map(d => `  · ${d.label}${d.required ? '' : ' (optional)'}`).join('\n')}`
-      : ''
-    nextFieldBlock = `NEXT FIELD TO COLLECT: ${next.label}
-Compose this question entirely in your own persona's voice. Do not copy any template.${restList}`
-  }
-
-  // ── 5. OUTPUT TASK ────────────────────────────────────────────────────────
-  const outputTask = `[WRITE YOUR REPLY NOW]
-Respond to the visitor's last message.
-Your opening sentence must immediately sound like your persona — a reader should recognise the character from the first word.
-2–4 sentences maximum. One question only. Plain text — no JSON, bullets, or numbered lists.`
-
-  const memoryBlock = memory
-    ? `[LEAD MEMORY — prior context, use to personalise replies]\n${memory}`
-    : ''
-
-  return `${personaBlock}
-
----
-
-${guardrailBlock}
-
----
-
-[KNOWLEDGE BASE]
-${knowledgeBlock}
-
----
-${memoryBlock ? `\n${memoryBlock}\n\n---\n` : ''}
-[CONVERSATION STATE — stage: ${stage}]
-${collectedBlock}
-
-${nextFieldBlock}
-
----
-
-${outputTask}`
+  return buildAgentSystemPrompt({
+    config: agent,
+    businessType,
+    knowledgeText: knowledgeBlock,
+    collectedData: confirmedLines,
+    missingFields: missing.map(field => ({ label: field.label, required: field.required })),
+    stage,
+    memory,
+  })
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -866,6 +839,16 @@ export async function POST(req: NextRequest) {
   void agentLookupId  // consumed above
   const agent = agentRow as AgentRow
 
+  const { data: businessRow, error: businessTypeError } = await sb
+    .from('businesses')
+    .select('business_type')
+    .eq('id', businessId)
+    .maybeSingle()
+  if (businessTypeError && businessTypeError.code !== '42703') {
+    console.warn('[POST /api/chat] business_type lookup failed:', JSON.stringify(businessTypeError))
+  }
+  const businessType = normalizeBusinessType(typeof businessRow?.business_type === 'string' ? businessRow.business_type : null)
+
   /* 4. Retrieve relevant knowledge ───────────────────────────────────────── */
   // Priority: 1) vector chunks  2) capped fallback from knowledge_sources  3) empty
   let knowledge: KnowledgeRow[] = []
@@ -977,7 +960,7 @@ export async function POST(req: NextRequest) {
         question: r.prompt,
         required: r.required,
       }))
-    : DEFAULT_SLOT_DEFS
+    : defaultSlotDefsForBusinessType(businessType)
 
   /* 7. Build confirmedSlots deterministically ─────────────────────────────── */
   const confirmed          = buildConfirmedSlots(existingLead, history, message)
@@ -1019,7 +1002,7 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  if (detectBookingIntent(message) && hasEnoughForBooking(confirmed)) {
+  if (detectBookingIntent(message) && hasEnoughForBooking(confirmed, businessType)) {
     const stillNeedContact = !confirmed.phone && !confirmed.email
     const bookingReply = stillNeedContact
       ? `I'd love to arrange a viewing! Could I get your phone number or email so our team can confirm the available times?`
@@ -1034,7 +1017,7 @@ export async function POST(req: NextRequest) {
 
     console.log('[GUARD] blockedRepeatedQuestion: false (booking short-circuit)')
     console.log('PERSIST IDS', { resolvedClientId: clientId, resolvedBusinessId: businessId, bodyBusinessId: business_id, fallbackUsed })
-    const bResult = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, 'qualified', qualificationStage, bookingReply, message)
+    const bResult = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, 'qualified', qualificationStage, bookingReply, message, businessType)
 
     if (bResult.lead_id) {
       void scheduleFollowUps(sb, {
@@ -1083,7 +1066,7 @@ export async function POST(req: NextRequest) {
   if (!openaiKey) return NextResponse.json({ error: 'OPENAI_API_KEY is not configured' }, { status: 500 })
 
   const openai       = new OpenAI({ apiKey: openaiKey })
-  const systemPrompt = buildSystemPrompt(agent, knowledge, confirmed, missing, qualificationStage, leadMemoryStr)
+  const systemPrompt = buildSystemPrompt(agent, knowledge, confirmed, missing, qualificationStage, leadMemoryStr, businessType)
 
   console.log('[PROMPT] qualificationStage:', qualificationStage, '| nextField:', missing[0]?.label ?? 'none')
   if (process.env.DEBUG_PROMPT === 'true') {
@@ -1141,7 +1124,7 @@ export async function POST(req: NextRequest) {
   })
   const isQualified = !!(confirmed.name && confirmed.phone && confirmed.email)
   const intent      = detectDealType(message) ? 'inquiry' : 'greeting'
-  const persist = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, isQualified ? 'contacted' : 'new', qualificationStage, finalReply, message)
+  const persist = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, isQualified ? 'contacted' : 'new', qualificationStage, finalReply, message, businessType)
 
   /* 14. Update lead memory (fire-and-forget) ──────────────────────────────── */
   const resolvedLeadId = persist.lead_id ?? existingLead?.id
@@ -1200,6 +1183,8 @@ export async function POST(req: NextRequest) {
       isQualified,
       ai_summary:     typeof meta.ai_summary === 'string' ? meta.ai_summary : null,
       blocked,
+      businessType,
+      finalSystemPrompt: systemPrompt,
     }
   }
   return NextResponse.json(response)
@@ -1297,6 +1282,7 @@ async function persistLead(
   qualificationStage:  string,
   lastReply:    string,
   message:      string,
+  businessType: string | null,
 ): Promise<{
   lead_id:                  string | null
   insert_error:             string | null
@@ -1305,19 +1291,31 @@ async function persistLead(
   appointment_scheduled_at: string | null
 }> {
   console.log('PERSIST IDS', { resolvedClientId: clientId, resolvedBusinessId: businessId })
+  const normalizedBusinessType = normalizeBusinessType(businessType)
 
   // Build AI summary from confirmed slots
-  const namePart   = confirmed.name         ? confirmed.name                      : null
-  const actionPart = confirmed.deal_type    ? `looking to ${confirmed.deal_type}` : 'enquiring about'
-  const roomsPart  = confirmed.rooms        ? `${confirmed.rooms} `               : ''
-  const propPart   = confirmed.property_type ?? 'property'
-  const cityPart   = confirmed.city         ? ` in ${confirmed.city}`             : ''
-  const areaPart   = confirmed.area         ? `, ${confirmed.area}`               : ''
-  const budgetPart = confirmed.budget       ? `, budget ${confirmed.budget}`       : ''
-  const viewPart   = confirmed.viewing_time ? ` — prefers viewing ${confirmed.viewing_time}` : ''
-  const summary    = namePart
-    ? `${namePart} is ${actionPart} a ${roomsPart}${propPart}${cityPart}${areaPart}${budgetPart}.${viewPart}`
-    : ''
+  const namePart = confirmed.name ? confirmed.name : null
+  let summary = ''
+  if (namePart && normalizedBusinessType === 'car_rental') {
+    const carPart = confirmed.car_class ? `${confirmed.car_class} car` : 'car rental'
+    const pickupPart = confirmed.pickup_location ? ` from ${confirmed.pickup_location}` : ''
+    const dropoffPart = confirmed.dropoff_location ? ` to ${confirmed.dropoff_location}` : ''
+    const datesPart = confirmed.pickup_datetime || confirmed.return_datetime
+      ? `, ${confirmed.pickup_datetime ?? 'pickup TBD'} to ${confirmed.return_datetime ?? 'return TBD'}`
+      : ''
+    summary = `${namePart} asked about ${carPart}${pickupPart}${dropoffPart}${datesPart}.`
+  } else if (namePart && normalizedBusinessType === 'real_estate') {
+    const actionPart = confirmed.deal_type    ? `looking to ${confirmed.deal_type}` : 'enquiring about'
+    const roomsPart  = confirmed.rooms        ? `${confirmed.rooms} `               : ''
+    const propPart   = confirmed.property_type ?? 'property'
+    const cityPart   = confirmed.city         ? ` in ${confirmed.city}`             : ''
+    const areaPart   = confirmed.area         ? `, ${confirmed.area}`               : ''
+    const budgetPart = confirmed.budget       ? `, budget ${confirmed.budget}`       : ''
+    const viewPart   = confirmed.viewing_time ? ` — prefers viewing ${confirmed.viewing_time}` : ''
+    summary = `${namePart} is ${actionPart} a ${roomsPart}${propPart}${cityPart}${areaPart}${budgetPart}.${viewPart}`
+  } else if (namePart) {
+    summary = `${namePart} contacted the business through website chat.`
+  }
 
   const nextAction  = missing[0]?.question ?? 'Follow up and confirm booking.'
   const missingKeys = missing.map(d => d.label).join(', ')
@@ -1327,7 +1325,7 @@ async function persistLead(
     name:          confirmed.name  ?? (existing?.name === 'Website Visitor' ? null : existing?.name) ?? null,
     phone:         confirmed.phone ?? existing?.phone ?? null,
     email:         confirmed.email ?? existing?.email ?? null,
-    interest:      confirmed.property_type ?? confirmed.deal_type ?? existing?.interest ?? null,
+    interest:      confirmed.car_class ?? confirmed.property_type ?? confirmed.deal_type ?? existing?.interest ?? null,
     // Direct columns on leads table
     ai_summary:    summary || null,
     intent:        confirmed.deal_type ?? null,
@@ -1349,6 +1347,17 @@ async function persistLead(
       ...(confirmed.rooms         && { rooms:         confirmed.rooms         }),
       ...(confirmed.deal_type     && { deal_type:     confirmed.deal_type     }),
       ...(confirmed.viewing_time  && { viewing_time:  confirmed.viewing_time  }),
+      ...(confirmed.pickup_location && { pickup_location: confirmed.pickup_location }),
+      ...(confirmed.dropoff_location && { dropoff_location: confirmed.dropoff_location }),
+      ...(confirmed.pickup_datetime && { pickup_datetime: confirmed.pickup_datetime }),
+      ...(confirmed.return_datetime && { return_datetime: confirmed.return_datetime }),
+      ...(confirmed.car_class && { car_class: confirmed.car_class }),
+      ...(confirmed.transmission && { transmission: confirmed.transmission }),
+      ...(confirmed.seats && { seats: confirmed.seats }),
+      ...(confirmed.extras && { extras: confirmed.extras }),
+      ...(confirmed.booking_number && { booking_number: confirmed.booking_number }),
+      ...(confirmed.extension_request && { extension_request: confirmed.extension_request }),
+      business_type: normalizedBusinessType,
     },
     ...(status === 'contacted' && { status }),
   }
@@ -1394,7 +1403,9 @@ async function persistLead(
       void logEvent({
         type:        'sms',
         title:       `New lead — ${confirmed.name ?? 'Website Visitor'}`,
-        description: confirmed.city ? `Looking in ${confirmed.city}` : 'Website chat',
+        description: confirmed.pickup_location
+          ? `Pickup from ${confirmed.pickup_location}`
+          : confirmed.city ? `Looking in ${confirmed.city}` : 'Website chat',
         leadId:      resolvedLeadId,
         meta:        { actor: 'AI Agent', undoable: false, entity_type: 'lead' as const, entity_id: resolvedLeadId ?? undefined, entity_name: confirmed.name ?? 'Website Visitor' },
       }, businessId)
@@ -1410,7 +1421,7 @@ async function persistLead(
   let appointmentInsertError:   string | null = null
   let appointmentScheduledAt:   string | null = null
 
-  const shouldBook = !!(confirmed.viewing_time || (detectBookingIntent(message) && hasEnoughForBooking(confirmed)))
+  const shouldBook = normalizedBusinessType !== 'car_rental' && !!(confirmed.viewing_time || (detectBookingIntent(message) && hasEnoughForBooking(confirmed, normalizedBusinessType)))
 
   if (!shouldBook) {
     console.log('[APPOINTMENT] skipped reason: no viewing_time and no booking intent')

@@ -73,7 +73,7 @@ export default function BrandSlider() {
           className="absolute inset-0"
           style={{
             background:
-              'radial-gradient(ellipse 80% 60% at 50% 50%, rgba(99,102,241,0.04) 0%, transparent 70%)',
+              'radial-gradient(ellipse 80% 60% at 50% 50%, rgba(244,122,99,0.04) 0%, transparent 70%)',
           }}
         />
       </div>
@@ -103,11 +103,11 @@ export default function BrandSlider() {
       {/* Fade edges */}
       <div
         className="pointer-events-none absolute inset-y-0 left-0 w-28 z-10"
-        style={{ background: 'linear-gradient(to right, #050510 0%, transparent 100%)' }}
+        style={{ background: 'linear-gradient(to right, #080807 0%, transparent 100%)' }}
       />
       <div
         className="pointer-events-none absolute inset-y-0 right-0 w-28 z-10"
-        style={{ background: 'linear-gradient(to left, #050510 0%, transparent 100%)' }}
+        style={{ background: 'linear-gradient(to left, #080807 0%, transparent 100%)' }}
       />
     </section>
   )

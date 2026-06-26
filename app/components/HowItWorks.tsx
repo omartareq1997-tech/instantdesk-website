@@ -11,8 +11,8 @@ const steps = [
     title: 'Strategy Call',
     description: 'A focused 30-minute discovery session. We map your customer journey, identify missed-lead gaps, and decide which channels and workflows to automate first.',
     detail: 'We audit your website, social channels, and current CRM setup before the call.',
-    color: 'from-violet-500 to-purple-600',
-    glowColor: 'rgba(139,92,246,0.3)',
+    color: 'from-orange-500 to-orange-600',
+    glowColor: 'rgba(244,122,99,0.3)',
   },
   {
     step: '02',
@@ -20,8 +20,8 @@ const steps = [
     title: 'Custom AI Build',
     description: 'Our engineers train your AI on your business — services, pricing, FAQs, brand voice, booking flow. Then connect it to all five channels simultaneously.',
     detail: 'Website + WhatsApp + Instagram + Messenger + Telegram — all configured to match your brand.',
-    color: 'from-blue-500 to-cyan-500',
-    glowColor: 'rgba(96,165,250,0.3)',
+    color: 'from-stone-500 to-orange-500',
+    glowColor: 'rgba(148,145,140,0.3)',
     showChannels: true,
   },
   {
@@ -48,12 +48,12 @@ export default function HowItWorks() {
   return (
     <section id="how-it-works" className="relative py-32 overflow-hidden">
       <div className="absolute inset-0 -z-10">
-        <div className="absolute left-0 top-1/2 -translate-y-1/2 w-96 h-96 rounded-full bg-violet-900/8 blur-3xl" />
-        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-96 h-96 rounded-full bg-blue-900/8 blur-3xl" />
+        <div className="absolute left-0 top-1/2 -translate-y-1/2 w-96 h-96 rounded-full bg-orange-900/8 blur-3xl" />
+        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-96 h-96 rounded-full bg-stone-900/8 blur-3xl" />
         <div
           className="absolute inset-0 opacity-[0.025]"
           style={{
-            backgroundImage: `linear-gradient(rgba(139,92,246,1) 1px, transparent 1px)`,
+            backgroundImage: `linear-gradient(rgba(244,122,99,1) 1px, transparent 1px)`,
             backgroundSize: '1px 60px',
             backgroundPosition: 'center',
           }}
@@ -68,7 +68,7 @@ export default function HowItWorks() {
           transition={{ duration: 0.6 }}
           className="text-center mb-20"
         >
-          <span className="inline-block text-xs font-semibold tracking-widest uppercase text-violet-400 mb-4">
+          <span className="inline-block text-xs font-semibold tracking-widest uppercase text-orange-400 mb-4">
             Proven process
           </span>
           <h2 className="text-4xl md:text-5xl font-black text-white mb-5 leading-tight">
@@ -154,8 +154,8 @@ export default function HowItWorks() {
             href="#demo"
             className="inline-flex items-center gap-2.5 px-8 py-4 rounded-xl font-semibold text-white transition-all duration-300 hover:-translate-y-0.5"
             style={{
-              background: 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 50%, #2563eb 100%)',
-              boxShadow: '0 8px 32px rgba(99,102,241,0.30)',
+              background: 'linear-gradient(135deg, #171412 0%, #f47a63 50%, #f89a57 100%)',
+              boxShadow: '0 8px 32px rgba(244,122,99,0.30)',
             }}
           >
             Start Your 72-Hour Build

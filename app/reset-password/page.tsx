@@ -1,16 +1,30 @@
 'use client'
 
 import { FormEvent, Suspense, useEffect, useState } from 'react'
-import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createBrowserClient } from '@supabase/ssr'
-import { ArrowLeft, ArrowRight, Eye, EyeOff, Lock, Zap } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Eye, EyeOff, Lock } from 'lucide-react'
 
 function createClient() {
   return createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
   )
+}
+
+function friendlyResetError(message?: string) {
+  const text = message ?? 'Password reset failed. Please try again.'
+  const lower = text.toLowerCase()
+
+  if (lower.includes('rate limit') || lower.includes('too many')) {
+    return 'Too many emails sent. Please wait a few minutes and try again.'
+  }
+
+  if (lower.includes('session') || lower.includes('expired') || lower.includes('invalid')) {
+    return 'This password reset link is invalid or has expired. Request a new link.'
+  }
+
+  return text
 }
 
 function ResetPasswordForm() {
@@ -23,6 +37,16 @@ function ResetPasswordForm() {
   const [checkingLink, setCheckingLink] = useState(true)
   const [canReset, setCanReset] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  async function returnToSignIn() {
+    const supabase = createClient()
+    await supabase.auth.signOut().catch(error => {
+      console.warn('[reset-password] failed to clear recovery session', {
+        name: error instanceof Error ? error.name : 'UnknownError',
+      })
+    })
+    router.replace('/login')
+  }
 
   useEffect(() => {
     let mounted = true
@@ -111,7 +135,7 @@ function ResetPasswordForm() {
 
     if (updateError) {
       setLoading(false)
-      setError(updateError.message)
+      setError(friendlyResetError(updateError.message))
       return
     }
 
@@ -120,22 +144,23 @@ function ResetPasswordForm() {
   }
 
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        <div className="flex items-center gap-2 justify-center mb-8">
-          <div className="w-8 h-8 bg-[#7C3AED] rounded-lg flex items-center justify-center">
-            <Zap className="w-4 h-4 text-white" />
-          </div>
-          <span className="text-white font-bold text-xl tracking-tight">InstantDesk</span>
+    <div className="auth-premium-bg min-h-screen flex items-center justify-center p-4">
+      <div className="relative w-full max-w-md">
+        <div className="flex items-center justify-center mb-8">
+          <img src="/assets/instantdesk-logo.png" alt="InstantDesk" className="h-9 w-auto" />
         </div>
 
-        <div className="bg-[#111] border border-white/10 rounded-2xl p-8">
-          <Link href="/login" className="inline-flex items-center gap-2 text-sm text-white/40 hover:text-white/70 mb-6">
+        <div className="auth-premium-card rounded-2xl p-8">
+          <button
+            type="button"
+            onClick={returnToSignIn}
+            className="inline-flex items-center gap-2 text-sm text-white/40 hover:text-white/70 mb-6"
+          >
             <ArrowLeft className="w-4 h-4" />
             Back to sign in
-          </Link>
+          </button>
 
-          <h1 className="text-white text-2xl font-bold mb-1">Create new password</h1>
+          <h1 className="text-white text-2xl font-semibold mb-1">Create new password</h1>
           <p className="text-white/40 text-sm mb-6">
             Choose a new password for your InstantDesk account.
           </p>
@@ -148,7 +173,7 @@ function ResetPasswordForm() {
 
           {checkingLink ? (
             <div className="flex items-center justify-center py-8">
-              <span className="w-5 h-5 border-2 border-white/20 border-t-[#7C3AED] rounded-full animate-spin" />
+              <span className="w-5 h-5 border-2 border-white/20 border-t-orange-300 rounded-full animate-spin" />
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -162,7 +187,7 @@ function ResetPasswordForm() {
                   required
                   minLength={8}
                   disabled={!canReset}
-                  className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-10 py-3 text-white placeholder-white/30 text-sm disabled:opacity-50 focus:outline-none focus:border-[#7C3AED]/60 focus:ring-1 focus:ring-[#7C3AED]/30"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-10 py-3 text-white placeholder-white/30 text-sm disabled:opacity-50 focus:outline-none focus:border-orange-300/60 focus:ring-1 focus:ring-orange-300/20"
                 />
                 <button
                   type="button"
@@ -184,14 +209,14 @@ function ResetPasswordForm() {
                   required
                   minLength={8}
                   disabled={!canReset}
-                  className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-white placeholder-white/30 text-sm disabled:opacity-50 focus:outline-none focus:border-[#7C3AED]/60 focus:ring-1 focus:ring-[#7C3AED]/30"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-white placeholder-white/30 text-sm disabled:opacity-50 focus:outline-none focus:border-orange-300/60 focus:ring-1 focus:ring-orange-300/20"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={loading || !canReset}
-                className="w-full bg-[#7C3AED] hover:bg-[#6D28D9] disabled:opacity-50 text-white font-medium rounded-xl py-3 flex items-center justify-center gap-2 transition-colors"
+                className="w-full bg-white text-neutral-950 hover:bg-orange-100 disabled:opacity-50 font-medium rounded-xl py-3 flex items-center justify-center gap-2 transition-colors"
               >
                 {loading ? (
                   <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -213,8 +238,8 @@ function ResetPasswordForm() {
 export default function ResetPasswordPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <span className="w-6 h-6 border-2 border-white/20 border-t-[#7C3AED] rounded-full animate-spin" />
+      <div className="auth-premium-bg min-h-screen flex items-center justify-center">
+        <span className="w-6 h-6 border-2 border-white/20 border-t-orange-300 rounded-full animate-spin" />
       </div>
     }>
       <ResetPasswordForm />

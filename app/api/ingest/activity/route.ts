@@ -11,7 +11,7 @@
  * Every request MUST include:
  *   Authorization: Bearer <INGEST_API_KEY>
  *
- * Same key as /api/ingest/lead. Set INGEST_API_KEY in Vercel env
+ * Same key as /api/ingest/lead. Set INGEST_API_KEY in deployment env
  * vars (no NEXT_PUBLIC_ prefix so it is never bundled to the browser).
  *
  * ── Make.com HTTP module settings ────────────────────────────────

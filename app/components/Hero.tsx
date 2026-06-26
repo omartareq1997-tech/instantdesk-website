@@ -18,7 +18,7 @@ export default function Hero() {
     <section className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden pt-20">
       {/* Animated background */}
       <div className="absolute inset-0 -z-10">
-        <div className="absolute inset-0 bg-[#050510]" />
+        <div className="absolute inset-0 bg-[#080807]" />
         {/* Fine grid */}
         <div
           className="absolute inset-0"
@@ -34,13 +34,13 @@ export default function Hero() {
         <div
           className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[1000px] h-[1000px] rounded-full"
           style={{
-            background: 'radial-gradient(circle, rgba(139,92,246,0.08) 0%, rgba(96,165,250,0.04) 40%, transparent 70%)',
+            background: 'radial-gradient(circle, rgba(244,122,99,0.08) 0%, rgba(148,145,140,0.04) 40%, transparent 70%)',
           }}
         />
         {/* Accent blobs */}
-        <div className="absolute top-1/4 -left-20 w-80 h-80 rounded-full bg-violet-600/8 blur-3xl animate-float" />
-        <div className="absolute bottom-1/4 -right-20 w-96 h-96 rounded-full bg-blue-600/8 blur-3xl animate-float" style={{ animationDelay: '3s' }} />
-        <div className="absolute top-3/4 left-1/3 w-64 h-64 rounded-full bg-indigo-600/6 blur-3xl animate-float" style={{ animationDelay: '6s' }} />
+        <div className="absolute top-1/4 -left-20 w-80 h-80 rounded-full bg-orange-600/8 blur-3xl animate-float" />
+        <div className="absolute bottom-1/4 -right-20 w-96 h-96 rounded-full bg-stone-600/8 blur-3xl animate-float" style={{ animationDelay: '3s' }} />
+        <div className="absolute top-3/4 left-1/3 w-64 h-64 rounded-full bg-stone-600/6 blur-3xl animate-float" style={{ animationDelay: '6s' }} />
       </div>
 
       <div className="max-w-7xl mx-auto px-6 text-center">
@@ -49,12 +49,12 @@ export default function Hero() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
-          className="inline-flex items-center gap-2.5 px-5 py-2.5 rounded-full glass border border-violet-500/20 text-sm text-violet-300 font-medium mb-10"
+          className="inline-flex items-center gap-2.5 px-5 py-2.5 rounded-full glass border border-orange-500/20 text-sm text-orange-300 font-medium mb-10"
         >
-          <span className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
+          <span className="w-2 h-2 rounded-full bg-orange-400 animate-pulse" />
           AI-powered business automation &mdash; deploy in 72 hours
-          <span className="w-px h-4 bg-violet-500/30" />
-          <span className="text-violet-400 font-semibold">150+ clients live</span>
+          <span className="w-px h-4 bg-orange-500/30" />
+          <span className="text-orange-400 font-semibold">150+ clients live</span>
         </motion.div>
 
         {/* Headline */}
@@ -74,7 +74,7 @@ export default function Hero() {
               initial={{ scaleX: 0 }}
               animate={{ scaleX: 1 }}
               transition={{ duration: 0.8, delay: 0.9, ease: [0.22, 1, 0.36, 1] }}
-              className="absolute -bottom-1 left-0 right-0 h-[3px] bg-gradient-to-r from-violet-500 via-blue-500 to-cyan-500 rounded-full origin-left"
+              className="absolute -bottom-1 left-0 right-0 h-[3px] bg-gradient-to-r from-orange-500 via-stone-500 to-orange-500 rounded-full origin-left"
             />
           </span>
         </motion.h1>
@@ -127,10 +127,10 @@ export default function Hero() {
         >
           <button
             onClick={() => openDemo('hero')}
-            className="group relative flex items-center gap-2.5 px-9 py-4 rounded-xl font-semibold text-base text-white overflow-hidden transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_0_50px_rgba(139,92,246,0.4)]"
+            className="group relative flex items-center gap-2.5 px-9 py-4 rounded-xl font-semibold text-base text-white overflow-hidden transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_0_50px_rgba(244,122,99,0.4)]"
             style={{
-              background: 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 50%, #2563eb 100%)',
-              boxShadow: '0 8px 32px rgba(99,102,241,0.35)',
+              background: 'linear-gradient(135deg, #171412 0%, #f47a63 50%, #f89a57 100%)',
+              boxShadow: '0 8px 32px rgba(244,122,99,0.35)',
             }}
           >
             <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -skew-x-12 translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-700" />
@@ -141,7 +141,7 @@ export default function Hero() {
             href="#how-it-works"
             className="group flex items-center gap-2.5 px-9 py-4 rounded-xl glass border border-white/10 text-white/75 font-semibold text-base hover:text-white hover:border-white/25 transition-all duration-300 hover:-translate-y-0.5"
           >
-            <Play className="w-4 h-4 group-hover:text-violet-400 transition-colors" />
+            <Play className="w-4 h-4 group-hover:text-orange-400 transition-colors" />
             See How It Works
           </a>
         </motion.div>

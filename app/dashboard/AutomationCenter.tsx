@@ -115,7 +115,7 @@ const PRESETS: Record<AutomationType, Preset> = {
     label:       'Lead Re-engagement',
     description: 'Win back cold leads who have gone quiet after the set inactivity period.',
     icon:        RefreshCw,
-    color:       '#a78bfa',
+    color:       '#f8a36d',
     triggerNote: 'After lead inactivity',
   },
   hot_lead_alert: {
@@ -140,7 +140,7 @@ const ALL_TYPES: AutomationType[] = [
 
 const CHANNEL_CFG: Record<Channel, { label: string; color: string; icon: React.ComponentType<{className?:string;style?:React.CSSProperties}> }> = {
   whatsapp: { label: 'WhatsApp', color: '#34d399', icon: MessageCircle },
-  sms:      { label: 'SMS',      color: '#60a5fa', icon: MessageSquare },
+  sms:      { label: 'SMS',      color: '#948f88', icon: MessageSquare },
   email:    { label: 'Email',    color: '#fbbf24', icon: Mail          },
 }
 
@@ -297,9 +297,9 @@ function AutomationCard({
         {/* AI badge */}
         {setting.config.ai_message && (
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
-            style={{ background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.18)' }}>
-            <Bot className="w-3 h-3 text-blue-400" />
-            <span className="text-[10px] font-semibold text-blue-400">AI</span>
+            style={{ background: 'rgba(148,145,140,0.08)', border: '1px solid rgba(148,145,140,0.18)' }}>
+            <Bot className="w-3 h-3 text-stone-400" />
+            <span className="text-[10px] font-semibold text-stone-400">AI</span>
           </div>
         )}
 
@@ -483,10 +483,10 @@ function ConfigureDrawer({
 
           {/* Make.com architecture note */}
           <div className="flex items-start gap-2.5 rounded-xl px-4 py-3"
-            style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.12)' }}>
-            <Webhook className="w-3.5 h-3.5 text-blue-400/60 flex-shrink-0 mt-0.5" />
-            <p className="text-[10px] text-blue-300/50 leading-relaxed">
-              <span className="font-semibold text-blue-300/70">Make.com executes this scenario.</span>{' '}
+            style={{ background: 'rgba(148,145,140,0.06)', border: '1px solid rgba(148,145,140,0.12)' }}>
+            <Webhook className="w-3.5 h-3.5 text-stone-400/60 flex-shrink-0 mt-0.5" />
+            <p className="text-[10px] text-stone-300/50 leading-relaxed">
+              <span className="font-semibold text-stone-300/70">Make.com executes this scenario.</span>{' '}
               Changes here take effect on the next Make.com run. Make.com reads these settings from Supabase before each trigger.
             </p>
           </div>
@@ -573,7 +573,7 @@ function ConfigureDrawer({
                 readOnly={readOnly}
                 className="flex-1 px-3 py-2.5 rounded-xl text-sm text-white outline-none transition-all"
                 style={{ ...inputBase, opacity: readOnly ? 0.5 : 1, cursor: readOnly ? 'default' : 'text' }}
-                onFocus={e => { if (!readOnly) e.currentTarget.style.border = '1px solid rgba(139,92,246,0.4)' }}
+                onFocus={e => { if (!readOnly) e.currentTarget.style.border = '1px solid rgba(244,122,99,0.4)' }}
                 onBlur={e =>  { e.currentTarget.style.border = '1px solid rgba(255,255,255,0.08)' }}
               />
               <select
@@ -583,10 +583,10 @@ function ConfigureDrawer({
                 className="px-3 py-2.5 rounded-xl text-sm text-white outline-none transition-all appearance-none"
                 style={{ ...inputBase, paddingRight: '2rem', opacity: readOnly ? 0.5 : 1, cursor: readOnly ? 'default' : 'pointer' }}
               >
-                <option value="min" style={{ background: '#0a0a1e' }}>min</option>
-                <option value="hr"  style={{ background: '#0a0a1e' }}>hours</option>
-                <option value="day" style={{ background: '#0a0a1e' }}>days</option>
-                <option value="wk"  style={{ background: '#0a0a1e' }}>weeks</option>
+                <option value="min" style={{ background: '#121416' }}>min</option>
+                <option value="hr"  style={{ background: '#121416' }}>hours</option>
+                <option value="day" style={{ background: '#121416' }}>days</option>
+                <option value="wk"  style={{ background: '#121416' }}>weeks</option>
               </select>
             </div>
             <p className="text-[10px] text-white/25 mt-1.5">
@@ -623,7 +623,7 @@ function ConfigureDrawer({
                 Message Template
               </label>
               {aiMessage && (
-                <span className="flex items-center gap-1 text-[10px] font-semibold text-blue-400/60">
+                <span className="flex items-center gap-1 text-[10px] font-semibold text-stone-400/60">
                   <Bot className="w-3 h-3" />AI override active
                 </span>
               )}
@@ -640,7 +640,7 @@ function ConfigureDrawer({
                 opacity: readOnly || aiMessage ? 0.5 : 1,
                 cursor:  readOnly ? 'default' : 'text',
               }}
-              onFocus={e => { if (!readOnly) e.currentTarget.style.border = '1px solid rgba(139,92,246,0.4)' }}
+              onFocus={e => { if (!readOnly) e.currentTarget.style.border = '1px solid rgba(244,122,99,0.4)' }}
               onBlur={e =>  { e.currentTarget.style.border = '1px solid rgba(255,255,255,0.08)' }}
             />
             <p className="text-[10px] text-white/20 mt-1.5">
@@ -903,7 +903,7 @@ export default function AutomationCenter({ can }: { can: Permissions }) {
             <button key={tab.id} onClick={() => setActiveTab(tab.id)}
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all"
               style={activeTab === tab.id ? {
-                background: 'rgba(139,92,246,0.18)', color: '#a78bfa',
+                background: 'rgba(244,122,99,0.18)', color: '#f8a36d',
               } : {
                 color: 'rgba(255,255,255,0.35)',
               }}>
@@ -924,7 +924,7 @@ export default function AutomationCenter({ can }: { can: Permissions }) {
       <div className="grid grid-cols-3 gap-2 sm:gap-4">
         {[
           { label: 'Active',    fullLabel: 'Active Scenarios', value: enabledCount,   color: '#34d399', icon: ToggleRight },
-          { label: 'Successes', fullLabel: 'Total Successes',  value: totalSuccess,   color: '#60a5fa', icon: CheckCircle2 },
+          { label: 'Successes', fullLabel: 'Total Successes',  value: totalSuccess,   color: '#948f88', icon: CheckCircle2 },
           { label: 'Failures',  fullLabel: 'Total Failures',   value: totalFailures,  color: '#f87171', icon: XCircle     },
         ].map((card, i) => {
           const CardIcon = card.icon
@@ -955,11 +955,11 @@ export default function AutomationCenter({ can }: { can: Permissions }) {
 
       {/* Architecture callout */}
       <div className="flex items-start gap-3 px-4 py-3.5 rounded-xl"
-        style={{ background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.1)' }}>
-        <Webhook className="w-4 h-4 text-blue-400/50 flex-shrink-0 mt-0.5" />
+        style={{ background: 'rgba(148,145,140,0.05)', border: '1px solid rgba(148,145,140,0.1)' }}>
+        <Webhook className="w-4 h-4 text-stone-400/50 flex-shrink-0 mt-0.5" />
         <div>
-          <span className="text-xs font-semibold text-blue-300/60">Make.com Execution Layer</span>
-          <p className="text-[10px] text-blue-300/35 mt-0.5 leading-relaxed">
+          <span className="text-xs font-semibold text-stone-300/60">Make.com Execution Layer</span>
+          <p className="text-[10px] text-stone-300/35 mt-0.5 leading-relaxed">
             InstantDesk stores and displays automation configuration. Make.com reads these settings from Supabase
             and handles all WhatsApp/SMS/Email delivery. To migrate to native execution later, replace the
             Make.com webhook layer — this UI and schema stay unchanged.

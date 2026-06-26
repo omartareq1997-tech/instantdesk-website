@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Zap, Lock, Eye, EyeOff, CheckCircle, ArrowRight, Shield } from 'lucide-react'
+import { Lock, Eye, EyeOff, CheckCircle, ArrowRight, Shield } from 'lucide-react'
 
 const ROLE_LABELS: Record<string, string> = {
   owner:       'Owner',
@@ -13,8 +13,8 @@ const ROLE_LABELS: Record<string, string> = {
 
 const ROLE_COLORS: Record<string, string> = {
   owner:       '#fbbf24',
-  team_leader: '#a78bfa',
-  agent:       '#60a5fa',
+  team_leader: '#f8a36d',
+  agent:       '#948f88',
   viewer:      'rgba(255,255,255,0.5)',
 }
 
@@ -49,7 +49,7 @@ export default function JoinFlow({
   const pw_strength = strength(password)
   const mismatch    = confirm.length > 0 && confirm !== password
   const roleLabel   = ROLE_LABELS[memberRole] ?? memberRole
-  const roleColor   = ROLE_COLORS[memberRole] ?? '#60a5fa'
+  const roleColor   = ROLE_COLORS[memberRole] ?? '#948f88'
 
   const inputBase = {
     background: 'rgba(255,255,255,0.04)',
@@ -84,40 +84,17 @@ export default function JoinFlow({
 
   return (
     <div
-      className="min-h-screen flex items-center justify-center px-4 py-10 relative overflow-hidden"
-      style={{ background: '#050510' }}
+      className="auth-premium-bg min-h-screen flex items-center justify-center px-4 py-10"
     >
-      {/* Background */}
-      <div className="absolute inset-0 -z-10 overflow-hidden pointer-events-none">
-        <div
-          className="absolute inset-0 opacity-[0.045]"
-          style={{
-            backgroundImage: `
-              linear-gradient(rgba(139,92,246,1) 1px, transparent 1px),
-              linear-gradient(90deg, rgba(139,92,246,1) 1px, transparent 1px)
-            `,
-            backgroundSize: '56px 56px',
-          }}
-        />
-        <div
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[700px] rounded-full"
-          style={{
-            background: 'radial-gradient(circle, rgba(124,58,237,0.10) 0%, rgba(37,99,235,0.05) 50%, transparent 70%)',
-          }}
-        />
-      </div>
-
       <AnimatePresence mode="wait">
         {done ? (
           <motion.div
             key="success"
             initial={{ opacity: 0, scale: 0.92 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="w-full max-w-sm rounded-2xl px-8 py-12 flex flex-col items-center gap-5 text-center"
+            className="auth-premium-card w-full max-w-sm rounded-2xl px-8 py-12 flex flex-col items-center gap-5 text-center"
             style={{
-              background: 'rgba(7,7,25,0.95)',
               border:     '1px solid rgba(52,211,153,0.25)',
-              boxShadow:  '0 32px 80px rgba(0,0,0,0.7)',
             }}
           >
             <motion.div
@@ -154,14 +131,9 @@ export default function JoinFlow({
             initial={{ opacity: 0, scale: 0.94, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             transition={{ duration: 0.48, ease: [0.22, 1, 0.36, 1] }}
-            className="w-full max-w-sm"
+            className="auth-premium-card w-full max-w-sm"
             style={{
-              background:         'rgba(7,7,25,0.92)',
-              backdropFilter:     'blur(32px)',
-              WebkitBackdropFilter: 'blur(32px)',
               borderRadius:       '24px',
-              border:             '1px solid rgba(139,92,246,0.18)',
-              boxShadow:          '0 48px 120px rgba(0,0,0,0.75)',
             }}
           >
             {/* Header */}
@@ -170,28 +142,7 @@ export default function JoinFlow({
               style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}
             >
               <div className="flex items-center gap-2.5">
-                <div
-                  className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
-                  style={{
-                    background: 'linear-gradient(135deg,#7c3aed,#2563eb)',
-                    boxShadow:  '0 0 18px rgba(124,58,237,0.45)',
-                  }}
-                >
-                  <Zap className="w-4 h-4 text-white" />
-                </div>
-                <span className="text-base font-bold tracking-tight text-white">
-                  Instant
-                  <span
-                    style={{
-                      background:             'linear-gradient(135deg,#818cf8,#60a5fa)',
-                      WebkitBackgroundClip:   'text',
-                      WebkitTextFillColor:    'transparent',
-                      backgroundClip:         'text',
-                    }}
-                  >
-                    Desk
-                  </span>
-                </span>
+                <img src="/assets/instantdesk-logo.png" alt="InstantDesk" className="h-8 w-auto" />
               </div>
               <span
                 className="text-[11px] font-bold px-2.5 py-1 rounded-full"
@@ -206,12 +157,12 @@ export default function JoinFlow({
               {/* Invite context */}
               <div
                 className="rounded-xl px-4 py-3 mb-6 flex items-start gap-3"
-                style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.12)' }}
+                style={{ background: 'rgba(244,122,99,0.06)', border: '1px solid rgba(244,122,99,0.12)' }}
               >
-                <Shield className="w-4 h-4 text-violet-400 flex-shrink-0 mt-0.5" />
+                <Shield className="w-4 h-4 text-orange-400 flex-shrink-0 mt-0.5" />
                 <div>
                   <p className="text-xs font-semibold text-white/70">
-                    <span className="text-violet-300">{invitedBy}</span> invited you to join InstantDesk
+                    <span className="text-orange-300">{invitedBy}</span> invited you to join InstantDesk
                   </p>
                   <p className="text-[11px] text-white/30 mt-0.5">{memberEmail}</p>
                 </div>
@@ -240,7 +191,7 @@ export default function JoinFlow({
                       onChange={e => { setPassword(e.target.value); setError(null) }}
                       className="w-full pl-10 pr-11 py-3 rounded-xl text-sm text-white placeholder-white/20 outline-none transition-all"
                       style={{ ...inputBase, borderColor: error ? 'rgba(248,113,113,0.4)' : 'rgba(255,255,255,0.08)' }}
-                      onFocus={e => { e.currentTarget.style.border = '1px solid rgba(139,92,246,0.5)'; e.currentTarget.style.boxShadow = '0 0 0 3px rgba(139,92,246,0.08)' }}
+                      onFocus={e => { e.currentTarget.style.border = '1px solid rgba(244,122,99,0.5)'; e.currentTarget.style.boxShadow = '0 0 0 3px rgba(244,122,99,0.08)' }}
                       onBlur={e => { e.currentTarget.style.border = `1px solid ${error ? 'rgba(248,113,113,0.4)' : 'rgba(255,255,255,0.08)'}` ; e.currentTarget.style.boxShadow = 'none' }}
                     />
                     <button type="button" onClick={() => setShowPw(v => !v)}
@@ -282,7 +233,7 @@ export default function JoinFlow({
                       onChange={e => { setConfirm(e.target.value); setError(null) }}
                       className="w-full pl-10 pr-11 py-3 rounded-xl text-sm text-white placeholder-white/20 outline-none transition-all"
                       style={{ ...inputBase, borderColor: mismatch ? 'rgba(248,113,113,0.4)' : 'rgba(255,255,255,0.08)' }}
-                      onFocus={e => { e.currentTarget.style.border = '1px solid rgba(139,92,246,0.5)'; e.currentTarget.style.boxShadow = '0 0 0 3px rgba(139,92,246,0.08)' }}
+                      onFocus={e => { e.currentTarget.style.border = '1px solid rgba(244,122,99,0.5)'; e.currentTarget.style.boxShadow = '0 0 0 3px rgba(244,122,99,0.08)' }}
                       onBlur={e => { e.currentTarget.style.border = `1px solid ${mismatch ? 'rgba(248,113,113,0.4)' : 'rgba(255,255,255,0.08)'}` ; e.currentTarget.style.boxShadow = 'none' }}
                     />
                     <button type="button" onClick={() => setShowConf(v => !v)}
@@ -316,8 +267,8 @@ export default function JoinFlow({
                   whileTap={{ scale: 0.985 }}
                   className="relative w-full py-3.5 rounded-xl text-sm font-bold text-white mt-1 overflow-hidden transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{
-                    background: 'linear-gradient(135deg,#7c3aed 0%,#4f46e5 50%,#2563eb 100%)',
-                    boxShadow:  '0 8px 28px rgba(99,102,241,0.38)',
+                    background: 'linear-gradient(135deg,#171412 0%,#f47a63 50%,#f89a57 100%)',
+                    boxShadow:  '0 8px 28px rgba(244,122,99,0.38)',
                   }}
                 >
                   <span className="relative flex items-center justify-center gap-2">

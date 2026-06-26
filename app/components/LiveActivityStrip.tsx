@@ -4,13 +4,13 @@ import { motion } from 'framer-motion'
 import { Calendar, Bot, Users, PhoneCall, Zap, MessageCircle } from 'lucide-react'
 
 const EVENTS = [
-  { text: 'InstantDesk booked a demo for a real estate agency in London',        Icon: Calendar,     color: '#60a5fa' },
-  { text: 'AI answered 1,284 customer questions today',                          Icon: Bot,          color: '#a78bfa' },
+  { text: 'InstantDesk booked a demo for a real estate agency in London',        Icon: Calendar,     color: '#948f88' },
+  { text: 'AI answered 1,284 customer questions today',                          Icon: Bot,          color: '#f8a36d' },
   { text: '23 businesses onboarded this month',                                  Icon: Users,        color: '#34d399' },
   { text: 'Missed call recovered in under 45 seconds for a dental clinic',       Icon: PhoneCall,    color: '#fb923c' },
   { text: 'AI receptionist booked 6 appointments while the office was closed',   Icon: Zap,          color: '#fbbf24' },
   { text: 'WhatsApp follow-up sent to 14 leads automatically overnight',         Icon: MessageCircle,color: '#34d399' },
-  { text: 'New lead from Google captured and qualified in 90 seconds',           Icon: Bot,          color: '#a78bfa' },
+  { text: 'New lead from Google captured and qualified in 90 seconds',           Icon: Bot,          color: '#f8a36d' },
   { text: '6-figure revenue pipeline built for a law firm in 30 days',           Icon: Zap,          color: '#f87171' },
 ]
 
@@ -34,9 +34,9 @@ export default function LiveActivityStrip() {
     <section className="relative py-6 overflow-hidden" style={{ borderTop:'1px solid rgba(255,255,255,0.04)', borderBottom:'1px solid rgba(255,255,255,0.04)' }}>
       {/* Fade edges */}
       <div className="pointer-events-none absolute inset-y-0 left-0 w-32 z-10"
-        style={{ background:'linear-gradient(to right,#050510 0%,transparent 100%)' }} />
+        style={{ background:'linear-gradient(to right,#080807 0%,transparent 100%)' }} />
       <div className="pointer-events-none absolute inset-y-0 right-0 w-32 z-10"
-        style={{ background:'linear-gradient(to left,#050510 0%,transparent 100%)' }} />
+        style={{ background:'linear-gradient(to left,#080807 0%,transparent 100%)' }} />
 
       {/* Live indicator */}
       <div className="flex items-center gap-2 absolute left-6 top-1/2 -translate-y-1/2 z-20">

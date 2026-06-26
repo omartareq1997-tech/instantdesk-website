@@ -11,7 +11,7 @@ function Skeleton({ className }: { className?: string }) {
 
 export default function AdminLoading() {
   return (
-    <div className="min-h-screen" style={{ background: '#050510' }}>
+    <div className="min-h-screen" style={{ background: '#080807' }}>
       {/* Header skeleton */}
       <div
         className="flex items-center justify-between px-6 py-4"

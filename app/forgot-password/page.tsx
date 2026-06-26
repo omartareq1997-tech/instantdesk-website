@@ -3,15 +3,24 @@
 import { FormEvent, useState } from 'react'
 import Link from 'next/link'
 import { createBrowserClient } from '@supabase/ssr'
-import { ArrowLeft, ArrowRight, Mail, Zap } from 'lucide-react'
-
-const PASSWORD_RESET_REDIRECT_URL = 'https://instantdesk.pl/reset-password'
+import { ArrowLeft, ArrowRight, Mail } from 'lucide-react'
 
 function createClient() {
   return createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
   )
+}
+
+function friendlyResetError(message?: string) {
+  const text = message ?? 'Password reset failed. Please try again.'
+  const lower = text.toLowerCase()
+
+  if (lower.includes('rate limit') || lower.includes('too many') || lower.includes('email rate limit')) {
+    return 'Too many emails sent. Please wait a few minutes and try again.'
+  }
+
+  return text
 }
 
 export default function ForgotPasswordPage() {
@@ -30,13 +39,13 @@ export default function ForgotPasswordPage() {
 
     const supabase = createClient()
     const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-      redirectTo: PASSWORD_RESET_REDIRECT_URL,
+      redirectTo: `${window.location.origin}/reset-password`,
     })
 
     setLoading(false)
 
     if (resetError) {
-      setError(resetError.message)
+      setError(friendlyResetError(resetError.message))
       return
     }
 
@@ -44,22 +53,19 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        <div className="flex items-center gap-2 justify-center mb-8">
-          <div className="w-8 h-8 bg-[#7C3AED] rounded-lg flex items-center justify-center">
-            <Zap className="w-4 h-4 text-white" />
-          </div>
-          <span className="text-white font-bold text-xl tracking-tight">InstantDesk</span>
+    <div className="auth-premium-bg min-h-screen flex items-center justify-center p-4">
+      <div className="relative w-full max-w-md">
+        <div className="flex items-center justify-center mb-8">
+          <img src="/assets/instantdesk-logo.png" alt="InstantDesk" className="h-9 w-auto" />
         </div>
 
-        <div className="bg-[#111] border border-white/10 rounded-2xl p-8">
+        <div className="auth-premium-card rounded-2xl p-8">
           <Link href="/login" className="inline-flex items-center gap-2 text-sm text-white/40 hover:text-white/70 mb-6">
             <ArrowLeft className="w-4 h-4" />
             Back to sign in
           </Link>
 
-          <h1 className="text-white text-2xl font-bold mb-1">Reset password</h1>
+          <h1 className="text-white text-2xl font-semibold mb-1">Reset password</h1>
           <p className="text-white/40 text-sm mb-6">
             Enter your account email and we will send a secure reset link.
           </p>
@@ -85,14 +91,14 @@ export default function ForgotPasswordPage() {
                 value={email}
                 onChange={event => setEmail(event.target.value)}
                 required
-                className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-white placeholder-white/30 text-sm focus:outline-none focus:border-[#7C3AED]/60 focus:ring-1 focus:ring-[#7C3AED]/30"
+                className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-white placeholder-white/30 text-sm focus:outline-none focus:border-orange-300/60 focus:ring-1 focus:ring-orange-300/20"
               />
             </div>
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-[#7C3AED] hover:bg-[#6D28D9] disabled:opacity-50 text-white font-medium rounded-xl py-3 flex items-center justify-center gap-2 transition-colors"
+              className="w-full bg-white text-neutral-950 hover:bg-orange-100 disabled:opacity-50 font-medium rounded-xl py-3 flex items-center justify-center gap-2 transition-colors"
             >
               {loading ? (
                 <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />

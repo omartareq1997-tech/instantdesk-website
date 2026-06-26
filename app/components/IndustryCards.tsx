@@ -13,7 +13,7 @@ const industries = [
       { value: '60%', label: 'Fewer no-shows' },
       { value: '3×', label: 'More bookings' },
     ],
-    color: 'from-blue-500 to-cyan-400',
+    color: 'from-stone-500 to-orange-400',
     bg: 'rgba(59, 130, 246, 0.05)',
     border: 'rgba(59, 130, 246, 0.15)',
   },
@@ -39,7 +39,7 @@ const industries = [
       { value: '5×', label: 'Faster intake' },
       { value: '40%', label: 'Admin time saved' },
     ],
-    color: 'from-violet-500 to-purple-400',
+    color: 'from-orange-500 to-orange-400',
     bg: 'rgba(139, 92, 246, 0.05)',
     border: 'rgba(139, 92, 246, 0.15)',
   },
@@ -88,7 +88,7 @@ export default function IndustryCards() {
   return (
     <section id="industries" className="relative py-32 overflow-hidden">
       <div className="absolute inset-0 -z-10">
-        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-violet-950/20 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-orange-950/20 to-transparent" />
       </div>
 
       <div className="max-w-7xl mx-auto px-6">
@@ -99,7 +99,7 @@ export default function IndustryCards() {
           transition={{ duration: 0.6 }}
           className="text-center mb-20"
         >
-          <span className="inline-block text-xs font-semibold tracking-widest uppercase text-violet-400 mb-4">
+          <span className="inline-block text-xs font-semibold tracking-widest uppercase text-orange-400 mb-4">
             Built for your industry
           </span>
           <h2 className="text-4xl md:text-5xl font-black text-white mb-5 leading-tight">

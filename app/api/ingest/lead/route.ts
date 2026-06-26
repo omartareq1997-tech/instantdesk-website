@@ -11,7 +11,7 @@
  * Every request MUST include:
  *   Authorization: Bearer <INGEST_API_KEY>
  *
- * Set INGEST_API_KEY in Vercel env vars (no NEXT_PUBLIC_ prefix).
+ * Set INGEST_API_KEY in deployment env vars (no NEXT_PUBLIC_ prefix).
  *
  * ── Make.com HTTP module settings ────────────────────────────────
  * Method : POST

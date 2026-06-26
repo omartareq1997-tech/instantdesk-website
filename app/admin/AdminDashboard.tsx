@@ -4,7 +4,7 @@ import { useState, useMemo } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Zap, Search, X, ExternalLink, Mail, Phone, Globe,
+  Search, X, ExternalLink, Mail, Phone, Globe,
   Users, CalendarCheck, Target, Calendar,
   ArrowLeft, Clock, CheckCircle, AlertCircle,
   BarChart2, ChevronDown, Loader2, RefreshCw,
@@ -31,8 +31,8 @@ export type Lead = {
 /* ─── Config ─────────────────────────────────────────────── */
 
 export const STATUS: Record<Status, { label: string; color: string; bg: string; border: string }> = {
-  new:         { label: 'New',         color: '#a78bfa', bg: 'rgba(167,139,250,0.10)', border: 'rgba(167,139,250,0.25)' },
-  contacted:   { label: 'Contacted',   color: '#60a5fa', bg: 'rgba(96,165,250,0.10)',  border: 'rgba(96,165,250,0.25)'  },
+  new:         { label: 'New',         color: '#f8a36d', bg: 'rgba(244,122,99,0.10)', border: 'rgba(244,122,99,0.25)' },
+  contacted:   { label: 'Contacted',   color: '#948f88', bg: 'rgba(148,145,140,0.10)',  border: 'rgba(148,145,140,0.25)'  },
   demo_booked: { label: 'Demo Booked', color: '#fbbf24', bg: 'rgba(251,191,36,0.10)',  border: 'rgba(251,191,36,0.25)'  },
   won:         { label: 'Won',         color: '#34d399', bg: 'rgba(52,211,153,0.10)',  border: 'rgba(52,211,153,0.25)'  },
   lost:        { label: 'Lost',        color: '#f87171', bg: 'rgba(248,113,113,0.10)', border: 'rgba(248,113,113,0.25)' },
@@ -173,7 +173,7 @@ function LeadModal({
         className="w-full max-w-2xl rounded-2xl overflow-hidden"
         style={{
           background: 'rgba(7,7,20,0.98)',
-          border: '1px solid rgba(139,92,246,0.2)',
+          border: '1px solid rgba(244,122,99,0.2)',
           boxShadow: '0 40px 100px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.06)',
           maxHeight: '90dvh',
           overflowY: 'auto',
@@ -187,7 +187,7 @@ function LeadModal({
         >
           <div
             className="w-12 h-12 rounded-2xl flex items-center justify-center text-sm font-black text-white flex-shrink-0"
-            style={{ background: 'linear-gradient(135deg,#7c3aed,#2563eb)' }}
+            style={{ background: 'linear-gradient(135deg,#171412,#f89a57)' }}
           >
             {initials(lead.fullName)}
           </div>
@@ -214,12 +214,12 @@ function LeadModal({
 
             <a href={`mailto:${lead.email}`} className="flex items-center gap-3 group">
               <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                style={{ background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.2)' }}>
-                <Mail className="w-4 h-4 text-blue-400" />
+                style={{ background: 'rgba(148,145,140,0.1)', border: '1px solid rgba(148,145,140,0.2)' }}>
+                <Mail className="w-4 h-4 text-stone-400" />
               </div>
               <div className="min-w-0">
                 <div className="text-[9px] uppercase tracking-wider text-white/25 mb-0.5">Email</div>
-                <div className="text-sm text-white/70 group-hover:text-blue-400 transition-colors truncate">{lead.email}</div>
+                <div className="text-sm text-white/70 group-hover:text-stone-400 transition-colors truncate">{lead.email}</div>
               </div>
             </a>
 
@@ -237,12 +237,12 @@ function LeadModal({
             {lead.website ? (
               <a href={lead.website} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 group">
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                  style={{ background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)' }}>
-                  <Globe className="w-4 h-4 text-violet-400" />
+                  style={{ background: 'rgba(244,122,99,0.1)', border: '1px solid rgba(244,122,99,0.2)' }}>
+                  <Globe className="w-4 h-4 text-orange-400" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-[9px] uppercase tracking-wider text-white/25 mb-0.5">Website</div>
-                  <div className="text-sm text-white/70 group-hover:text-violet-400 transition-colors truncate flex items-center gap-1">
+                  <div className="text-sm text-white/70 group-hover:text-orange-400 transition-colors truncate flex items-center gap-1">
                     {lead.website.replace(/^https?:\/\//, '')}
                     <ExternalLink className="w-3 h-3 flex-shrink-0" />
                   </div>
@@ -274,8 +274,8 @@ function LeadModal({
 
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                style={{ background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.2)' }}>
-                <Clock className="w-4 h-4 text-blue-400" />
+                style={{ background: 'rgba(148,145,140,0.1)', border: '1px solid rgba(148,145,140,0.2)' }}>
+                <Clock className="w-4 h-4 text-stone-400" />
               </div>
               <div>
                 <div className="text-[9px] uppercase tracking-wider text-white/25 mb-0.5">Submitted</div>
@@ -336,9 +336,9 @@ function LeadModal({
                 border: '1px solid rgba(52,211,153,0.3)',
                 color: '#34d399',
               } : {
-                background: 'linear-gradient(135deg,#7c3aed,#2563eb)',
+                background: 'linear-gradient(135deg,#171412,#f89a57)',
                 color: '#fff',
-                boxShadow: '0 4px 16px rgba(99,102,241,0.3)',
+                boxShadow: '0 4px 16px rgba(244,122,99,0.3)',
               }}
             >
               {saving ? (
@@ -439,7 +439,7 @@ export default function AdminDashboard({
   }
 
   return (
-    <div className="min-h-screen" style={{ background: '#050510' }}>
+    <div className="min-h-screen" style={{ background: '#080807' }}>
       {/* Header */}
       <div
         className="sticky top-0 z-40 flex items-center justify-between px-6 py-4"
@@ -450,12 +450,7 @@ export default function AdminDashboard({
         }}
       >
         <div className="flex items-center gap-3">
-          <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center"
-            style={{ background: 'linear-gradient(135deg,#7c3aed,#2563eb)', boxShadow: '0 0 16px rgba(124,58,237,0.4)' }}
-          >
-            <Zap className="w-4 h-4 text-white" />
-          </div>
+          <img src="/assets/instantdesk-logo.png" alt="InstantDesk" className="h-8 w-auto" />
           <div>
             <span className="text-sm font-bold text-white">InstantDesk</span>
             <span className="text-sm text-white/30"> · Admin</span>
@@ -519,8 +514,8 @@ export default function AdminDashboard({
 
         {/* KPI cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          <KpiCard icon={Users}         label="Total Leads"   value={kpis.total}      sub={`${kpis.todayCount} new today`}   color="#a78bfa" delay={0.05} />
-          <KpiCard icon={Calendar}      label="Today's Leads" value={kpis.todayCount} sub="last 24 hours"                    color="#60a5fa" delay={0.10} />
+          <KpiCard icon={Users}         label="Total Leads"   value={kpis.total}      sub={`${kpis.todayCount} new today`}   color="#f8a36d" delay={0.05} />
+          <KpiCard icon={Calendar}      label="Today's Leads" value={kpis.todayCount} sub="last 24 hours"                    color="#948f88" delay={0.10} />
           <KpiCard icon={CalendarCheck} label="Demos Booked"  value={kpis.demos}      sub="awaiting session"                 color="#fbbf24" delay={0.15} />
           <KpiCard icon={Target}        label="Win Rate"      value={`${kpis.rate}%`} sub="leads converted to clients"      color="#34d399" delay={0.20} />
         </div>
@@ -548,7 +543,7 @@ export default function AdminDashboard({
                 onChange={e => setSearch(e.target.value)}
                 className="w-full pl-9 pr-4 py-2.5 rounded-xl text-sm text-white placeholder-white/20 outline-none transition-all"
                 style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
-                onFocus={e => { e.currentTarget.style.border = '1px solid rgba(139,92,246,0.4)' }}
+                onFocus={e => { e.currentTarget.style.border = '1px solid rgba(244,122,99,0.4)' }}
                 onBlur={e =>  { e.currentTarget.style.border = '1px solid rgba(255,255,255,0.08)' }}
               />
               {search && (
@@ -603,9 +598,9 @@ export default function AdminDashboard({
             <div className="flex flex-col items-center justify-center py-24 px-6 text-center">
               <div
                 className="w-16 h-16 rounded-2xl flex items-center justify-center mb-5"
-                style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.15)' }}
+                style={{ background: 'rgba(244,122,99,0.08)', border: '1px solid rgba(244,122,99,0.15)' }}
               >
-                <RefreshCw className="w-7 h-7 text-violet-400/50" />
+                <RefreshCw className="w-7 h-7 text-orange-400/50" />
               </div>
               <h3 className="text-base font-bold text-white/50 mb-2">No leads yet</h3>
               <p className="text-sm text-white/25 max-w-xs">
@@ -636,7 +631,7 @@ export default function AdminDashboard({
                           <div className="flex flex-col items-center gap-3">
                             <AlertCircle className="w-8 h-8 text-white/15" />
                             <p className="text-sm text-white/25">No leads match your filters</p>
-                            <button onClick={() => { setSearch(''); setStatusFilter('all') }} className="text-xs text-violet-400 hover:text-violet-300 transition-colors">
+                            <button onClick={() => { setSearch(''); setStatusFilter('all') }} className="text-xs text-orange-400 hover:text-orange-300 transition-colors">
                               Clear filters
                             </button>
                           </div>
@@ -659,7 +654,7 @@ export default function AdminDashboard({
                           <div className="flex items-center gap-3">
                             <div
                               className="w-8 h-8 rounded-xl flex items-center justify-center text-[11px] font-black text-white flex-shrink-0"
-                              style={{ background: 'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}
+                              style={{ background: 'linear-gradient(135deg,rgba(244,122,99,0.5),rgba(248,154,87,0.4))' }}
                             >
                               {initials(lead.fullName)}
                             </div>

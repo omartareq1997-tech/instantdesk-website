@@ -21,7 +21,7 @@ export default function TrustedBy() {
     <section className="relative py-20 overflow-hidden">
       <div className="absolute inset-0 -z-10">
         <div className="absolute inset-0 border-y border-white/[0.04]" />
-        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-violet-950/10 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-orange-950/10 to-transparent" />
       </div>
 
       <div className="max-w-7xl mx-auto px-6">
@@ -49,7 +49,7 @@ export default function TrustedBy() {
               whileInView={{ opacity: 1 }}
               viewport={{ once: true }}
               transition={{ duration: 0.4, delay: i * 0.05 }}
-              className="flex flex-col items-center py-7 px-4 bg-[#050510] hover:bg-white/[0.02] transition-colors"
+              className="flex flex-col items-center py-7 px-4 bg-[#080807] hover:bg-white/[0.02] transition-colors"
             >
               <span className="text-2xl md:text-3xl font-black text-white mb-1">{m.value}</span>
               <span className="text-xs font-semibold text-white/50 mb-0.5">{m.label}</span>

@@ -23,10 +23,10 @@ const capabilities = [
 ]
 
 const integrations = [
-  { name: 'Google Calendar', abbr: 'GCal', color: 'from-blue-500 to-blue-600' },
+  { name: 'Google Calendar', abbr: 'GCal', color: 'from-stone-500 to-stone-600' },
   { name: 'Google Sheets', abbr: 'Sheets', color: 'from-green-500 to-emerald-600' },
   { name: 'HubSpot', abbr: 'HubSpot', color: 'from-orange-500 to-amber-500' },
-  { name: 'Salesforce', abbr: 'SF', color: 'from-blue-400 to-cyan-500' },
+  { name: 'Salesforce', abbr: 'SF', color: 'from-stone-400 to-orange-500' },
   { name: 'Zapier', abbr: 'Zapier', color: 'from-orange-400 to-red-500' },
   { name: 'Notion', abbr: 'Notion', color: 'from-slate-400 to-slate-600' },
 ]
@@ -36,8 +36,8 @@ export default function OmnichannelSection() {
     <section id="omnichannel" className="relative py-36 overflow-hidden">
       {/* Background */}
       <div className="absolute inset-0 -z-10">
-        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-indigo-950/20 to-transparent" />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[900px] h-[600px] rounded-full bg-gradient-to-br from-violet-900/15 via-blue-900/10 to-indigo-900/15 blur-3xl" />
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-stone-950/20 to-transparent" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[900px] h-[600px] rounded-full bg-gradient-to-br from-orange-900/15 via-stone-900/10 to-stone-900/15 blur-3xl" />
         {/* Subtle grid */}
         <div
           className="absolute inset-0 opacity-[0.04]"
@@ -60,8 +60,8 @@ export default function OmnichannelSection() {
           transition={{ duration: 0.6 }}
           className="text-center mb-20"
         >
-          <span className="inline-flex items-center gap-2 text-xs font-semibold tracking-widest uppercase text-violet-400 mb-5">
-            <span className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
+          <span className="inline-flex items-center gap-2 text-xs font-semibold tracking-widest uppercase text-orange-400 mb-5">
+            <span className="w-2 h-2 rounded-full bg-orange-400 animate-pulse" />
             Omnichannel AI
           </span>
           <h2 className="text-4xl md:text-6xl font-black text-white mb-6 leading-[1.08] max-w-4xl mx-auto">
@@ -169,7 +169,7 @@ export default function OmnichannelSection() {
           >
             {/* Capability list */}
             <div className="glass-card rounded-3xl p-8 flex-1">
-              <h3 className="text-sm font-bold tracking-widest uppercase text-violet-400 mb-6">
+              <h3 className="text-sm font-bold tracking-widest uppercase text-orange-400 mb-6">
                 What your AI does — on every channel
               </h3>
               <ul className="flex flex-col gap-4">
@@ -184,8 +184,8 @@ export default function OmnichannelSection() {
                       transition={{ duration: 0.4, delay: 0.1 + i * 0.06 }}
                       className="flex items-center gap-3 group"
                     >
-                      <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500/20 to-blue-500/20 border border-violet-500/20 flex items-center justify-center flex-shrink-0 group-hover:border-violet-500/40 transition-colors">
-                        <Icon className="w-4 h-4 text-violet-400" />
+                      <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500/20 to-stone-500/20 border border-orange-500/20 flex items-center justify-center flex-shrink-0 group-hover:border-orange-500/40 transition-colors">
+                        <Icon className="w-4 h-4 text-orange-400" />
                       </div>
                       <span className="text-sm text-white/65 group-hover:text-white/85 transition-colors">{cap.text}</span>
                     </motion.li>

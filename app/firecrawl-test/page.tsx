@@ -103,8 +103,8 @@ function Panel({ title, icon: Icon, children }: { title: string; icon: React.Com
   return (
     <section className="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-5">
       <div className="mb-4 flex items-center gap-2">
-        <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-violet-400/20 bg-violet-500/10">
-          <Icon className="h-4 w-4 text-violet-300" />
+        <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-orange-400/20 bg-orange-500/10">
+          <Icon className="h-4 w-4 text-orange-300" />
         </div>
         <h2 className="text-sm font-black text-white">{title}</h2>
       </div>
@@ -192,10 +192,10 @@ export default function FirecrawlTestPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#050510] px-4 py-8 text-white sm:px-8">
+    <main className="min-h-screen bg-[#080807] px-4 py-8 text-white sm:px-8">
       <div className="mx-auto max-w-7xl">
         <div className="mb-8 flex flex-col gap-3">
-          <div className="inline-flex w-fit items-center gap-2 rounded-full border border-violet-400/20 bg-violet-500/10 px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-violet-300">
+          <div className="inline-flex w-fit items-center gap-2 rounded-full border border-orange-400/20 bg-orange-500/10 px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-orange-300">
             <Sparkles className="h-3.5 w-3.5" />
             Firecrawl Test Console
           </div>
@@ -232,7 +232,7 @@ export default function FirecrawlTestPage() {
                 type="button"
                 disabled={loading}
                 onClick={(event) => void run(event, 'scrape')}
-                className="rounded-xl bg-violet-600 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+                className="rounded-xl bg-orange-600 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-orange-500 disabled:opacity-50"
               >
                 {loading && mode === 'scrape' ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : 'Scrape page'}
               </button>
@@ -240,7 +240,7 @@ export default function FirecrawlTestPage() {
                 type="button"
                 disabled={loading}
                 onClick={(event) => void run(event, 'crawl')}
-                className="rounded-xl border border-blue-400/25 bg-blue-500/12 px-4 py-3 text-sm font-bold text-blue-100 transition-colors hover:bg-blue-500/20 disabled:opacity-50"
+                className="rounded-xl border border-stone-400/25 bg-stone-500/12 px-4 py-3 text-sm font-bold text-stone-100 transition-colors hover:bg-stone-500/20 disabled:opacity-50"
               >
                 {loading && mode === 'crawl' ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : 'Crawl site'}
               </button>
@@ -257,7 +257,7 @@ export default function FirecrawlTestPage() {
 
         {loading && (
           <div className="mb-8 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-8 text-center">
-            <Loader2 className="mx-auto mb-3 h-6 w-6 animate-spin text-violet-300" />
+            <Loader2 className="mx-auto mb-3 h-6 w-6 animate-spin text-orange-300" />
             <div className="text-sm font-bold text-white">Firecrawl is processing the request...</div>
             <div className="mt-1 text-xs text-white/35">Crawls can take a little longer depending on page count.</div>
           </div>
@@ -392,7 +392,7 @@ export default function FirecrawlTestPage() {
                   <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
                     {result.audit.seo.headingStructure.length ? result.audit.seo.headingStructure.map((heading, index) => (
                       <div key={`${heading.level}-${heading.text}-${index}`} className="grid grid-cols-[48px_1fr] gap-3 rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2 text-xs">
-                        <span className="font-black uppercase text-violet-300">{heading.level}</span>
+                        <span className="font-black uppercase text-orange-300">{heading.level}</span>
                         <span className="text-white/58">{heading.text}</span>
                       </div>
                     )) : <EmptyState>No heading structure detected.</EmptyState>}
@@ -404,7 +404,7 @@ export default function FirecrawlTestPage() {
             <div className="grid gap-4 xl:grid-cols-4">
               <StrategyList title="Strengths" icon={CheckCircle2} items={result.audit.strategy.strengths} tone="border-emerald-400/20 bg-emerald-500/10 text-emerald-300" />
               <StrategyList title="Weaknesses" icon={XCircle} items={result.audit.strategy.weaknesses} tone="border-red-400/20 bg-red-500/10 text-red-300" />
-              <StrategyList title="Opportunities" icon={TrendingUp} items={result.audit.strategy.opportunities} tone="border-blue-400/20 bg-blue-500/10 text-blue-300" />
+              <StrategyList title="Opportunities" icon={TrendingUp} items={result.audit.strategy.opportunities} tone="border-stone-400/20 bg-stone-500/10 text-stone-300" />
               <StrategyList title="Recommendations" icon={Lightbulb} items={result.audit.strategy.recommendations} tone="border-amber-400/20 bg-amber-500/10 text-amber-300" />
             </div>
 

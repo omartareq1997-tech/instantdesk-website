@@ -58,14 +58,14 @@ const RULES: Record<TriggerType, RuleMeta> = {
     label:       'No Reply — 2h',
     description: 'Sends a warm check-in if the lead has not replied within the delay window.',
     icon:        MessageCircle,
-    color:       '#60a5fa',
+    color:       '#948f88',
     delayLabel:  'hours after last bot message',
   },
   no_reply_24h: {
     label:       'No Reply — 24h',
     description: 'Re-engages leads who went quiet after the initial conversation.',
     icon:        Clock,
-    color:       '#a78bfa',
+    color:       '#f8a36d',
     delayLabel:  'hours after last bot message',
   },
   missed_appointment: {
@@ -228,10 +228,10 @@ function ConfigureDrawer({
         <div className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-6">
           {/* AI badge */}
           <div className="flex items-start gap-2.5 rounded-xl px-4 py-3"
-            style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.12)' }}>
-            <Bot className="w-3.5 h-3.5 text-blue-400/60 flex-shrink-0 mt-0.5" />
-            <p className="text-[10px] text-blue-300/50 leading-relaxed">
-              <span className="font-semibold text-blue-300/70">AI-generated.</span>{' '}
+            style={{ background: 'rgba(148,145,140,0.06)', border: '1px solid rgba(148,145,140,0.12)' }}>
+            <Bot className="w-3.5 h-3.5 text-stone-400/60 flex-shrink-0 mt-0.5" />
+            <p className="text-[10px] text-stone-300/50 leading-relaxed">
+              <span className="font-semibold text-stone-300/70">AI-generated.</span>{' '}
               Messages are composed by the AI using conversation memory and lead context — they sound human and reference what the lead shared.
             </p>
           </div>
@@ -264,7 +264,7 @@ function ConfigureDrawer({
                 onChange={e => setDelayHours(Math.max(0.25, parseFloat(e.target.value) || 0))}
                 className="flex-1 px-3 py-2.5 rounded-xl text-sm text-white outline-none"
                 style={inputBase}
-                onFocus={e => { e.currentTarget.style.border = '1px solid rgba(139,92,246,0.4)' }}
+                onFocus={e => { e.currentTarget.style.border = '1px solid rgba(244,122,99,0.4)' }}
                 onBlur={e =>  { e.currentTarget.style.border = '1px solid rgba(255,255,255,0.08)' }}
               />
               <span className="text-sm text-white/40 px-2">hours</span>
@@ -302,7 +302,7 @@ function ConfigureDrawer({
               placeholder="Override default instructions… e.g. 'Always mention our free valuation offer' or 'Offer a 10% discount'"
               className="w-full px-3.5 py-3 rounded-xl text-sm text-white placeholder-white/15 outline-none resize-none"
               style={inputBase}
-              onFocus={e => { e.currentTarget.style.border = '1px solid rgba(139,92,246,0.4)' }}
+              onFocus={e => { e.currentTarget.style.border = '1px solid rgba(244,122,99,0.4)' }}
               onBlur={e =>  { e.currentTarget.style.border = '1px solid rgba(255,255,255,0.08)' }}
             />
             <p className="text-[10px] text-white/20 mt-1.5">
@@ -390,8 +390,8 @@ function RuleCard({
           <div>
             <div className="text-sm font-bold text-white leading-tight">{rule.label}</div>
             <div className="flex items-center gap-1.5 mt-1">
-              <Bot className="w-3 h-3 text-blue-400/60" />
-              <span className="text-[10px] font-semibold text-blue-400/60">AI-generated</span>
+              <Bot className="w-3 h-3 text-stone-400/60" />
+              <span className="text-[10px] font-semibold text-stone-400/60">AI-generated</span>
             </div>
           </div>
         </div>
@@ -490,7 +490,7 @@ function QueuePanel({
           <button key={s} onClick={() => setFilter(s)}
             className="px-3 py-1 rounded-full text-[11px] font-semibold transition-all"
             style={filter === s ? {
-              background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.35)', color: '#a78bfa',
+              background: 'rgba(244,122,99,0.15)', border: '1px solid rgba(244,122,99,0.35)', color: '#f8a36d',
             } : {
               background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.3)',
             }}>
@@ -507,7 +507,7 @@ function QueuePanel({
         ) : (
           <div className="divide-y divide-white/[0.04]">
             {filtered.map((row, i) => {
-              const rule   = RULES[row.trigger_type as TriggerType] ?? { label: row.trigger_type, color: '#60a5fa', icon: MessageCircle }
+              const rule   = RULES[row.trigger_type as TriggerType] ?? { label: row.trigger_type, color: '#948f88', icon: MessageCircle }
               const RuleIcon = rule.icon
               const stat   = STATUS_CFG[row.status]
               const StatIcon = stat.icon
@@ -675,7 +675,7 @@ export default function FollowUpCenter() {
         {[
           { label: 'Active Rules',  value: enabledCount,   color: '#34d399', icon: Zap          },
           { label: 'Scheduled',     value: scheduledCount, color: '#fbbf24', icon: Clock        },
-          { label: 'Sent Today',    value: sentToday,      color: '#60a5fa', icon: CheckCircle2 },
+          { label: 'Sent Today',    value: sentToday,      color: '#948f88', icon: CheckCircle2 },
         ].map((card, i) => {
           const CardIcon = card.icon
           return (
@@ -705,7 +705,7 @@ export default function FollowUpCenter() {
             <button key={tab} onClick={() => setActiveTab(tab)}
               className="px-4 py-1.5 rounded-lg text-xs font-bold transition-all"
               style={activeTab === tab ? {
-                background: 'rgba(139,92,246,0.2)', color: '#a78bfa',
+                background: 'rgba(244,122,99,0.2)', color: '#f8a36d',
               } : {
                 color: 'rgba(255,255,255,0.35)',
               }}>
@@ -716,7 +716,7 @@ export default function FollowUpCenter() {
 
         <button onClick={runWorker} disabled={workerRunning}
           className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all disabled:opacity-50"
-          style={{ background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.18)', color: '#60a5fa' }}>
+          style={{ background: 'rgba(148,145,140,0.08)', border: '1px solid rgba(148,145,140,0.18)', color: '#948f88' }}>
           {workerRunning
             ? <motion.span className="w-3.5 h-3.5 rounded-full border-2 border-current/30 border-t-current"
                 animate={{ rotate: 360 }} transition={{ duration: 0.7, repeat: Infinity, ease: 'linear' }} />

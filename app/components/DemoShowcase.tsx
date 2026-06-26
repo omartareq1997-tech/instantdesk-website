@@ -43,10 +43,10 @@ const demos: Demo[] = [
     id: 'realestate',
     industry: 'Real Estate',
     Icon: Building2,
-    color: '#60a5fa',
-    bg: 'rgba(96,165,250,0.08)',
-    border: 'rgba(96,165,250,0.2)',
-    gradient: 'from-blue-500 to-cyan-400',
+    color: '#948f88',
+    bg: 'rgba(148,145,140,0.08)',
+    border: 'rgba(148,145,140,0.2)',
+    gradient: 'from-stone-500 to-orange-400',
     channel: 'WhatsApp',
     customer: 'Michał K.',
     avatar: 'MK',
@@ -122,7 +122,7 @@ const demos: Demo[] = [
     color: '#c084fc',
     bg: 'rgba(192,132,252,0.08)',
     border: 'rgba(192,132,252,0.2)',
-    gradient: 'from-purple-500 to-violet-400',
+    gradient: 'from-orange-500 to-orange-400',
     channel: 'Website Chat',
     customer: 'Marta S.',
     avatar: 'MS',
@@ -141,7 +141,7 @@ const demos: Demo[] = [
     color: '#22d3ee',
     bg: 'rgba(34,211,238,0.08)',
     border: 'rgba(34,211,238,0.2)',
-    gradient: 'from-cyan-500 to-teal-400',
+    gradient: 'from-stone-500 to-teal-400',
     channel: 'WhatsApp',
     customer: 'Tomasz B.',
     avatar: 'TB',
@@ -221,7 +221,7 @@ export default function DemoShowcase() {
         <div
           className="absolute inset-0 opacity-[0.03]"
           style={{
-            backgroundImage: `radial-gradient(circle, rgba(139,92,246,1) 1px, transparent 1px)`,
+            backgroundImage: `radial-gradient(circle, rgba(244,122,99,1) 1px, transparent 1px)`,
             backgroundSize: '32px 32px',
           }}
         />
@@ -237,8 +237,8 @@ export default function DemoShowcase() {
           transition={{ duration: 0.6 }}
           className="text-center mb-14"
         >
-          <span className="inline-flex items-center gap-2 text-xs font-semibold tracking-widest uppercase text-violet-400 mb-5">
-            <span className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
+          <span className="inline-flex items-center gap-2 text-xs font-semibold tracking-widest uppercase text-orange-400 mb-5">
+            <span className="w-2 h-2 rounded-full bg-orange-400 animate-pulse" />
             Interactive demo
           </span>
           <h2 className="text-4xl md:text-5xl font-black text-white mb-5 leading-tight">
@@ -410,7 +410,7 @@ export default function DemoShowcase() {
                     >
                       <div
                         className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
-                        style={{ background: 'linear-gradient(135deg, #7c3aed, #2563eb)' }}
+                        style={{ background: 'linear-gradient(135deg, #171412, #f89a57)' }}
                       >
                         <Bot className="w-4 h-4 text-white" />
                       </div>
@@ -431,7 +431,7 @@ export default function DemoShowcase() {
                     >
                       <div
                         className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
-                        style={{ background: 'linear-gradient(135deg, #7c3aed, #2563eb)' }}
+                        style={{ background: 'linear-gradient(135deg, #171412, #f89a57)' }}
                       >
                         <Bot className="w-4 h-4 text-white" />
                       </div>
@@ -448,7 +448,7 @@ export default function DemoShowcase() {
                         </div>
                         <div className="flex items-center justify-end gap-1 mt-1.5 mr-1">
                           <span className="text-[9px] text-white/20">Delivered</span>
-                          <CheckCheck className="w-3 h-3 text-blue-400" />
+                          <CheckCheck className="w-3 h-3 text-stone-400" />
                         </div>
                       </div>
                     </motion.div>
@@ -491,7 +491,7 @@ export default function DemoShowcase() {
                 </div>
                 <div
                   className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                  style={{ background: 'linear-gradient(135deg, #7c3aed, #2563eb)' }}
+                  style={{ background: 'linear-gradient(135deg, #171412, #f89a57)' }}
                 >
                   <MessageSquare className="w-4 h-4 text-white" />
                 </div>
@@ -505,12 +505,12 @@ export default function DemoShowcase() {
                 className="flex items-center gap-3 px-6 py-4 border-b"
                 style={{ borderColor: 'rgba(255,255,255,0.05)', background: 'rgba(0,0,0,0.1)' }}
               >
-                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500/30 to-blue-500/30 border border-violet-500/20 flex items-center justify-center">
-                  <Zap className="w-3.5 h-3.5 text-violet-400" />
+                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-orange-500/30 to-stone-500/30 border border-orange-500/20 flex items-center justify-center">
+                  <Zap className="w-3.5 h-3.5 text-orange-400" />
                 </div>
                 <span className="text-xs font-bold text-white/50 tracking-wide">AUTOMATION SEQUENCE TRIGGERED</span>
-                <span className="ml-auto flex items-center gap-1 text-[10px] text-violet-400 font-semibold">
-                  <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
+                <span className="ml-auto flex items-center gap-1 text-[10px] text-orange-400 font-semibold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse" />
                   4 actions
                 </span>
               </div>
@@ -532,14 +532,14 @@ export default function DemoShowcase() {
                     transition={{ delay: 0.45, duration: 0.4 }}
                     className="rounded-2xl p-4 relative overflow-hidden"
                     style={{
-                      background: 'rgba(139,92,246,0.06)',
-                      border: '1px solid rgba(139,92,246,0.18)',
+                      background: 'rgba(244,122,99,0.06)',
+                      border: '1px solid rgba(244,122,99,0.18)',
                     }}
                   >
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-lg bg-violet-500/20 border border-violet-500/30 flex items-center justify-center">
-                          <UserCheck className="w-3.5 h-3.5 text-violet-400" />
+                        <div className="w-7 h-7 rounded-lg bg-orange-500/20 border border-orange-500/30 flex items-center justify-center">
+                          <UserCheck className="w-3.5 h-3.5 text-orange-400" />
                         </div>
                         <span className="text-xs font-bold text-white/75">Lead Captured</span>
                       </div>
@@ -566,7 +566,7 @@ export default function DemoShowcase() {
                       <div className="flex items-center justify-between mb-1.5">
                         <span className="text-[9px] uppercase tracking-wider text-white/25">Lead Score</span>
                       </div>
-                      <ScoreBar score={demo.lead.Score as number} color="#a78bfa" />
+                      <ScoreBar score={demo.lead.Score as number} color="#f8a36d" />
                     </div>
                   </motion.div>
 
@@ -577,14 +577,14 @@ export default function DemoShowcase() {
                     transition={{ delay: 0.7, duration: 0.4 }}
                     className="rounded-2xl p-4"
                     style={{
-                      background: 'rgba(96,165,250,0.06)',
-                      border: '1px solid rgba(96,165,250,0.18)',
+                      background: 'rgba(148,145,140,0.06)',
+                      border: '1px solid rgba(148,145,140,0.18)',
                     }}
                   >
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-lg bg-blue-500/20 border border-blue-500/30 flex items-center justify-center">
-                          <CalendarCheck className="w-3.5 h-3.5 text-blue-400" />
+                        <div className="w-7 h-7 rounded-lg bg-stone-500/20 border border-stone-500/30 flex items-center justify-center">
+                          <CalendarCheck className="w-3.5 h-3.5 text-stone-400" />
                         </div>
                         <span className="text-xs font-bold text-white/75">Appointment Booked</span>
                       </div>
@@ -600,11 +600,11 @@ export default function DemoShowcase() {
                     <div className="flex items-center gap-3">
                       <div
                         className="px-3 py-2 rounded-xl text-center flex-shrink-0"
-                        style={{ background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.2)' }}
+                        style={{ background: 'rgba(148,145,140,0.12)', border: '1px solid rgba(148,145,140,0.2)' }}
                       >
-                        <div className="text-[10px] text-blue-400/70 font-semibold uppercase tracking-wide">{demo.appt.Date.split(',')[0]}</div>
-                        <div className="text-xl font-black text-blue-400 leading-none">{demo.appt.Time}</div>
-                        <div className="text-[9px] text-blue-400/50">{demo.appt.Date.split(',')[1]?.trim()}</div>
+                        <div className="text-[10px] text-stone-400/70 font-semibold uppercase tracking-wide">{demo.appt.Date.split(',')[0]}</div>
+                        <div className="text-xl font-black text-stone-400 leading-none">{demo.appt.Time}</div>
+                        <div className="text-[9px] text-stone-400/50">{demo.appt.Date.split(',')[1]?.trim()}</div>
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="text-xs font-bold text-white/80 mb-1">{demo.appt.Type}</div>
@@ -673,12 +673,12 @@ export default function DemoShowcase() {
                         ? 'rgba(37,211,102,0.06)'
                         : demo.note.channel === 'SMS'
                         ? 'rgba(251,146,60,0.06)'
-                        : 'rgba(96,165,250,0.06)',
+                        : 'rgba(148,145,140,0.06)',
                       border: demo.note.channel === 'WhatsApp'
                         ? '1px solid rgba(37,211,102,0.2)'
                         : demo.note.channel === 'SMS'
                         ? '1px solid rgba(251,146,60,0.2)'
-                        : '1px solid rgba(96,165,250,0.2)',
+                        : '1px solid rgba(148,145,140,0.2)',
                     }}
                   >
                     <div className="flex items-center justify-between mb-3">
@@ -686,15 +686,15 @@ export default function DemoShowcase() {
                         <div
                           className="w-7 h-7 rounded-lg flex items-center justify-center"
                           style={{
-                            background: demo.note.channel === 'WhatsApp' ? 'rgba(37,211,102,0.2)' : demo.note.channel === 'SMS' ? 'rgba(251,146,60,0.2)' : 'rgba(96,165,250,0.2)',
-                            border: demo.note.channel === 'WhatsApp' ? '1px solid rgba(37,211,102,0.3)' : demo.note.channel === 'SMS' ? '1px solid rgba(251,146,60,0.3)' : '1px solid rgba(96,165,250,0.3)',
+                            background: demo.note.channel === 'WhatsApp' ? 'rgba(37,211,102,0.2)' : demo.note.channel === 'SMS' ? 'rgba(251,146,60,0.2)' : 'rgba(148,145,140,0.2)',
+                            border: demo.note.channel === 'WhatsApp' ? '1px solid rgba(37,211,102,0.3)' : demo.note.channel === 'SMS' ? '1px solid rgba(251,146,60,0.3)' : '1px solid rgba(148,145,140,0.3)',
                           }}
                         >
                           {demo.note.channel === 'WhatsApp'
                             ? <WhatsAppIcon className="w-3.5 h-3.5" style={{ color: '#25D366' }} />
                             : demo.note.channel === 'SMS'
                             ? <Phone className="w-3.5 h-3.5" style={{ color: '#fb923c' }} />
-                            : <MessageSquare className="w-3.5 h-3.5 text-blue-400" />
+                            : <MessageSquare className="w-3.5 h-3.5 text-stone-400" />
                           }
                         </div>
                         <span className="text-xs font-bold text-white/75">
@@ -722,7 +722,7 @@ export default function DemoShowcase() {
                     </div>
                     <div className="flex items-center justify-end gap-1 mt-2">
                       <span className="text-[9px] text-white/20">Delivered</span>
-                      <CheckCheck className="w-3 h-3" style={{ color: demo.note.channel === 'WhatsApp' ? '#25D366' : '#60a5fa' }} />
+                      <CheckCheck className="w-3 h-3" style={{ color: demo.note.channel === 'WhatsApp' ? '#25D366' : '#948f88' }} />
                     </div>
                   </motion.div>
 

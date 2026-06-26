@@ -12,7 +12,7 @@ const PLATFORMS = [
   { name: 'Wix',         init: 'Wx',  color: '#faad00' },
   { name: 'Webflow',     init: 'Wf',  color: '#4353ff' },
   { name: 'Squarespace', init: 'Sq',  color: '#a0a0a0' },
-  { name: 'Custom site', init: '∞',   color: '#a78bfa' },
+  { name: 'Custom site', init: '∞',   color: '#f8a36d' },
 ]
 
 /* ── Steps ────────────────────────────────────────────────────── */
@@ -23,16 +23,16 @@ const STEPS = [
     Icon: Upload,
     title: 'Connect your website or upload business info',
     desc: 'Paste your website URL or upload your FAQs, services, and pricing. InstantDesk reads your content and prepares your AI automatically.',
-    color: '#a78bfa',
-    glow: 'rgba(167,139,250,0.15)',
+    color: '#f8a36d',
+    glow: 'rgba(244,122,99,0.15)',
   },
   {
     number: '02',
     Icon: Cpu,
     title: 'Train your AI receptionist',
     desc: 'Review responses, set the tone and personality, define lead capture rules, and configure booking or enquiry flows — all from your dashboard.',
-    color: '#60a5fa',
-    glow: 'rgba(96,165,250,0.15)',
+    color: '#948f88',
+    glow: 'rgba(148,145,140,0.15)',
   },
   {
     number: '03',
@@ -57,7 +57,7 @@ export default function WebsiteIntegration() {
           className="absolute inset-0"
           style={{
             background:
-              'radial-gradient(ellipse 70% 50% at 50% 0%, rgba(124,58,237,0.07) 0%, transparent 70%)',
+              'radial-gradient(ellipse 70% 50% at 50% 0%, rgba(244,122,99,0.07) 0%, transparent 70%)',
           }}
         />
         <div className="absolute inset-0 border-t border-white/[0.04]" />
@@ -79,7 +79,7 @@ export default function WebsiteIntegration() {
             Add your AI receptionist{' '}
             <span
               style={{
-                background: 'linear-gradient(135deg,#818cf8,#60a5fa)',
+                background: 'linear-gradient(135deg,#f47a63,#948f88)',
                 WebkitBackgroundClip: 'text',
                 WebkitTextFillColor: 'transparent',
                 backgroundClip: 'text',
@@ -197,8 +197,8 @@ export default function WebsiteIntegration() {
             whileTap={{ scale: 0.97 }}
             className="group relative inline-flex items-center gap-2.5 px-8 py-4 rounded-xl text-sm font-bold text-white overflow-hidden"
             style={{
-              background: 'linear-gradient(135deg,#7c3aed 0%,#4f46e5 50%,#2563eb 100%)',
-              boxShadow: '0 8px 32px rgba(99,102,241,0.4)',
+              background: 'linear-gradient(135deg,#171412 0%,#f47a63 50%,#f89a57 100%)',
+              boxShadow: '0 8px 32px rgba(244,122,99,0.4)',
             }}
           >
             <span

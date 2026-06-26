@@ -1,15 +1,29 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Bot, Brain, BookOpen, Target, FlaskConical, CheckCircle, AlertTriangle,
   Zap, Plus, Trash2, Globe, FileText, Upload, ChevronDown, ChevronUp,
   RefreshCw, Save, Play, RotateCcw, Eye, EyeOff, Cpu, MessageSquare,
   User, Clock, Link, File, ToggleLeft, ToggleRight, Sliders, Flame,
-  Database, TrendingUp, BarChart2, Activity,
+  Database, TrendingUp, BarChart2, Activity, Copy, Maximize2, X,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import {
+  buildAgentSystemPrompt,
+  buildPromptComponents,
+  estimatePromptTokens,
+  generateExampleResponse,
+  getActiveModuleLabel,
+  getBaseBehaviorRules,
+  getCreativityBehaviorRules,
+  getModulePrompt,
+  getToneBehaviorRules,
+  promptLengthStatus,
+  toneLabel,
+} from '../lib/agentPrompt'
+import { getBusinessTypeConfig, normalizeBusinessType, type QualificationSlot } from '../lib/businessTypes'
 
 /* ─── Shared constants ───────────────────────────────────────── */
 
@@ -27,16 +41,17 @@ const MODELS = [
 ]
 
 const DEFAULT_SLOT_DEFS: SlotDef[] = [
-  { key:'city',          label:'City / Location',         required:true,  question:"Which city or area are you looking in?"                                          },
-  { key:'deal_type',     label:'Rent or Buy',             required:true,  question:"Are you looking to rent or buy?"                                                  },
-  { key:'property_type', label:'Property Type',           required:true,  question:"What type of property — apartment, house, studio, or something else?"             },
-  { key:'rooms',         label:'Number of Rooms',         required:true,  question:"How many rooms or bedrooms do you need?"                                          },
-  { key:'budget',        label:'Budget',                  required:true,  question:"What's your budget? Please include currency (e.g. 3000 PLN/month)."               },
-  { key:'name',          label:'Full Name',               required:true,  question:"May I have your full name?"                                                        },
-  { key:'phone',         label:'Phone Number',            required:false, question:"What's the best phone number to reach you on?"                                    },
-  { key:'email',         label:'Email Address',           required:false, question:"And your email address?"                                                           },
-  { key:'viewing_time',  label:'Preferred Viewing Time',  required:false, question:"When would you prefer to schedule a viewing?"                                     },
+  { key:'name',             label:'Customer name',     required:true,  question:'May I have your name?' },
+  { key:'phone',            label:'Phone number',      required:false, question:'What phone number should the team use?' },
+  { key:'email',            label:'Email address',     required:false, question:'What email address should the team use?' },
+  { key:'service_interest', label:'Service interest',  required:true,  question:'Which service are you interested in?' },
+  { key:'preferred_time',   label:'Preferred time',    required:false, question:'When would you prefer to be contacted or booked?' },
+  { key:'notes',            label:'Notes',             required:false, question:'Is there anything else the team should know?' },
 ]
+
+function mapBusinessSlot(slot: QualificationSlot): SlotDef {
+  return { key: slot.key, label: slot.label, required: slot.required, question: slot.question }
+}
 
 /* ─── Types ──────────────────────────────────────────────────── */
 
@@ -85,6 +100,8 @@ interface ChatMessage {
     isQualified:    boolean
     ai_summary:     string | null
     blocked:        boolean
+    businessType?: string | null
+    finalSystemPrompt?: string
   }
 }
 
@@ -99,7 +116,7 @@ function PageCard({ children, className = '' }: { children: React.ReactNode; cla
   )
 }
 
-function SectionHeader({ icon: Icon, title, sub, color = '#a78bfa' }: { icon: React.ComponentType<{className?:string;style?:React.CSSProperties}>, title: string, sub?: string, color?: string }) {
+function SectionHeader({ icon: Icon, title, sub, color = '#f8a36d' }: { icon: React.ComponentType<{className?:string;style?:React.CSSProperties}>, title: string, sub?: string, color?: string }) {
   return (
     <div className="flex items-center gap-3 mb-5">
       <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
@@ -120,7 +137,7 @@ function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) =
       className="flex items-center gap-2 group"
       aria-label={label ?? (on ? 'On' : 'Off')}>
       <div className="relative w-9 h-5 rounded-full transition-colors"
-        style={{ background: on ? '#7c3aed' : 'rgba(255,255,255,0.12)', border:`1px solid ${on ? '#7c3aed' : 'rgba(255,255,255,0.15)'}` }}>
+        style={{ background: on ? '#171412' : 'rgba(255,255,255,0.12)', border:`1px solid ${on ? '#171412' : 'rgba(255,255,255,0.15)'}` }}>
         <div className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all"
           style={{ left: on ? 'calc(100% - 18px)' : '2px' }} />
       </div>
@@ -136,7 +153,7 @@ function SaveBtn({ onClick, loading, saved }: { onClick: () => void; loading: bo
       className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all"
       style={saved
         ? { background:'rgba(52,211,153,0.12)', border:'1px solid rgba(52,211,153,0.3)', color:'#34d399' }
-        : { background:'rgba(124,58,237,0.85)', border:'1px solid rgba(167,139,250,0.4)', color:'white' }}>
+        : { background:'rgba(244,122,99,0.85)', border:'1px solid rgba(244,122,99,0.4)', color:'white' }}>
       {loading ? (
         <motion.span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white"
           animate={{ rotate: 360 }} transition={{ duration: 0.7, repeat: Infinity, ease: 'linear' }} />
@@ -153,7 +170,7 @@ function SaveBtn({ onClick, loading, saved }: { onClick: () => void; loading: bo
 function Spinner() {
   return (
     <div className="flex items-center justify-center py-12">
-      <motion.div className="w-6 h-6 rounded-full border-2 border-violet-500/30 border-t-violet-500"
+      <motion.div className="w-6 h-6 rounded-full border-2 border-orange-500/30 border-t-orange-500"
         animate={{ rotate: 360 }} transition={{ duration: 0.8, repeat: Infinity, ease: 'linear' }} />
     </div>
   )
@@ -176,6 +193,30 @@ function MetricCard({ icon: Icon, value, label, sub, color }: { icon: React.Comp
       {sub && <div className="text-[10px] text-white/20 mt-0.5">{sub}</div>}
     </motion.div>
   )
+}
+
+function useActiveBusinessType() {
+  const [businessType, setBusinessType] = useState('general_service')
+
+  useEffect(() => {
+    let active = true
+    try {
+      const stored = localStorage.getItem('instantdesk_business_type')
+      if (stored) setBusinessType(normalizeBusinessType(stored))
+    } catch { /* ignore */ }
+    fetch('/api/business/settings')
+      .then(r => r.ok ? r.json() : null)
+      .then((data: { businessType?: string } | null) => {
+        if (!active || !data?.businessType) return
+        const normalized = normalizeBusinessType(data.businessType)
+        setBusinessType(normalized)
+        localStorage.setItem('instantdesk_business_type', normalized)
+      })
+      .catch(() => {})
+    return () => { active = false }
+  }, [])
+
+  return businessType
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -220,8 +261,8 @@ function AIOverviewPage({ businessId }: { businessId: string }) {
       <PageCard>
         <div className="flex items-center gap-4">
           <div className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0"
-            style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.35),rgba(37,99,235,0.25))', border:'1px solid rgba(139,92,246,0.3)' }}>
-            <Bot className="w-7 h-7 text-violet-300" />
+            style={{ background:'linear-gradient(135deg,rgba(244,122,99,0.35),rgba(248,154,87,0.25))', border:'1px solid rgba(244,122,99,0.3)' }}>
+            <Bot className="w-7 h-7 text-orange-300" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2.5 flex-wrap">
@@ -250,8 +291,8 @@ function AIOverviewPage({ businessId }: { businessId: string }) {
 
       {/* Metrics */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <MetricCard icon={BookOpen}     value={kCount}     label="Knowledge Sources"  sub="active & trained"    color="#a78bfa" />
-        <MetricCard icon={MessageSquare} value={convCount}  label="Total Conversations" sub="all time"           color="#60a5fa" />
+        <MetricCard icon={BookOpen}     value={kCount}     label="Knowledge Sources"  sub="active & trained"    color="#f8a36d" />
+        <MetricCard icon={MessageSquare} value={convCount}  label="Total Conversations" sub="all time"           color="#948f88" />
         <MetricCard icon={Target}        value={liveSlots.filter(s=>s.required).length} label="Required Slots" sub="to qualify a lead" color="#34d399" />
         <MetricCard icon={Brain}         value={liveSlots.length} label="Tracked Slots" sub="total data points" color="#fbbf24" />
       </div>
@@ -261,8 +302,8 @@ function AIOverviewPage({ businessId }: { businessId: string }) {
         <h3 className="text-xs font-bold text-white/50 uppercase tracking-widest mb-4">Quick Actions</h3>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[
-            { label:'Edit Instructions', sub:'Adjust persona and tone', color:'#a78bfa', icon:Brain },
-            { label:'Add Knowledge',     sub:'Upload docs or paste text', color:'#60a5fa', icon:BookOpen },
+            { label:'Edit Instructions', sub:'Adjust persona and tone', color:'#f8a36d', icon:Brain },
+            { label:'Add Knowledge',     sub:'Upload docs or paste text', color:'#948f88', icon:BookOpen },
             { label:'Test AI',           sub:'Chat with your agent live', color:'#34d399', icon:FlaskConical },
           ].map(a => (
             <div key={a.label} className="flex items-center gap-3 px-4 py-3.5 rounded-xl cursor-pointer transition-all hover:scale-[1.01]"
@@ -287,11 +328,11 @@ function AIOverviewPage({ businessId }: { businessId: string }) {
           {liveSlots.map(slot => (
             <div key={slot.key} className="flex items-center gap-3 px-3 py-2.5 rounded-xl"
               style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.06)' }}>
-              <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: slot.required ? '#a78bfa' : 'rgba(255,255,255,0.2)' }} />
+              <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: slot.required ? '#f8a36d' : 'rgba(255,255,255,0.2)' }} />
               <span className="text-xs text-white/70 flex-1">{slot.label}</span>
               <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
                 style={slot.required
-                  ? { background:'rgba(167,139,250,0.12)', color:'#a78bfa' }
+                  ? { background:'rgba(244,122,99,0.12)', color:'#f8a36d' }
                   : { background:'rgba(255,255,255,0.06)', color:'rgba(255,255,255,0.3)' }}>
                 {slot.required ? 'Required' : 'Optional'}
               </span>
@@ -307,39 +348,17 @@ function AIOverviewPage({ businessId }: { businessId: string }) {
    PAGE 2: AI INSTRUCTIONS
 ══════════════════════════════════════════════════════════════ */
 
-function buildPreviewPrompt(persona: string, objective: string, tone: string, fallback: string): string {
-  return `You are an AI sales assistant.
-
-PERSONA: ${persona || '(not set)'}
-
-OBJECTIVE: ${objective || '(not set)'}
-
-TONE: ${tone}
-
-CONFIRMED INFORMATION (DO NOT ask about any of these):
-  ✓ City/Location: Krakow          ← example
-  ✓ Budget: 3500 PLN/month         ← example
-
-MISSING INFORMATION (ask ONE at a time):
-  ○ Property type
-  ○ Full name
-
-STRICT RULES:
-1. Never ask for anything in CONFIRMED INFORMATION.
-2. Ask for ONE item from MISSING INFORMATION per message.
-3. Keep replies short: 2–4 sentences.
-4. If asked something outside your knowledge: ${fallback || '(fallback not set)'}
-
-Your reply is plain conversational text only.`
-}
-
 function AIInstructionsPage() {
   const [agent,    setAgent]    = useState<AgentConfig | null>(null)
   const [loading,  setLoading]  = useState(true)
   const [saving,   setSaving]   = useState(false)
   const [saved,    setSaved]    = useState(false)
-  const [showPrev, setShowPrev] = useState(false)
+  const [showPrev, setShowPrev] = useState(true)
+  const [showPromptModal, setShowPromptModal] = useState(false)
+  const [copied, setCopied] = useState(false)
   const [error,    setError]    = useState<string | null>(null)
+  const businessType = useActiveBusinessType()
+  const businessConfig = useMemo(() => getBusinessTypeConfig(businessType), [businessType])
 
   const [form, setForm] = useState({
     persona:      '',
@@ -351,15 +370,17 @@ function AIInstructionsPage() {
   })
 
   useEffect(() => {
-    fetch('/api/ai-agent/agent')
-      .then(r => r.json())
-      .then((d: { agent: AgentConfig | null }) => {
-        const a = d.agent
+    Promise.all([
+      fetch('/api/ai-agent/agent').then(r => r.json()) as Promise<{ agent: AgentConfig | null }>,
+      Promise.resolve(null) as Promise<null>,
+    ])
+      .then(([agentData]) => {
+        const a = agentData.agent
         if (a) {
           setAgent(a)
           setForm({
-            persona:      a.persona      ?? '',
-            objective:    a.objective    ?? '',
+            persona:      a.persona      ?? businessConfig.defaultPersona,
+            objective:    a.objective    ?? businessConfig.defaultObjective,
             tone:         a.tone         ?? 'professional',
             fallback_msg: a.fallback_msg ?? '',
             model:        a.model        ?? 'gpt-4o',
@@ -368,7 +389,7 @@ function AIInstructionsPage() {
         }
       })
       .finally(() => setLoading(false))
-  }, [])
+  }, [businessConfig.defaultObjective, businessConfig.defaultPersona])
 
   const handleSave = async () => {
     setSaving(true); setError(null)
@@ -386,6 +407,37 @@ function AIInstructionsPage() {
     setSaved(false)
   }
 
+  const activeModule = useMemo(() => getActiveModuleLabel(businessType), [businessType])
+  const modulePrompt = useMemo(() => getModulePrompt(businessType), [businessType])
+
+  const promptPreview = useMemo(() => buildAgentSystemPrompt({
+    config: form,
+    businessType,
+    knowledgeText: '(Runtime knowledge from active Knowledge Base sources is inserted here for each conversation.)',
+    collectedData: businessType === 'car_rental'
+      ? ['Pickup location: Krakow Airport Terminal 1', 'Car class: Economy']
+      : businessType === 'real_estate'
+        ? ['City/location: Krakow', 'Budget: 3500 PLN/month']
+        : ['Service interest: Consultation'],
+    missingFields: businessConfig.qualificationSlots.slice(0, 2).map(slot => ({ label: slot.label, required: slot.required })),
+    stage: 'preview',
+    memory: '(Runtime lead memory is inserted here when available.)',
+  }), [form, businessType])
+
+  const promptComponents = useMemo(() => buildPromptComponents({ ...form, businessType }), [form, businessType])
+  const behaviorRules = useMemo(() => getBaseBehaviorRules(form), [form])
+  const toneRules = useMemo(() => getToneBehaviorRules(form.tone), [form.tone])
+  const creativityRules = useMemo(() => getCreativityBehaviorRules(form.temperature), [form.temperature])
+  const tokenCount = useMemo(() => estimatePromptTokens(promptPreview), [promptPreview])
+  const lengthStatus = useMemo(() => promptLengthStatus(tokenCount), [tokenCount])
+  const currentExample = useMemo(() => generateExampleResponse({ ...form, businessType }), [form, businessType])
+
+  async function copyPrompt() {
+    await navigator.clipboard.writeText(promptPreview)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1600)
+  }
+
   if (loading) return <Spinner />
 
   return (
@@ -393,12 +445,32 @@ function AIInstructionsPage() {
       {/* Agent name badge */}
       {agent && (
         <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl w-fit"
-          style={{ background:'rgba(139,92,246,0.10)', border:'1px solid rgba(139,92,246,0.2)' }}>
-          <Bot className="w-3.5 h-3.5 text-violet-400" />
-          <span className="text-xs font-semibold text-violet-300">{agent.name}</span>
-          <span className="text-[10px] text-violet-400/50">· editing instructions</span>
+          style={{ background:'rgba(244,122,99,0.10)', border:'1px solid rgba(244,122,99,0.2)' }}>
+          <Bot className="w-3.5 h-3.5 text-orange-400" />
+          <span className="text-xs font-semibold text-orange-300">{agent.name}</span>
+          <span className="text-[10px] text-orange-400/50">· editing instructions</span>
         </div>
       )}
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2.5 rounded-xl px-4 py-2.5"
+          style={{ background:'rgba(255,255,255,0.035)', border:'1px solid rgba(255,255,255,0.08)' }}>
+          <Database className="w-3.5 h-3.5 text-orange-300" />
+          <span className="text-xs font-semibold text-white/58">Active module:</span>
+          <span className="text-xs font-bold text-white">{activeModule}</span>
+        </div>
+        {businessType === 'car_rental' ? (
+          <span className="rounded-full px-3 py-1 text-[11px] font-bold text-orange-200"
+            style={{ background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.22)' }}>
+            Rental booking tools enabled
+          </span>
+        ) : (
+          <span className="rounded-full px-3 py-1 text-[11px] font-semibold text-white/38"
+            style={{ background:'rgba(255,255,255,0.035)', border:'1px solid rgba(255,255,255,0.07)' }}>
+            Select Car Rental in Settings to inject rental operations prompt
+          </span>
+        )}
+      </div>
 
       {error && (
         <div className="flex items-center gap-2 px-4 py-3 rounded-xl text-xs text-red-300"
@@ -412,7 +484,7 @@ function AIInstructionsPage() {
         <PageCard>
           <label className="block text-xs font-semibold text-white/50 uppercase tracking-widest mb-3">Persona</label>
           <textarea value={form.persona} onChange={e => set('persona')(e.target.value)} rows={6}
-            placeholder="You are a professional real estate sales assistant with 10 years of experience in the Polish property market. You are helpful, knowledgeable, and always focused on understanding the client's needs…"
+            placeholder={businessConfig.defaultPersona}
             className="w-full text-sm text-white/80 bg-transparent resize-none outline-none placeholder:text-white/20 leading-relaxed" />
           <div className="text-[10px] text-white/20 mt-3 pt-3" style={{ borderTop:'1px solid rgba(255,255,255,0.06)' }}>
             {form.persona.length} chars · Describe who the agent is, their background, and personality
@@ -422,13 +494,53 @@ function AIInstructionsPage() {
         <PageCard>
           <label className="block text-xs font-semibold text-white/50 uppercase tracking-widest mb-3">Objective</label>
           <textarea value={form.objective} onChange={e => set('objective')(e.target.value)} rows={6}
-            placeholder="Your primary goal is to qualify property leads by gathering key information (location, budget, property type, size, timeline) and then booking a viewing with a member of our sales team…"
+            placeholder={businessConfig.defaultObjective}
             className="w-full text-sm text-white/80 bg-transparent resize-none outline-none placeholder:text-white/20 leading-relaxed" />
           <div className="text-[10px] text-white/20 mt-3 pt-3" style={{ borderTop:'1px solid rgba(255,255,255,0.06)' }}>
             {form.objective.length} chars · What should the AI accomplish in each conversation
           </div>
         </PageCard>
       </div>
+
+      {/* AI behavior */}
+      <PageCard>
+        <SectionHeader icon={Brain} title="AI Behavior" sub="Active behavior rules generated from persona, tone, creativity, fallback, and model settings" />
+        <div className="grid gap-4 lg:grid-cols-3">
+          <div className="rounded-xl p-4" style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}>
+            <div className="text-xs font-bold text-white/70">{toneLabel(form.tone)} tone</div>
+            <ul className="mt-3 space-y-2">
+              {toneRules.map(rule => (
+                <li key={rule} className="flex gap-2 text-xs leading-5 text-white/48">
+                  <span className="mt-2 h-1 w-1 rounded-full bg-[#f8a36d]" />
+                  <span>{rule}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="rounded-xl p-4" style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}>
+            <div className="text-xs font-bold text-white/70">Creativity {(form.temperature * 10).toFixed(0)}/10</div>
+            <ul className="mt-3 space-y-2">
+              {creativityRules.map(rule => (
+                <li key={rule} className="flex gap-2 text-xs leading-5 text-white/48">
+                  <span className="mt-2 h-1 w-1 rounded-full bg-[#f8a36d]" />
+                  <span>{rule}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="rounded-xl p-4" style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}>
+            <div className="text-xs font-bold text-white/70">Core guardrails</div>
+            <ul className="mt-3 space-y-2">
+              {behaviorRules.slice(-6).map(rule => (
+                <li key={rule} className="flex gap-2 text-xs leading-5 text-white/48">
+                  <span className="mt-2 h-1 w-1 rounded-full bg-[#f8a36d]" />
+                  <span>{rule}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </PageCard>
 
       {/* Fallback message */}
       <PageCard>
@@ -451,10 +563,10 @@ function AIInstructionsPage() {
               <button key={t.id} onClick={() => set('tone')(t.id)}
                 className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all"
                 style={form.tone === t.id
-                  ? { background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.3)' }
+                  ? { background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.3)' }
                   : { background:'rgba(255,255,255,0.03)', border:'1px solid transparent' }}>
                 <div className="w-2 h-2 rounded-full flex-shrink-0"
-                  style={{ background: form.tone === t.id ? '#a78bfa' : 'rgba(255,255,255,0.2)' }} />
+                  style={{ background: form.tone === t.id ? '#f8a36d' : 'rgba(255,255,255,0.2)' }} />
                 <div>
                   <div className="text-xs font-semibold text-white/80">{t.label}</div>
                   <div className="text-[10px] text-white/30">{t.desc}</div>
@@ -472,9 +584,9 @@ function AIInstructionsPage() {
               <button key={m.id} onClick={() => set('model')(m.id)}
                 className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all"
                 style={form.model === m.id
-                  ? { background:'rgba(96,165,250,0.12)', border:'1px solid rgba(96,165,250,0.3)' }
+                  ? { background:'rgba(148,145,140,0.12)', border:'1px solid rgba(148,145,140,0.3)' }
                   : { background:'rgba(255,255,255,0.03)', border:'1px solid transparent' }}>
-                <Cpu className="w-3.5 h-3.5 flex-shrink-0" style={{ color: form.model === m.id ? '#60a5fa' : 'rgba(255,255,255,0.3)' }} />
+                <Cpu className="w-3.5 h-3.5 flex-shrink-0" style={{ color: form.model === m.id ? '#948f88' : 'rgba(255,255,255,0.3)' }} />
                 <div>
                   <div className="text-xs font-semibold text-white/80">{m.label}</div>
                   <div className="text-[10px] text-white/30">{m.desc}</div>
@@ -492,7 +604,7 @@ function AIInstructionsPage() {
           <div className="py-2">
             <input type="range" min="0" max="1" step="0.1" value={form.temperature}
               onChange={e => set('temperature')(parseFloat(e.target.value))}
-              className="w-full accent-violet-500" />
+              className="w-full accent-orange-500" />
             <div className="flex justify-between mt-2">
               <span className="text-[10px] text-white/30">Precise</span>
               <span className="text-[10px] text-white/30">Creative</span>
@@ -509,19 +621,45 @@ function AIInstructionsPage() {
           <div className="mt-4 flex gap-1">
             {Array.from({length:10}).map((_,i) => (
               <div key={i} className="flex-1 h-1.5 rounded-full transition-colors"
-                style={{ background: (i+1)/10 <= form.temperature ? '#7c3aed' : 'rgba(255,255,255,0.08)' }} />
+                style={{ background: (i+1)/10 <= form.temperature ? '#171412' : 'rgba(255,255,255,0.08)' }} />
             ))}
           </div>
         </PageCard>
       </div>
 
-      {/* Live prompt preview */}
+      {/* Prompt components */}
       <PageCard>
+        <SectionHeader icon={FileText} title="Prompt Components" sub="How each setting contributes to the final system prompt" />
+        <div className="grid gap-3 md:grid-cols-2">
+          {[
+            ['Persona contribution', promptComponents.persona],
+            ['Objective contribution', promptComponents.objective],
+            ['Tone contribution', promptComponents.tone],
+            ['Creativity contribution', promptComponents.creativity],
+            ['Fallback contribution', promptComponents.fallback],
+            ['Model contribution', promptComponents.model],
+            ['Module Prompt', modulePrompt || 'No niche module selected. Generic assistant prompt only.'],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-xl p-4" style={{ background:'rgba(0,0,0,0.18)', border:'1px solid rgba(255,255,255,0.07)' }}>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-white/34">{label}</p>
+              <p className="mt-2 text-xs leading-5 text-white/64">{value}</p>
+            </div>
+          ))}
+        </div>
+      </PageCard>
+
+      {/* Live prompt preview */}
+      <PageCard className="ring-1 ring-orange-400/18">
         <button onClick={() => setShowPrev(v => !v)}
           className="flex items-center justify-between w-full text-left">
-          <div className="flex items-center gap-2">
-            <Eye className="w-3.5 h-3.5 text-violet-400" />
-            <span className="text-xs font-bold text-white/70">Live Prompt Preview</span>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Eye className="w-3.5 h-3.5 text-orange-400" />
+              <span className="text-xs font-bold text-white/80">Live Prompt Preview</span>
+            </div>
+            <span className="rounded-full px-2.5 py-1 text-[10px] font-bold" style={{ color:lengthStatus.color, background:`${lengthStatus.color}18`, border:`1px solid ${lengthStatus.color}33` }}>
+              {lengthStatus.label} · ~{tokenCount} tokens
+            </span>
           </div>
           {showPrev ? <ChevronUp className="w-3.5 h-3.5 text-white/30" /> : <ChevronDown className="w-3.5 h-3.5 text-white/30" />}
         </button>
@@ -529,14 +667,78 @@ function AIInstructionsPage() {
           {showPrev && (
             <motion.div initial={{ height:0, opacity:0 }} animate={{ height:'auto', opacity:1 }} exit={{ height:0, opacity:0 }}
               className="overflow-hidden">
-              <div className="mt-4 p-4 rounded-xl font-mono text-[11px] text-emerald-300/80 leading-relaxed whitespace-pre-wrap"
-                style={{ background:'rgba(0,0,0,0.3)', border:'1px solid rgba(52,211,153,0.12)' }}>
-                {buildPreviewPrompt(form.persona, form.objective, form.tone, form.fallback_msg)}
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-xs text-white/36">This is the generated system prompt structure used by the runtime prompt builder. Conversation state and knowledge are populated per visitor.</p>
+                <div className="flex gap-2">
+                  <button onClick={copyPrompt} className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold text-white/66 transition-colors hover:text-white"
+                    style={{ background:'rgba(255,255,255,0.045)', border:'1px solid rgba(255,255,255,0.08)' }}>
+                    <Copy className="w-3.5 h-3.5" />{copied ? 'Copied' : 'Copy'}
+                  </button>
+                  <button onClick={() => setShowPromptModal(true)} className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold text-white/66 transition-colors hover:text-white"
+                    style={{ background:'rgba(255,255,255,0.045)', border:'1px solid rgba(255,255,255,0.08)' }}>
+                    <Maximize2 className="w-3.5 h-3.5" />View full prompt
+                  </button>
+                </div>
+              </div>
+              <div className="mt-4 max-h-[560px] overflow-auto rounded-xl p-4 font-mono text-[11px] leading-relaxed whitespace-pre-wrap"
+                style={{ background:'linear-gradient(180deg,rgba(0,0,0,0.48),rgba(0,0,0,0.30))', border:'1px solid rgba(248,163,109,0.18)', color:'rgba(255,244,232,0.78)' }}>
+                <span className="text-[#f8a36d]">{promptPreview.split('\n')[0]}</span>
+                {promptPreview.slice(promptPreview.indexOf('\n'))}
               </div>
             </motion.div>
           )}
         </AnimatePresence>
       </PageCard>
+
+      {/* Live examples */}
+      <PageCard>
+        <SectionHeader icon={MessageSquare} title="Live Example Responses" sub="Preview how the current configuration changes the assistant before saving" />
+        <div className="rounded-xl p-4" style={{ background:'rgba(0,0,0,0.18)', border:'1px solid rgba(255,255,255,0.07)' }}>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-white/34">Example Customer Message</p>
+          <p className="mt-2 text-sm font-semibold text-white/78">&quot;{businessConfig.testChatExamples[0]}&quot;</p>
+        </div>
+        <div className="mt-4 grid gap-4 lg:grid-cols-4">
+          <div className="rounded-xl p-4 lg:col-span-1" style={{ background:'rgba(244,122,99,0.08)', border:'1px solid rgba(244,122,99,0.18)' }}>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-orange-300/70">Current settings</p>
+            <p className="mt-3 text-sm leading-6 text-white/76">{currentExample}</p>
+          </div>
+          {(['professional', 'friendly', 'luxury'] as const).map(exampleTone => (
+            <div key={exampleTone} className="rounded-xl p-4" style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-white/34">{toneLabel(exampleTone)}</p>
+              <p className="mt-3 text-sm leading-6 text-white/58">{generateExampleResponse({ ...form, tone: exampleTone, businessType })}</p>
+            </div>
+          ))}
+        </div>
+      </PageCard>
+
+      <AnimatePresence>
+        {showPromptModal && (
+          <motion.div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/72 p-4 backdrop-blur-xl"
+            initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}>
+            <motion.div className="w-full max-w-5xl rounded-2xl p-5" initial={{ scale:0.98, y:12 }} animate={{ scale:1, y:0 }} exit={{ scale:0.98, y:8 }}
+              style={{ background:'rgba(12,12,11,0.96)', border:'1px solid rgba(248,163,109,0.22)', boxShadow:'0 30px 100px rgba(0,0,0,0.55)' }}>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-base font-black text-white">Full System Prompt</h3>
+                  <p className="mt-1 text-xs text-white/36">Model: {form.model} · Tone: {toneLabel(form.tone)} · Creativity {(form.temperature * 10).toFixed(0)}/10 · ~{tokenCount} tokens</p>
+                </div>
+                <button onClick={() => setShowPromptModal(false)} className="rounded-full p-2 text-white/42 transition-colors hover:bg-white/8 hover:text-white">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="mt-5 max-h-[70vh] overflow-auto rounded-xl p-5 font-mono text-xs leading-6 whitespace-pre-wrap"
+                style={{ background:'rgba(0,0,0,0.45)', border:'1px solid rgba(255,255,255,0.08)', color:'rgba(255,244,232,0.80)' }}>
+                {promptPreview}
+              </div>
+              <div className="mt-4 flex justify-end">
+                <button onClick={copyPrompt} className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-bold text-black transition-colors hover:bg-[#f5f0ea]">
+                  <Copy className="w-3.5 h-3.5" />{copied ? 'Copied' : 'Copy prompt'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <div className="flex justify-end">
         <SaveBtn onClick={handleSave} loading={saving} saved={saved} />
@@ -568,6 +770,8 @@ function KnowledgeBasePage() {
   const [crawlResults,  setCrawlResults]  = useState<CrawlResult[]>([])
   const [crawlDone,     setCrawlDone]     = useState<{ saved: number; failed: number; crawled: number } | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const businessType = useActiveBusinessType()
+  const businessConfig = useMemo(() => getBusinessTypeConfig(businessType), [businessType])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -702,7 +906,7 @@ function KnowledgeBasePage() {
     <div className="flex flex-col gap-5">
       {/* Add source panel */}
       <PageCard>
-        <SectionHeader icon={Plus} title="Add Knowledge Source" sub="Feed your AI agent information about your business, listings, or services" color="#60a5fa" />
+        <SectionHeader icon={Plus} title="Add Knowledge Source" sub="Feed your AI agent information about your business, listings, or services" color="#948f88" />
 
         {/* Mode tabs */}
         <div className="flex gap-1 p-1 rounded-xl mb-5 w-fit"
@@ -711,7 +915,7 @@ function KnowledgeBasePage() {
             <button key={mode} onClick={() => { setAddMode(mode); setError(null) }}
               className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-all"
               style={addMode === mode
-                ? { background:'rgba(96,165,250,0.15)', border:'1px solid rgba(96,165,250,0.3)', color:'#93c5fd' }
+                ? { background:'rgba(148,145,140,0.15)', border:'1px solid rgba(148,145,140,0.3)', color:'#93c5fd' }
                 : { color:'rgba(255,255,255,0.35)' }}>
               {label}
             </button>
@@ -779,7 +983,7 @@ function KnowledgeBasePage() {
             {/* Title (text / url / file modes) */}
             <div className="mb-3">
               <label className="block text-[10px] font-semibold text-white/35 uppercase tracking-widest mb-2">Title</label>
-              <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Property Listings Q2 2026"
+              <input value={title} onChange={e => setTitle(e.target.value)} placeholder={businessType === 'car_rental' ? 'e.g. Fleet, pricing, and rental policy' : 'e.g. Services, pricing, and policies'}
                 className="w-full px-4 py-2.5 rounded-xl text-sm text-white/80 placeholder:text-white/20 outline-none"
                 style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }} />
             </div>
@@ -801,7 +1005,7 @@ function KnowledgeBasePage() {
               <div className="mb-4">
                 <label className="block text-[10px] font-semibold text-white/35 uppercase tracking-widest mb-2">Content</label>
                 <textarea value={content} onChange={e => setContent(e.target.value)} rows={6}
-                  placeholder="Paste any text content here — property descriptions, FAQs, pricing details, policies…"
+                  placeholder={`Paste any text content here — ${businessType === 'car_rental' ? 'fleet details, rental terms, pickup instructions, pricing, policies' : 'service details, FAQs, pricing, policies'}…`}
                   className="w-full px-4 py-3 rounded-xl text-sm text-white/80 placeholder:text-white/20 outline-none resize-none leading-relaxed"
                   style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }} />
                 <div className="text-[10px] text-white/25 mt-2">{content.length} chars</div>
@@ -812,7 +1016,7 @@ function KnowledgeBasePage() {
               <div className="mb-4">
                 <input ref={fileRef} type="file" accept=".txt,.md,.pdf,.csv" onChange={handleFileChange} className="hidden" />
                 <button onClick={() => fileRef.current?.click()}
-                  className="flex flex-col items-center justify-center w-full py-8 rounded-xl transition-all cursor-pointer border-dashed hover:border-blue-400/40"
+                  className="flex flex-col items-center justify-center w-full py-8 rounded-xl transition-all cursor-pointer border-dashed hover:border-stone-400/40"
                   style={{ background:'rgba(255,255,255,0.02)', border:'2px dashed rgba(255,255,255,0.10)' }}>
                   <Upload className="w-6 h-6 text-white/20 mb-2" />
                   <span className="text-sm text-white/40">Click to upload a file</span>
@@ -846,7 +1050,7 @@ function KnowledgeBasePage() {
             disabled={saving || crawlRunning}
             whileTap={{ scale: 0.97 }}
             className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white"
-            style={{ background:'rgba(96,165,250,0.85)', border:'1px solid rgba(147,197,253,0.4)' }}>
+            style={{ background:'rgba(148,145,140,0.85)', border:'1px solid rgba(147,197,253,0.4)' }}>
             {(saving || crawlRunning)
               ? <><motion.span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white" animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity }} />
                   {addMode === 'crawl' ? 'Crawling…' : addMode === 'url' ? 'Fetching…' : 'Saving…'}</>
@@ -858,7 +1062,7 @@ function KnowledgeBasePage() {
       {/* Sources list */}
       <PageCard>
         <div className="flex items-center justify-between mb-4">
-          <SectionHeader icon={Database} title={`Knowledge Sources (${sources.length})`} sub="Active sources are injected into every AI conversation" color="#a78bfa" />
+          <SectionHeader icon={Database} title={`Knowledge Sources (${sources.length})`} sub="Active sources are injected into every AI conversation" color="#f8a36d" />
           <button onClick={load} className="w-8 h-8 rounded-xl flex items-center justify-center text-white/30 hover:text-white/70 transition-colors"
             style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.07)' }}>
             <RefreshCw className="w-3.5 h-3.5" />
@@ -869,7 +1073,7 @@ function KnowledgeBasePage() {
           <div className="flex flex-col items-center justify-center py-12 gap-2">
             <BookOpen className="w-8 h-8 text-white/10" />
             <p className="text-sm text-white/25 font-medium">No knowledge sources yet</p>
-            <p className="text-xs text-white/15">Add a source above to start training your agent</p>
+            <p className="text-xs text-white/15">Add a source above to train your {businessConfig.moduleName.toLowerCase()}</p>
           </div>
         ) : (
           <div className="flex flex-col gap-2">
@@ -878,10 +1082,10 @@ function KnowledgeBasePage() {
               return (
                 <motion.div key={source.id} initial={{ opacity:0, x:-8 }} animate={{ opacity:1, x:0 }} transition={{ delay:i*0.04 }}
                   className="flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all"
-                  style={{ background:'rgba(255,255,255,0.03)', border:`1px solid ${source.is_active ? 'rgba(167,139,250,0.15)' : 'rgba(255,255,255,0.06)'}` }}>
+                  style={{ background:'rgba(255,255,255,0.03)', border:`1px solid ${source.is_active ? 'rgba(244,122,99,0.15)' : 'rgba(255,255,255,0.06)'}` }}>
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{ background: source.is_active ? 'rgba(167,139,250,0.12)' : 'rgba(255,255,255,0.05)' }}>
-                    <Icon className="w-3.5 h-3.5" style={{ color: source.is_active ? '#a78bfa' : 'rgba(255,255,255,0.3)' }} />
+                    style={{ background: source.is_active ? 'rgba(244,122,99,0.12)' : 'rgba(255,255,255,0.05)' }}>
+                    <Icon className="w-3.5 h-3.5" style={{ color: source.is_active ? '#f8a36d' : 'rgba(255,255,255,0.3)' }} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-semibold text-white/80 truncate">{source.title}</div>
@@ -930,6 +1134,35 @@ function LeadQualificationPage({ businessId }: { businessId: string }) {
   const [saving,       setSaving]       = useState(false)
   const [saved,        setSaved]        = useState(false)
   const [toggleErr,    setToggleErr]    = useState<string | null>(null)
+  const businessType = useActiveBusinessType()
+  const isCarRental = businessType === 'car_rental'
+  const bookingRules = isCarRental
+    ? [
+        { key:'requireCity' as const,     label:'Pickup details captured', sub:'Pickup location and pickup time are known' },
+        { key:'requireProperty' as const, label:'Vehicle preference known', sub:'Class, transmission, or seats are known' },
+        { key:'requireContact' as const,  label:'Contact info captured', sub:'Name, phone, or email' },
+      ]
+    : [
+        { key:'requireCity' as const,     label:'Location confirmed', sub:'Knows the target area or city' },
+        { key:'requireProperty' as const, label:'Need clearly described', sub:'Service, product, or request type is known' },
+        { key:'requireContact' as const,  label:'Contact info captured', sub:'Name, phone, or email' },
+      ]
+  const extractionRules = isCarRental
+    ? [
+        { label:'Pickup', rule:'Airport, terminal, office branch, hotel, or custom address' },
+        { label:'Return', rule:'Return date/time and drop-off location when provided' },
+        { label:'Vehicle', rule:'Economy, SUV, Van, automatic/manual, seats' },
+        { label:'Customer', rule:'Name, phone, email, booking number' },
+        { label:'Extension', rule:'"extend", "more days", "keep the car longer"' },
+        { label:'Location help', rule:'"where do I go", "where is my car", airport pickup instructions' },
+      ]
+    : [
+        { label:'Interest', rule:'Service, product, location, budget, timing, and contact details' },
+        { label:'Name', rule:'"My name is X" · "I\'m X" · "Call me X"' },
+        { label:'Phone', rule:'9–15 digit run with optional separators' },
+        { label:'Email', rule:'Standard email regex' },
+        { label:'Timing', rule:'"tomorrow" · "Monday" · "at 12:00" · "morning"' },
+      ]
 
   // Per-business localStorage key so settings don't bleed between accounts
   const storageKey = `ai_qualification_config_${businessId}`
@@ -1016,11 +1249,11 @@ function LeadQualificationPage({ businessId }: { businessId: string }) {
     <div className="flex flex-col gap-5">
       {/* Required fields */}
       <PageCard>
-        <SectionHeader icon={Target} title="Required Fields" sub="Toggles save instantly — use Save to persist order changes" color="#a78bfa" />
+        <SectionHeader icon={Target} title="Required Fields" sub="Toggles save instantly — use Save to persist order changes" color="#f8a36d" />
         <div className="flex items-center gap-3 mb-4 px-3 py-2.5 rounded-xl"
-          style={{ background:'rgba(167,139,250,0.06)', border:'1px solid rgba(167,139,250,0.15)' }}>
+          style={{ background:'rgba(244,122,99,0.06)', border:'1px solid rgba(244,122,99,0.15)' }}>
           <div className="text-xs text-white/50">
-            <span className="font-bold text-violet-300">{requiredCount}</span> required · {slots.length - requiredCount} optional
+            <span className="font-bold text-orange-300">{requiredCount}</span> required · {slots.length - requiredCount} optional
           </div>
           <div className="flex-1" />
           <div className="text-[10px] text-white/30">Qualification requires {requiredCount} slots</div>
@@ -1035,7 +1268,7 @@ function LeadQualificationPage({ businessId }: { businessId: string }) {
         <div className="flex flex-col gap-2">
           {slots.map((slot, i) => (
             <div key={slot.key} className="flex items-center gap-3 px-4 py-3 rounded-xl transition-all"
-              style={{ background: slot.required ? 'rgba(167,139,250,0.06)' : 'rgba(255,255,255,0.02)', border:`1px solid ${slot.required ? 'rgba(167,139,250,0.2)' : 'rgba(255,255,255,0.06)'}` }}>
+              style={{ background: slot.required ? 'rgba(244,122,99,0.06)' : 'rgba(255,255,255,0.02)', border:`1px solid ${slot.required ? 'rgba(244,122,99,0.2)' : 'rgba(255,255,255,0.06)'}` }}>
               <div className="flex flex-col gap-0.5">
                 <button onClick={() => reorderUp(i)} className="text-white/20 hover:text-white/50 transition-colors" title="Move up">
                   <ChevronUp className="w-3 h-3" />
@@ -1086,13 +1319,9 @@ function LeadQualificationPage({ businessId }: { businessId: string }) {
         </PageCard>
 
         <PageCard>
-          <SectionHeader icon={Flame} title="Booking Trigger" sub="When to offer a viewing / booking" color="#fbbf24" />
+          <SectionHeader icon={Flame} title="Booking Trigger" sub={isCarRental ? 'When to check availability or hand over booking' : 'When to offer a booking or next step'} color="#fbbf24" />
           <div className="flex flex-col gap-3">
-            {[
-              { key:'requireCity' as const,     label:'Location confirmed',  sub:'Knows which city/area' },
-              { key:'requireProperty' as const, label:'Property type known',  sub:'apt, house, studio, etc.' },
-              { key:'requireContact' as const,  label:'Contact info captured', sub:'Name, phone, or email' },
-            ].map(item => (
+            {bookingRules.map(item => (
               <div key={item.key} className="flex items-center justify-between px-3 py-2.5 rounded-xl"
                 style={{ background:'rgba(251,191,36,0.05)', border:'1px solid rgba(251,191,36,0.12)' }}>
                 <div>
@@ -1108,22 +1337,12 @@ function LeadQualificationPage({ businessId }: { businessId: string }) {
 
       {/* Extraction rules (read-only reference) */}
       <PageCard>
-        <SectionHeader icon={Brain} title="Extraction Rules" sub="Regex patterns used to detect slot values from user messages" color="#60a5fa" />
+        <SectionHeader icon={Brain} title="Extraction Rules" sub="Regex patterns used to detect slot values from user messages" color="#948f88" />
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {[
-            { label:'City', rule:'Krakow, Warsaw, Dubai + 20 typo variants (krkaow→Krakow)' },
-            { label:'Deal Type', rule:'"rent/rental/lease" → rent · "buy/purchase/for sale" → buy' },
-            { label:'Property', rule:'"apartment/flat/studio/house/villa/penthouse"' },
-            { label:'Rooms', rule:'"2-room" · "2 bedrooms" · "2+1" · "two bedroom"' },
-            { label:'Budget', rule:'"3000 PLN" · "£2500/month" · "AED 5000"' },
-            { label:'Name', rule:'"My name is X" · "I\'m X" · "Call me X"' },
-            { label:'Phone', rule:'9–15 digit run with optional separators' },
-            { label:'Email', rule:'Standard email regex' },
-            { label:'Viewing', rule:'"tomorrow" · "Monday" · "at 12:00" · "morning"' },
-          ].map(r => (
+          {extractionRules.map(r => (
             <div key={r.label} className="flex items-start gap-3 px-3 py-2.5 rounded-xl"
-              style={{ background:'rgba(96,165,250,0.05)', border:'1px solid rgba(96,165,250,0.12)' }}>
-              <span className="text-[10px] font-black text-blue-400 w-16 flex-shrink-0 mt-0.5">{r.label}</span>
+              style={{ background:'rgba(148,145,140,0.05)', border:'1px solid rgba(148,145,140,0.12)' }}>
+              <span className="text-[10px] font-black text-stone-400 w-16 flex-shrink-0 mt-0.5">{r.label}</span>
               <span className="text-[10px] text-white/40 leading-relaxed">{r.rule}</span>
             </div>
           ))}
@@ -1175,6 +1394,9 @@ function TestAIPage({
   const [lastDebug,    setLastDebug]    = useState<ChatMessage['debug'] | null>(null)
   const [showRaw,      setShowRaw]      = useState(false)
   const [rawResponse,  setRawResponse]  = useState<Record<string,unknown> | null>(null)
+  const businessType = useActiveBusinessType()
+  const businessConfig = useMemo(() => getBusinessTypeConfig(businessType), [businessType])
+  const testSlots = useMemo(() => businessConfig.qualificationSlots.map(mapBusinessSlot), [businessConfig])
   const endRef   = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   // Track IDs already reported so we call the callbacks only once per record
@@ -1250,7 +1472,7 @@ function TestAIPage({
   const confirmedSlots = lastDebug?.confirmedSlots ?? {}
   const missingSlots   = lastDebug?.missingSlots   ?? []
   const filledCount    = Object.values(confirmedSlots).filter(Boolean).length
-  const totalSlots     = DEFAULT_SLOT_DEFS.length
+  const totalSlots     = testSlots.length
 
   return (
     <div className="flex flex-col xl:flex-row gap-4 min-h-[600px]">
@@ -1262,10 +1484,11 @@ function TestAIPage({
           style={{ borderBottom:'1px solid rgba(255,255,255,0.07)' }}>
           <div className="flex items-center gap-2.5">
             <div className="w-7 h-7 rounded-lg flex items-center justify-center"
-              style={{ background:'rgba(139,92,246,0.2)' }}>
-              <FlaskConical className="w-3.5 h-3.5 text-violet-400" />
+              style={{ background:'rgba(244,122,99,0.2)' }}>
+              <FlaskConical className="w-3.5 h-3.5 text-orange-400" />
             </div>
             <span className="text-sm font-bold text-white">AI Simulator</span>
+            <span className="text-[10px] text-orange-300/60 font-semibold">{businessConfig.moduleName}</span>
             {convId && (
               <span className="text-[10px] text-white/25 font-mono truncate max-w-[120px]">{convId.slice(0,8)}…</span>
             )}
@@ -1282,13 +1505,13 @@ function TestAIPage({
           {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
               <div className="w-12 h-12 rounded-2xl flex items-center justify-center"
-                style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.2)' }}>
-                <MessageSquare className="w-6 h-6 text-violet-400" />
+                style={{ background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.2)' }}>
+                <MessageSquare className="w-6 h-6 text-orange-400" />
               </div>
               <p className="text-sm font-semibold text-white/40">Start a conversation</p>
               <p className="text-xs text-white/20">Type a message below to test your AI agent</p>
               <div className="flex flex-col gap-1.5 mt-2 w-full max-w-xs">
-                {["Hi, I'm looking for a 2-bedroom flat in Krakow", "I need to rent an apartment, budget 3500 PLN", "My name is Adam and I want to buy a house"].map(s => (
+                {businessConfig.testChatExamples.map(s => (
                   <button key={s} onClick={() => { setInput(s); inputRef.current?.focus() }}
                     className="px-3 py-2 rounded-xl text-left text-[11px] text-white/40 hover:text-white/70 transition-all"
                     style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.07)' }}>
@@ -1306,15 +1529,15 @@ function TestAIPage({
                     {msg.role !== 'user' && (
                       <div className="flex items-center gap-1.5 mb-1.5">
                         <div className="w-4 h-4 rounded flex items-center justify-center"
-                          style={{ background:'rgba(139,92,246,0.25)' }}>
-                          <Bot className="w-2.5 h-2.5 text-violet-400" />
+                          style={{ background:'rgba(244,122,99,0.25)' }}>
+                          <Bot className="w-2.5 h-2.5 text-orange-400" />
                         </div>
-                        <span className="text-[9px] font-bold text-violet-400/60 uppercase tracking-wider">AI Agent</span>
+                        <span className="text-[9px] font-bold text-orange-400/60 uppercase tracking-wider">AI Agent</span>
                       </div>
                     )}
                     <div className="rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed whitespace-pre-wrap"
                       style={msg.role !== 'user' ? {
-                        background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.2)',
+                        background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.2)',
                         color:'rgba(255,255,255,0.78)', borderTopLeftRadius:4,
                       } : {
                         background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.1)',
@@ -1333,9 +1556,9 @@ function TestAIPage({
               {sending && (
                 <div className="flex justify-start">
                   <div className="px-4 py-3 rounded-2xl rounded-tl-sm flex gap-1 items-center"
-                    style={{ background:'rgba(139,92,246,0.10)', border:'1px solid rgba(139,92,246,0.15)' }}>
+                    style={{ background:'rgba(244,122,99,0.10)', border:'1px solid rgba(244,122,99,0.15)' }}>
                     {[0,1,2].map(j => (
-                      <motion.div key={j} className="w-1.5 h-1.5 rounded-full bg-violet-400"
+                      <motion.div key={j} className="w-1.5 h-1.5 rounded-full bg-orange-400"
                         animate={{ y:[0,-4,0] }} transition={{ repeat:Infinity, duration:0.8, delay:j*0.15 }} />
                     ))}
                   </div>
@@ -1355,7 +1578,7 @@ function TestAIPage({
               style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }} />
             <motion.button onClick={send} disabled={!input.trim() || sending} whileTap={{ scale:0.95 }}
               className="px-4 py-2.5 rounded-xl flex items-center justify-center"
-              style={{ background:'rgba(124,58,237,0.85)', border:'1px solid rgba(167,139,250,0.4)' }}>
+              style={{ background:'rgba(244,122,99,0.85)', border:'1px solid rgba(244,122,99,0.4)' }}>
               <Play className="w-4 h-4 text-white" />
             </motion.button>
           </div>
@@ -1381,7 +1604,7 @@ function TestAIPage({
               <span>{filledCount} / {totalSlots}</span>
             </div>
             <div className="h-1.5 rounded-full overflow-hidden" style={{ background:'rgba(255,255,255,0.07)' }}>
-              <div className="h-full rounded-full transition-all" style={{ width:`${(filledCount/totalSlots)*100}%`, background:'linear-gradient(90deg,#7c3aed,#34d399)' }} />
+              <div className="h-full rounded-full transition-all" style={{ width:`${(filledCount/totalSlots)*100}%`, background:'linear-gradient(90deg,#171412,#34d399)' }} />
             </div>
           </div>
         </div>
@@ -1391,7 +1614,7 @@ function TestAIPage({
           style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}>
           <div className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-3">Extracted Fields</div>
           <div className="flex flex-col gap-1.5">
-            {DEFAULT_SLOT_DEFS.map(slot => {
+            {testSlots.map(slot => {
               const val = confirmedSlots[slot.key]
               return (
                 <div key={slot.key} className="flex items-center gap-2">
@@ -1420,7 +1643,7 @@ function TestAIPage({
           ) : (
             <div className="flex flex-col gap-1.5">
               {missingSlots.map((key, i) => {
-                const def = DEFAULT_SLOT_DEFS.find(s => s.key === key)
+                const def = testSlots.find(s => s.key === key)
                 return (
                   <div key={key} className="flex items-center gap-2">
                     <span className="text-[10px] font-bold text-amber-400/60">{i + 1}.</span>

@@ -51,7 +51,7 @@ interface ChatMessage {
 }
 
 const STATUS_STYLE: Record<ConversationStatus, { label: string; color: string; bg: string; icon: typeof Bot }> = {
-  ai_active: { label: 'AI Active', color: '#60a5fa', bg: 'rgba(96,165,250,0.12)', icon: Bot },
+  ai_active: { label: 'AI Active', color: '#948f88', bg: 'rgba(148,145,140,0.12)', icon: Bot },
   handover_requested: { label: 'Handover Requested', color: '#fbbf24', bg: 'rgba(251,191,36,0.12)', icon: Headphones },
   live_chat: { label: 'Live Chat', color: '#34d399', bg: 'rgba(52,211,153,0.12)', icon: MessageSquare },
   resolved: { label: 'Resolved', color: 'rgba(255,255,255,0.38)', bg: 'rgba(255,255,255,0.06)', icon: CheckCircle },
@@ -242,7 +242,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
           {[
             { label: 'Open handovers', value: conversations.filter(c => c.status === 'handover_requested').length, Icon: Headphones, color: '#fbbf24' },
             { label: 'Live chats', value: conversations.filter(c => c.status === 'live_chat').length, Icon: MessageSquare, color: '#34d399' },
-            { label: 'Unread', value: conversations.reduce((sum, c) => sum + c.unread_count, 0), Icon: Clock, color: '#60a5fa' },
+            { label: 'Unread', value: conversations.reduce((sum, c) => sum + c.unread_count, 0), Icon: Clock, color: '#948f88' },
           ].map(({ label, value, Icon, color }) => (
             <div key={label} className="rounded-2xl p-4" style={{ background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.07)' }}>
               <Icon className="mb-3 h-4 w-4" style={{ color }} />
@@ -271,7 +271,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
                 key={conversation.id}
                 onClick={() => setSelectedId(conversation.id)}
                 className="block w-full border-t border-white/[0.05] p-4 text-left transition-colors hover:bg-white/[0.035]"
-                style={{ background: selected?.id === conversation.id ? 'rgba(139,92,246,0.08)' : 'transparent' }}
+                style={{ background: selected?.id === conversation.id ? 'rgba(244,122,99,0.08)' : 'transparent' }}
               >
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="truncate text-sm font-bold text-white/85">{conversation.lead?.name || 'Website visitor'}</div>
@@ -281,7 +281,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
                 <div className="flex items-center justify-between">
                   <StatusPill status={conversation.status} />
                   {conversation.unread_count > 0 && (
-                    <span className="rounded-full bg-violet-500 px-2 py-0.5 text-[10px] font-black text-white">{conversation.unread_count}</span>
+                    <span className="rounded-full bg-orange-500 px-2 py-0.5 text-[10px] font-black text-white">{conversation.unread_count}</span>
                   )}
                 </div>
               </button>
@@ -312,7 +312,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
                           ? { background: 'rgba(255,255,255,0.045)', border: '1px solid rgba(255,255,255,0.06)' }
                           : isCustomer
                             ? { background: 'rgba(255,255,255,0.055)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.78)' }
-                            : { background: isHuman ? 'rgba(52,211,153,0.13)' : 'rgba(96,165,250,0.13)', border: `1px solid ${isHuman ? 'rgba(52,211,153,0.25)' : 'rgba(96,165,250,0.23)'}`, color: 'rgba(255,255,255,0.86)' }}
+                            : { background: isHuman ? 'rgba(52,211,153,0.13)' : 'rgba(148,145,140,0.13)', border: `1px solid ${isHuman ? 'rgba(52,211,153,0.25)' : 'rgba(148,145,140,0.23)'}`, color: 'rgba(255,255,255,0.86)' }}
                       >
                         {!isSystem && <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-white/30">{isCustomer ? 'Customer' : isHuman ? 'Human' : 'AI'}</div>}
                         {message.content}
@@ -331,7 +331,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
                     className="flex-1 rounded-xl px-4 py-3 text-sm text-white outline-none"
                     style={{ background: 'rgba(255,255,255,0.045)', border: '1px solid rgba(255,255,255,0.08)' }}
                   />
-                  <button onClick={() => void sendReply()} disabled={sending || !reply.trim()} className="rounded-xl px-4 text-white disabled:opacity-40" style={{ background: 'linear-gradient(135deg,#7c3aed,#2563eb)' }}>
+                  <button onClick={() => void sendReply()} disabled={sending || !reply.trim()} className="rounded-xl px-4 text-white disabled:opacity-40" style={{ background: 'linear-gradient(135deg,#171412,#f89a57)' }}>
                     <Send className="h-4 w-4" />
                   </button>
                 </div>
@@ -346,8 +346,8 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
           {selected ? (
             <div className="space-y-5">
               <div>
-                <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl" style={{ background: 'rgba(139,92,246,0.14)' }}>
-                  <User className="h-5 w-5 text-violet-300" />
+                <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl" style={{ background: 'rgba(244,122,99,0.14)' }}>
+                  <User className="h-5 w-5 text-orange-300" />
                 </div>
                 <div className="text-lg font-black text-white">{selected.lead?.name || 'Website visitor'}</div>
                 <div className="text-xs text-white/30">Conversation details</div>
@@ -360,7 +360,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
               </div>
               <div className="space-y-2">
                 <button onClick={() => void updateStatus('live_chat')} className="w-full rounded-xl px-4 py-3 text-sm font-bold text-white" style={{ background: 'rgba(52,211,153,0.14)', border: '1px solid rgba(52,211,153,0.25)' }}>Take Over</button>
-                <button onClick={() => void updateStatus('ai_active')} className="w-full rounded-xl px-4 py-3 text-sm font-bold text-white" style={{ background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.22)' }}>Return to AI</button>
+                <button onClick={() => void updateStatus('ai_active')} className="w-full rounded-xl px-4 py-3 text-sm font-bold text-white" style={{ background: 'rgba(148,145,140,0.12)', border: '1px solid rgba(148,145,140,0.22)' }}>Return to AI</button>
                 <button onClick={() => void updateStatus('resolved')} className="w-full rounded-xl px-4 py-3 text-sm font-bold text-white/70" style={{ background: 'rgba(255,255,255,0.045)', border: '1px solid rgba(255,255,255,0.08)' }}>Mark Resolved</button>
               </div>
             </div>

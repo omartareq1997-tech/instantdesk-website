@@ -1,6 +1,6 @@
 'use client'
 
-import { Zap, Mail, Phone, MapPin } from 'lucide-react'
+import { Mail, Phone, MapPin } from 'lucide-react'
 
 function XIcon({ className }: { className?: string }) {
   return (
@@ -37,9 +37,9 @@ const footerLinks = {
   Company: [
     { label: 'About', href: '#how-it-works' },
     { label: 'Blog', href: '#testimonials' },
-    { label: 'Careers', href: 'mailto:hello@instantdesk.pl?subject=Careers' },
-    { label: 'Press', href: 'mailto:hello@instantdesk.pl?subject=Press' },
-    { label: 'Contact', href: 'mailto:hello@instantdesk.pl' },
+    { label: 'Careers', href: 'mailto:contact@instantdesk.pl?subject=Careers' },
+    { label: 'Press', href: 'mailto:contact@instantdesk.pl?subject=Press' },
+    { label: 'Contact', href: 'mailto:contact@instantdesk.pl' },
   ],
   Industries: [
     { label: 'Healthcare', href: '#features' },
@@ -49,10 +49,10 @@ const footerLinks = {
     { label: 'Fitness', href: '#interactive-demo' },
   ],
   Legal: [
-    { label: 'Privacy Policy', href: 'mailto:hello@instantdesk.pl?subject=Privacy%20Policy' },
-    { label: 'Terms of Service', href: 'mailto:hello@instantdesk.pl?subject=Terms%20of%20Service' },
-    { label: 'GDPR', href: 'mailto:hello@instantdesk.pl?subject=GDPR' },
-    { label: 'Cookie Policy', href: 'mailto:hello@instantdesk.pl?subject=Cookie%20Policy' },
+    { label: 'Privacy Policy', href: 'mailto:contact@instantdesk.pl?subject=Privacy%20Policy' },
+    { label: 'Terms of Service', href: 'mailto:contact@instantdesk.pl?subject=Terms%20of%20Service' },
+    { label: 'GDPR', href: 'mailto:contact@instantdesk.pl?subject=GDPR' },
+    { label: 'Cookie Policy', href: 'mailto:contact@instantdesk.pl?subject=Cookie%20Policy' },
   ],
 }
 
@@ -60,7 +60,7 @@ export default function Footer() {
   return (
     <footer className="relative border-t border-white/5 pt-20 pb-12 overflow-hidden">
       <div className="absolute inset-0 -z-10">
-        <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-full h-64 bg-gradient-to-t from-violet-950/10 to-transparent" />
+        <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-full h-64 bg-gradient-to-t from-orange-950/10 to-transparent" />
       </div>
 
       <div className="max-w-7xl mx-auto px-6">
@@ -68,28 +68,19 @@ export default function Footer() {
           {/* Brand */}
           <div className="col-span-2">
             <div className="flex items-center gap-2 mb-5">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
-                <Zap className="w-4 h-4 text-white" />
-              </div>
-              <span className="font-bold text-xl tracking-tight text-white">
-                Instant<span className="text-gradient-blue">Desk</span>
-              </span>
+              <img src="/assets/instantdesk-logo.png" alt="InstantDesk" className="h-9 w-auto" />
             </div>
             <p className="text-sm text-white/35 leading-relaxed mb-6 max-w-xs">
               AI automation systems that turn missed leads into booked clients. Built for ambitious businesses.
             </p>
             <div className="flex flex-col gap-2.5 text-sm text-white/35">
-              <a href="mailto:hello@instantdesk.pl" className="flex items-center gap-2 hover:text-white/70 transition-colors">
+              <a href="mailto:contact@instantdesk.pl" className="flex items-center gap-2 hover:text-white/70 transition-colors">
                 <Mail className="w-3.5 h-3.5" />
-                hello@instantdesk.pl
-              </a>
-              <a href="tel:+48000000000" className="flex items-center gap-2 hover:text-white/70 transition-colors">
-                <Phone className="w-3.5 h-3.5" />
-                +48 000 000 000
+                contact@instantdesk.pl
               </a>
               <span className="flex items-center gap-2">
                 <MapPin className="w-3.5 h-3.5" />
-                Warsaw, Poland
+                Built in Poland for service businesses
               </span>
             </div>
           </div>
@@ -120,13 +111,13 @@ export default function Footer() {
             © {new Date().getFullYear()} InstantDesk. All rights reserved. Registered in Poland.
           </p>
           <div className="flex items-center gap-4">
-            <a href="mailto:hello@instantdesk.pl?subject=InstantDesk%20social" aria-label="X (Twitter)" className="text-white/25 hover:text-white/60 transition-colors">
+            <a href="mailto:contact@instantdesk.pl?subject=InstantDesk%20social" aria-label="X (Twitter)" className="text-white/25 hover:text-white/60 transition-colors">
               <XIcon className="w-4 h-4" />
             </a>
-            <a href="mailto:hello@instantdesk.pl?subject=InstantDesk%20LinkedIn" aria-label="LinkedIn" className="text-white/25 hover:text-white/60 transition-colors">
+            <a href="mailto:contact@instantdesk.pl?subject=InstantDesk%20LinkedIn" aria-label="LinkedIn" className="text-white/25 hover:text-white/60 transition-colors">
               <LinkedInIcon className="w-4 h-4" />
             </a>
-            <a href="mailto:hello@instantdesk.pl?subject=InstantDesk%20Facebook" aria-label="Facebook" className="text-white/25 hover:text-white/60 transition-colors">
+            <a href="mailto:contact@instantdesk.pl?subject=InstantDesk%20Facebook" aria-label="Facebook" className="text-white/25 hover:text-white/60 transition-colors">
               <FacebookIcon className="w-4 h-4" />
             </a>
           </div>

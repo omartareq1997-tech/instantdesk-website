@@ -25,7 +25,7 @@ const BAR_DATA = [
 ]
 
 const CHANNEL_DATA = [
-  { name: 'Website Chat', pct: 34, Icon: GlobeIcon,    color: '#60a5fa' },
+  { name: 'Website Chat', pct: 34, Icon: GlobeIcon,    color: '#948f88' },
   { name: 'WhatsApp',    pct: 28, Icon: WhatsAppIcon,  color: '#25D366' },
   { name: 'Instagram',   pct: 19, Icon: InstagramIcon, color: '#E1306C' },
   { name: 'Messenger',   pct: 12, Icon: MessengerIcon, color: '#0084FF' },
@@ -40,8 +40,8 @@ const CONVOS = [
 ]
 
 const AI_METRICS = [
-  { label: 'Accuracy',     value: '98.7%', sub: 'response quality',    color: '#a78bfa', bg: 'rgba(167,139,250,0.08)' },
-  { label: 'Avg Response', value: '2.3s',  sub: 'across all channels', color: '#60a5fa', bg: 'rgba(96,165,250,0.08)'  },
+  { label: 'Accuracy',     value: '98.7%', sub: 'response quality',    color: '#f8a36d', bg: 'rgba(244,122,99,0.08)' },
+  { label: 'Avg Response', value: '2.3s',  sub: 'across all channels', color: '#948f88', bg: 'rgba(148,145,140,0.08)'  },
   { label: 'CSAT Score',   value: '4.9★',  sub: 'client satisfaction', color: '#fbbf24', bg: 'rgba(251,191,36,0.08)' },
   { label: 'Handoff Rate', value: '1.3%',  sub: 'to human agents',     color: '#34d399', bg: 'rgba(52,211,153,0.08)' },
 ]
@@ -49,8 +49,8 @@ const AI_METRICS = [
 const SPARKLINE_PTS = '0,28 20,20 40,32 60,16 80,8 100,22 120,14'
 
 const KPI = [
-  { label: 'Leads Captured',  value: 1284, suffix: '',   trend: '+23%', up: true,  icon: Users,         color: '#a78bfa', bg: 'rgba(167,139,250,0.08)', border: 'rgba(167,139,250,0.15)' },
-  { label: 'Appointments',     value: 347,  suffix: '',   trend: '+18%', up: true,  icon: CalendarCheck, color: '#60a5fa', bg: 'rgba(96,165,250,0.08)',  border: 'rgba(96,165,250,0.15)'  },
+  { label: 'Leads Captured',  value: 1284, suffix: '',   trend: '+23%', up: true,  icon: Users,         color: '#f8a36d', bg: 'rgba(244,122,99,0.08)', border: 'rgba(244,122,99,0.15)' },
+  { label: 'Appointments',     value: 347,  suffix: '',   trend: '+18%', up: true,  icon: CalendarCheck, color: '#948f88', bg: 'rgba(148,145,140,0.08)',  border: 'rgba(148,145,140,0.15)'  },
   { label: 'Avg Response',     value: null, static: '2.3s',trend:'+0.4s faster',up:true,icon: Zap,      color: '#34d399', bg: 'rgba(52,211,153,0.08)',  border: 'rgba(52,211,153,0.15)'  },
   { label: 'Conversations',    value: 8491, suffix: '',   trend: '+31%', up: true,  icon: MessageSquare, color: '#fb923c', bg: 'rgba(251,146,60,0.08)',  border: 'rgba(251,146,60,0.15)'  },
 ]
@@ -101,12 +101,12 @@ function LeadsBarChart() {
     <svg ref={ref} viewBox={`0 0 ${W} ${H}`} className="w-full" preserveAspectRatio="none">
       <defs>
         <linearGradient id="barG" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#7c3aed" />
-          <stop offset="100%" stopColor="#2563eb" stopOpacity="0.7" />
+          <stop offset="0%" stopColor="#171412" />
+          <stop offset="100%" stopColor="#f89a57" stopOpacity="0.7" />
         </linearGradient>
         <linearGradient id="barGToday" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#a78bfa" />
-          <stop offset="100%" stopColor="#60a5fa" />
+          <stop offset="0%" stopColor="#f8a36d" />
+          <stop offset="100%" stopColor="#948f88" />
         </linearGradient>
       </defs>
 
@@ -139,7 +139,7 @@ function LeadsBarChart() {
             {d.today && (
               <motion.rect
                 x={bx} y={by} width={bw} height={bh} rx={4} ry={4}
-                fill="rgba(167,139,250,0.12)"
+                fill="rgba(244,122,99,0.12)"
                 initial={{ opacity: 0 }} animate={inView ? { opacity: [0, 0.6, 0] } : {}}
                 transition={{ delay: 1.2, duration: 1.6, repeat: Infinity }}
               />
@@ -147,7 +147,7 @@ function LeadsBarChart() {
             <text
               x={bx + bw / 2} y={BOTTOM + 10}
               textAnchor="middle" fontSize="7"
-              fill={d.today ? '#a78bfa' : 'rgba(255,255,255,0.3)'}
+              fill={d.today ? '#f8a36d' : 'rgba(255,255,255,0.3)'}
               fontWeight={d.today ? '700' : '400'}
             >
               {d.day}
@@ -168,8 +168,8 @@ function Sparkline() {
     <svg ref={ref} viewBox="0 0 120 40" className="w-full h-8" preserveAspectRatio="none">
       <defs>
         <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#60a5fa" stopOpacity="0.3" />
-          <stop offset="100%" stopColor="#60a5fa" stopOpacity="0" />
+          <stop offset="0%" stopColor="#948f88" stopOpacity="0.3" />
+          <stop offset="100%" stopColor="#948f88" stopOpacity="0" />
         </linearGradient>
       </defs>
       <motion.path
@@ -180,7 +180,7 @@ function Sparkline() {
       />
       <motion.polyline
         points={SPARKLINE_PTS}
-        fill="none" stroke="#60a5fa" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+        fill="none" stroke="#948f88" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
         initial={{ pathLength: 0 }} animate={inView ? { pathLength: 1 } : {}}
         transition={{ delay: 0.4, duration: 1.2, ease: 'easeInOut' }}
       />
@@ -199,7 +199,7 @@ export default function DashboardPreview() {
         <div
           className="absolute inset-0 opacity-[0.025]"
           style={{
-            backgroundImage: 'radial-gradient(circle, rgba(139,92,246,1) 1px, transparent 1px)',
+            backgroundImage: 'radial-gradient(circle, rgba(244,122,99,1) 1px, transparent 1px)',
             backgroundSize: '40px 40px',
           }}
         />
@@ -215,8 +215,8 @@ export default function DashboardPreview() {
           transition={{ duration: 0.6 }}
           className="text-center mb-16"
         >
-          <span className="inline-flex items-center gap-2 text-xs font-semibold tracking-widest uppercase text-violet-400 mb-5">
-            <span className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
+          <span className="inline-flex items-center gap-2 text-xs font-semibold tracking-widest uppercase text-orange-400 mb-5">
+            <span className="w-2 h-2 rounded-full bg-orange-400 animate-pulse" />
             Real-time analytics
           </span>
           <h2 className="text-4xl md:text-5xl font-black text-white mb-5 leading-tight">
@@ -239,7 +239,7 @@ export default function DashboardPreview() {
           {/* Screen glow */}
           <div
             className="absolute -inset-6 -z-10 rounded-3xl blur-3xl opacity-25"
-            style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.4), rgba(37,99,235,0.3))' }}
+            style={{ background: 'linear-gradient(135deg, rgba(244,122,99,0.4), rgba(248,154,87,0.3))' }}
           />
 
           {/* Browser frame */}
@@ -247,7 +247,7 @@ export default function DashboardPreview() {
             className="rounded-2xl overflow-hidden"
             style={{
               background: 'rgba(8,8,22,0.98)',
-              border: '1px solid rgba(139,92,246,0.2)',
+              border: '1px solid rgba(244,122,99,0.2)',
               boxShadow: [
                 '0 48px 120px rgba(0,0,0,0.8)',
                 '0 0 0 1px rgba(255,255,255,0.04)',
@@ -300,7 +300,7 @@ export default function DashboardPreview() {
                     <div className="flex items-center gap-2 px-5 mb-7">
                       <div
                         className="w-7 h-7 rounded-lg flex items-center justify-center"
-                        style={{ background: 'linear-gradient(135deg,#7c3aed,#2563eb)' }}
+                        style={{ background: 'linear-gradient(135deg,#171412,#f89a57)' }}
                       >
                         <Zap className="w-3.5 h-3.5 text-white" />
                       </div>
@@ -314,15 +314,15 @@ export default function DashboardPreview() {
                           key={label}
                           className="flex items-center gap-2.5 px-3 py-2 rounded-xl cursor-pointer transition-all"
                           style={active ? {
-                            background: 'rgba(139,92,246,0.12)',
-                            border: '1px solid rgba(139,92,246,0.2)',
+                            background: 'rgba(244,122,99,0.12)',
+                            border: '1px solid rgba(244,122,99,0.2)',
                           } : {
                             border: '1px solid transparent',
                           }}
                         >
                           <Icon
                             className="w-4 h-4 flex-shrink-0"
-                            style={{ color: active ? '#a78bfa' : 'rgba(255,255,255,0.3)' }}
+                            style={{ color: active ? '#f8a36d' : 'rgba(255,255,255,0.3)' }}
                           />
                           <span
                             className="text-xs font-medium flex-1"
@@ -333,7 +333,7 @@ export default function DashboardPreview() {
                           {badge && (
                             <span
                               className="text-[9px] font-black px-1.5 py-0.5 rounded-full"
-                              style={{ background: 'rgba(167,139,250,0.2)', color: '#a78bfa' }}
+                              style={{ background: 'rgba(244,122,99,0.2)', color: '#f8a36d' }}
                             >
                               {badge}
                             </span>
@@ -388,7 +388,7 @@ export default function DashboardPreview() {
                         </div>
                         <div
                           className="w-7 h-7 rounded-full flex items-center justify-center text-[9px] font-black text-white"
-                          style={{ background: 'linear-gradient(135deg,#7c3aed,#2563eb)' }}
+                          style={{ background: 'linear-gradient(135deg,#171412,#f89a57)' }}
                         >
                           OT
                         </div>
@@ -450,7 +450,7 @@ export default function DashboardPreview() {
                           <div className="flex items-center justify-between mb-3">
                             <div>
                               <p className="text-xs font-bold text-white/70">Lead Activity</p>
-                              <p className="text-[10px] text-white/25">Last 7 days · <span style={{ color: '#a78bfa' }}>1,284 total</span></p>
+                              <p className="text-[10px] text-white/25">Last 7 days · <span style={{ color: '#f8a36d' }}>1,284 total</span></p>
                             </div>
                             <div
                               className="flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full"
@@ -518,7 +518,7 @@ export default function DashboardPreview() {
                             <p className="text-xs font-bold text-white/70">Recent Conversations</p>
                             <span
                               className="text-[9px] font-semibold px-2 py-0.5 rounded-full"
-                              style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}
+                              style={{ background: 'rgba(244,122,99,0.12)', color: '#f8a36d', border: '1px solid rgba(244,122,99,0.2)' }}
                             >
                               All AI-handled ✓
                             </span>
@@ -589,7 +589,7 @@ export default function DashboardPreview() {
                           <div className="flex items-center gap-2 mb-1">
                             <div
                               className="w-6 h-6 rounded-lg flex items-center justify-center"
-                              style={{ background: 'linear-gradient(135deg,#7c3aed,#2563eb)' }}
+                              style={{ background: 'linear-gradient(135deg,#171412,#f89a57)' }}
                             >
                               <Bot className="w-3 h-3 text-white" />
                             </div>
@@ -653,7 +653,7 @@ export default function DashboardPreview() {
               className="flex items-center gap-2 text-xs text-white/40 px-3.5 py-1.5 rounded-full"
               style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}
             >
-              <CheckCircle className="w-3 h-3 text-violet-500" />
+              <CheckCircle className="w-3 h-3 text-orange-500" />
               {feat}
             </span>
           ))}

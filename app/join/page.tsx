@@ -46,15 +46,12 @@ export default async function JoinPage({ searchParams }: Props) {
 function ErrorPage({ title, message, showLogin = false }: { title: string; message: string; showLogin?: boolean }) {
   return (
     <div
-      className="min-h-screen flex items-center justify-center px-4"
-      style={{ background: '#050510' }}
+      className="auth-premium-bg min-h-screen flex items-center justify-center px-4"
     >
       <div
-        className="w-full max-w-sm rounded-2xl px-8 py-10 flex flex-col items-center gap-4 text-center"
+        className="auth-premium-card w-full max-w-sm rounded-2xl px-8 py-10 flex flex-col items-center gap-4 text-center"
         style={{
-          background: 'rgba(7,7,25,0.90)',
           border:     '1px solid rgba(248,113,113,0.2)',
-          boxShadow:  '0 32px 80px rgba(0,0,0,0.7)',
         }}
       >
         <div
@@ -70,9 +67,9 @@ function ErrorPage({ title, message, showLogin = false }: { title: string; messa
             href="/client-login"
             className="mt-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all"
             style={{
-              background: 'rgba(139,92,246,0.15)',
-              border:     '1px solid rgba(139,92,246,0.3)',
-              color:      '#c4b5fd',
+              background: 'rgba(244,122,99,0.15)',
+              border:     '1px solid rgba(244,122,99,0.3)',
+              color:      '#f8a36d',
             }}
           >
             Go to Login

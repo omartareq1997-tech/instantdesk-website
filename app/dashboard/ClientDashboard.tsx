@@ -11,6 +11,7 @@ import {
   MessageSquare, SlidersHorizontal, Volume2, VolumeX, ArrowUpDown, Plus,
   History, ScrollText, Undo2, Pencil, Trash2, CalendarPlus, MoveRight,
   UserPlus, Copy, Check, UserCog, Crown, Eye, Bot, BookOpen, FlaskConical, Brain, Headphones,
+  Car, MapPin, FileText, KeyRound, CreditCard, UploadCloud, ExternalLink, Wrench,
 } from 'lucide-react'
 import LeadPanel from './LeadPanel'
 import AIAgentSection from './AIAgentSection'
@@ -23,11 +24,13 @@ import AutomationCenter from './AutomationCenter'
 import type { DashboardData, IntegrationRow, OverviewMetrics, TeamMember, Role } from './types'
 import { supabase } from '../lib/supabase'
 import { getPermissions, type Permissions } from '../lib/permissions'
+import type { AvailabilityMatch, RentalBooking, RentalCar, RentalLocation, RentalSettings } from '../lib/rental'
+import { BUSINESS_TYPE_CONFIG, CANONICAL_BUSINESS_TYPES, normalizeBusinessType } from '../lib/businessTypes'
 
 /* ─── Types ──────────────────────────────────────────────────── */
 
 type Section      = 'overview' | 'analytics' | 'pipeline' | 'activity' | 'appointments' | 'automation' | 'settings' | 'log' | 'team'
-                  | 'live_chat' | 'ai_overview' | 'ai_instructions' | 'ai_knowledge' | 'ai_qualification' | 'ai_test'
+                  | 'live_chat' | 'rental_ops' | 'ai_overview' | 'ai_instructions' | 'ai_knowledge' | 'ai_qualification' | 'ai_test'
 type LeadStatus   = 'new' | 'contacted' | 'demo_booked' | 'won' | 'lost'
 type ScoreLabel   = 'hot' | 'warm' | 'cold'
 type ApptStatus   = 'confirmed' | 'pending' | 'completed' | 'cancelled'
@@ -65,17 +68,17 @@ interface ToastItem {
 
 const AUTOMATIONS = [
   { id:'whatsapp', label:'WhatsApp Bot',         color:'#34d399', Icon:MessageCircle, description:'Auto-replies and lead capture via WhatsApp Business API', status:'active',    lastActivity:'2 min ago',  stat1Label:'Messages this week', stat1Value:'127', stat2Label:'Leads captured',  stat2Value:'8'        },
-  { id:'webchat',  label:'Website Chat Widget',  color:'#60a5fa', Icon:MessageSquare, description:'Embedded live chat on your website for instant engagement',  status:'active',    lastActivity:'8 min ago',  stat1Label:'Chats this week',    stat1Value:'89',  stat2Label:'Leads captured',  stat2Value:'5'        },
+  { id:'webchat',  label:'Website Chat Widget',  color:'#948f88', Icon:MessageSquare, description:'Embedded live chat on your website for instant engagement',  status:'active',    lastActivity:'8 min ago',  stat1Label:'Chats this week',    stat1Value:'89',  stat2Label:'Leads captured',  stat2Value:'5'        },
   { id:'email',    label:'Email Follow-up',       color:'#fbbf24', Icon:Mail,          description:"Automated follow-up sequences for leads that haven't responded", status:'active', lastActivity:'1 hour ago', stat1Label:'Emails sent',        stat1Value:'34',  stat2Label:'Open rate',       stat2Value:'68%'      },
-  { id:'crm',      label:'Google Sheets / CRM',   color:'#a78bfa', Icon:Database,      description:'All leads and conversations synced automatically to your sheet', status:'connected', lastActivity:'5 min ago', stat1Label:'Records synced',  stat1Value:'47',  stat2Label:'Last sync',       stat2Value:'5 min ago' },
+  { id:'crm',      label:'Google Sheets / CRM',   color:'#f8a36d', Icon:Database,      description:'All leads and conversations synced automatically to your sheet', status:'connected', lastActivity:'5 min ago', stat1Label:'Records synced',  stat1Value:'47',  stat2Label:'Last sync',       stat2Value:'5 min ago' },
 ]
 
 
 /* ─── Config ─────────────────────────────────────────────────── */
 
 const STATUS_CFG: Record<LeadStatus, { label:string; color:string; bg:string; border:string }> = {
-  new:         { label:'New',         color:'#a78bfa', bg:'rgba(167,139,250,0.10)', border:'rgba(167,139,250,0.25)' },
-  contacted:   { label:'Contacted',   color:'#60a5fa', bg:'rgba(96,165,250,0.10)',  border:'rgba(96,165,250,0.25)'  },
+  new:         { label:'New',         color:'#f8a36d', bg:'rgba(244,122,99,0.10)', border:'rgba(244,122,99,0.25)' },
+  contacted:   { label:'Contacted',   color:'#948f88', bg:'rgba(148,145,140,0.10)',  border:'rgba(148,145,140,0.25)'  },
   demo_booked: { label:'Demo Booked', color:'#fbbf24', bg:'rgba(251,191,36,0.10)',  border:'rgba(251,191,36,0.25)'  },
   won:         { label:'Won',         color:'#34d399', bg:'rgba(52,211,153,0.10)',  border:'rgba(52,211,153,0.25)'  },
   lost:        { label:'Lost',        color:'#f87171', bg:'rgba(248,113,113,0.10)', border:'rgba(248,113,113,0.25)' },
@@ -84,13 +87,13 @@ const STATUS_CFG: Record<LeadStatus, { label:string; color:string; bg:string; bo
 const SCORE_CFG: Record<ScoreLabel, { label:string; color:string; bg:string; border:string }> = {
   hot:  { label:'Hot',  color:'#f87171', bg:'rgba(248,113,113,0.12)', border:'rgba(248,113,113,0.30)' },
   warm: { label:'Warm', color:'#fb923c', bg:'rgba(251,146,60,0.12)',  border:'rgba(251,146,60,0.30)'  },
-  cold: { label:'Cold', color:'#60a5fa', bg:'rgba(96,165,250,0.12)',  border:'rgba(96,165,250,0.30)'  },
+  cold: { label:'Cold', color:'#948f88', bg:'rgba(148,145,140,0.12)',  border:'rgba(148,145,140,0.30)'  },
 }
 
 const APPT_CFG: Record<ApptStatus, { label:string; color:string; bg:string }> = {
   confirmed:  { label:'Confirmed',  color:'#34d399', bg:'rgba(52,211,153,0.10)'  },
   pending:    { label:'Pending',    color:'#fbbf24', bg:'rgba(251,191,36,0.10)'  },
-  completed:  { label:'Completed',  color:'#60a5fa', bg:'rgba(96,165,250,0.10)'  },
+  completed:  { label:'Completed',  color:'#948f88', bg:'rgba(148,145,140,0.10)'  },
   cancelled:  { label:'Cancelled',  color:'#f87171', bg:'rgba(248,113,113,0.10)' },
 }
 
@@ -100,20 +103,20 @@ const ACTIVITY_CFG_DEFAULT: ActivityCfg = { color:'rgba(255,255,255,0.25)', bg:'
 
 const ACTIVITY_CFG: Record<string, ActivityCfg> = {
   sms:                  { color:'#34d399', bg:'rgba(52,211,153,0.12)',  Icon:MessageCircle },
-  appointment:          { color:'#60a5fa', bg:'rgba(96,165,250,0.12)',  Icon:Calendar      },
-  assignment:           { color:'#a78bfa', bg:'rgba(167,139,250,0.12)', Icon:Users         },
+  appointment:          { color:'#948f88', bg:'rgba(148,145,140,0.12)',  Icon:Calendar      },
+  assignment:           { color:'#f8a36d', bg:'rgba(244,122,99,0.12)', Icon:Users         },
   email:                { color:'#fbbf24', bg:'rgba(251,191,36,0.12)',  Icon:Mail          },
   call:                 { color:'#fb923c', bg:'rgba(251,146,60,0.12)',  Icon:Phone         },
-  chat:                 { color:'#818cf8', bg:'rgba(129,140,248,0.12)', Icon:Bot           },
+  chat:                 { color:'#f47a63', bg:'rgba(244,122,99,0.12)', Icon:Bot           },
   team_member_invited:  { color:'#34d399', bg:'rgba(52,211,153,0.12)',  Icon:UserPlus      },
   team_member_deleted:  { color:'#f87171', bg:'rgba(248,113,113,0.12)', Icon:Trash2        },
-  lead_assigned:        { color:'#a78bfa', bg:'rgba(167,139,250,0.12)', Icon:UserCog       },
+  lead_assigned:        { color:'#f8a36d', bg:'rgba(244,122,99,0.12)', Icon:UserCog       },
 }
 
 const NOTIF_CFG: Record<NotifType, { color:string; Icon: React.ComponentType<{className?:string;style?:React.CSSProperties}> }> = {
-  lead:    { color:'#a78bfa', Icon:Users          },
+  lead:    { color:'#f8a36d', Icon:Users          },
   booking: { color:'#34d399', Icon:Calendar       },
-  ai:      { color:'#60a5fa', Icon:MessageCircle  },
+  ai:      { color:'#948f88', Icon:MessageCircle  },
   alert:   { color:'#f87171', Icon:AlertCircle    },
 }
 
@@ -138,6 +141,7 @@ const NAV_ITEMS: {id:Section; label:string; Icon:React.ComponentType<{className?
   { id:'live_chat',    label:'Live Chat',     Icon:Headphones              },
   { id:'activity',     label:'Activity Feed', Icon:Activity                 },
   { id:'appointments', label:'Appointments',  Icon:Calendar,    badge:4     },
+  { id:'rental_ops',   label:'Car Rental Ops', Icon:Car                    },
   { id:'log',          label:'Audit Log',     Icon:History                  },
   { id:'team',         label:'Team',          Icon:UserCog                  },
   { id:'automation',   label:'Automation',    Icon:Zap                      },
@@ -159,6 +163,7 @@ const SECTION_META: Record<Section,{title:string;sub:string}> = {
   live_chat:    { title:'Live Chat',      sub:'Human handover inbox and real-time customer messages' },
   activity:     { title:'Activity Feed',  sub:'Automated events across all channels'                  },
   appointments: { title:'Appointments',   sub:'Weekly schedule and upcoming bookings'                 },
+  rental_ops:   { title:'Car Rental Ops',  sub:'Fleet, availability, bookings, documents and pickup support' },
   log:          { title:'Audit Log',      sub:'Full history of every action — click Undo to reverse'  },
   team:         { title:'Team',           sub:'Members, roles and lead assignments'                   },
   automation:        { title:'Automation',         sub:'Make.com scenario control center — configure, monitor and log'  },
@@ -204,7 +209,12 @@ function relativeTime(iso: string | null): string {
 function Card({ children, className='', ...rest }: { children:React.ReactNode; className?:string } & React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div className={`rounded-2xl ${className}`}
-      style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}
+      style={{
+        background:'var(--bg-card)',
+        border:'1px solid var(--border-warm)',
+        boxShadow:'0 24px 80px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.045)',
+        backdropFilter:'blur(20px)',
+      }}
       {...rest}>
       {children}
     </div>
@@ -268,9 +278,9 @@ function ExportButton() {
   return (
     <button onClick={() => { if(s!=='idle')return; setS('loading'); setTimeout(()=>{setS('done');setTimeout(()=>setS('idle'),2000)},1400) }}
       className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all"
-      style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.25)', color:'#c4b5fd' }}>
+      style={{ background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.25)', color:'#f8a36d' }}>
       {s==='loading' ? (
-        <><motion.span className="w-3.5 h-3.5 rounded-full border-2 border-violet-400/30 border-t-violet-400"
+        <><motion.span className="w-3.5 h-3.5 rounded-full border-2 border-orange-400/30 border-t-orange-400"
           animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity, ease:'linear' }} />Generating…</>
       ) : s==='done' ? (
         <><CheckCircle className="w-3.5 h-3.5 text-emerald-400" /><span className="text-emerald-400">Exported!</span></>
@@ -291,12 +301,12 @@ function NotificationCenter({ notifs, setNotifs }: { notifs:Notification[]; setN
     <div className="relative">
       <button onClick={() => setOpen(v => !v)}
         className="relative w-9 h-9 rounded-xl flex items-center justify-center transition-all"
-        style={{ background: open ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.04)', border:`1px solid ${open?'rgba(139,92,246,0.3)':'rgba(255,255,255,0.08)'}` }}>
-        {unread > 0 ? <BellDot className="w-4 h-4 text-violet-400" /> : <Bell className="w-4 h-4 text-white/40" />}
+        style={{ background: open ? 'rgba(244,122,99,0.15)' : 'rgba(255,255,255,0.04)', border:`1px solid ${open?'rgba(244,122,99,0.3)':'rgba(255,255,255,0.08)'}` }}>
+        {unread > 0 ? <BellDot className="w-4 h-4 text-orange-400" /> : <Bell className="w-4 h-4 text-white/40" />}
         {unread > 0 && (
           <motion.span initial={{ scale:0 }} animate={{ scale:1 }}
             className="absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-black text-white"
-            style={{ background:'#7c3aed' }}>
+            style={{ background:'#171412' }}>
             {unread}
           </motion.span>
         )}
@@ -308,11 +318,11 @@ function NotificationCenter({ notifs, setNotifs }: { notifs:Notification[]; setN
             initial={{ opacity:0, scale:0.95, y:-8 }} animate={{ opacity:1, scale:1, y:0 }}
             exit={{ opacity:0, scale:0.95, y:-8 }} transition={{ duration:0.18 }}
             className="absolute right-0 top-12 w-80 rounded-2xl z-50 overflow-hidden"
-            style={{ background:'rgba(7,7,25,0.97)', border:'1px solid rgba(139,92,246,0.2)', boxShadow:'0 24px 60px rgba(0,0,0,0.6)', backdropFilter:'blur(24px)' }}>
+            style={{ background:'rgba(18,17,15,0.97)', border:'1px solid rgba(244,122,99,0.2)', boxShadow:'0 24px 60px rgba(0,0,0,0.6)', backdropFilter:'blur(24px)' }}>
             <div className="flex items-center justify-between px-4 py-3.5"
               style={{ borderBottom:'1px solid rgba(255,255,255,0.07)' }}>
               <span className="text-sm font-bold text-white">Notifications</span>
-              <button onClick={markAllRead} className="text-xs text-violet-400/70 hover:text-violet-300 transition-colors">
+              <button onClick={markAllRead} className="text-xs text-orange-400/70 hover:text-orange-300 transition-colors">
                 Mark all read
               </button>
             </div>
@@ -328,7 +338,7 @@ function NotificationCenter({ notifs, setNotifs }: { notifs:Notification[]; setN
                 return (
                   <motion.div key={n.id} initial={{ opacity:0, x:-8 }} animate={{ opacity:1, x:0 }} transition={{ delay:i*0.04 }}
                     className="flex items-start gap-3 px-4 py-3 transition-colors cursor-pointer"
-                    style={{ background: n.read ? 'transparent' : 'rgba(139,92,246,0.04)', borderBottom:'1px solid rgba(255,255,255,0.04)' }}
+                    style={{ background: n.read ? 'transparent' : 'rgba(244,122,99,0.04)', borderBottom:'1px solid rgba(255,255,255,0.04)' }}
                     onClick={() => setNotifs(prev => prev.map(x => x.id===n.id ? {...x,read:true} : x))}>
                     <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"
                       style={{ background:`${cfg.color}18` }}>
@@ -337,7 +347,7 @@ function NotificationCenter({ notifs, setNotifs }: { notifs:Notification[]; setN
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
                         <span className="text-xs font-semibold text-white/80">{n.text}</span>
-                        {!n.read && <span className="w-1.5 h-1.5 rounded-full bg-violet-500 flex-shrink-0" />}
+                        {!n.read && <span className="w-1.5 h-1.5 rounded-full bg-orange-500 flex-shrink-0" />}
                       </div>
                       <div className="text-[10px] text-white/35 mt-0.5">{n.sub}</div>
                     </div>
@@ -382,15 +392,17 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
           transition-[width,transform,box-shadow] duration-300 ease-out
           ${open ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
         `}
-        style={{ background:'rgba(5,5,20,0.98)', borderRight:'1px solid rgba(255,255,255,0.06)', boxShadow:'18px 0 50px rgba(0,0,0,0.16)' }}
+        style={{
+          background:'rgba(7,9,12,0.78)',
+          borderRight:'1px solid rgba(217,133,90,0.12)',
+          boxShadow:'18px 0 60px rgba(0,0,0,0.24)',
+          backdropFilter:'blur(24px)',
+        }}
       >
-        <div className="flex items-center gap-3 px-5 md:px-[22px] py-5" style={{ borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center"
-            style={{ background:'linear-gradient(135deg,#7c3aed,#2563eb)', boxShadow:'0 0 16px rgba(124,58,237,0.4)' }}>
-            <Zap className="w-4 h-4 text-white" />
-          </div>
+        <div className="flex items-center gap-3 px-5 md:px-[22px] py-5" style={{ borderBottom:'1px solid rgba(217,133,90,0.10)' }}>
+          <img src="/assets/instantdesk-logo.png" alt="InstantDesk" className="h-8 w-auto flex-shrink-0" />
           <div className="flex-1 min-w-0 overflow-hidden transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[160px] md:group-hover:opacity-100">
-            <div className="text-sm font-bold text-white leading-none">InstantDesk</div>
+            <div className="text-sm font-semibold text-white leading-none">InstantDesk</div>
             <div className="text-[10px] text-white/30 mt-0.5">Client Portal</div>
           </div>
           <button onClick={onClose} className="md:hidden w-7 h-7 rounded-lg flex items-center justify-center text-white/30 hover:text-white/70"
@@ -407,17 +419,17 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
               <div key={item.id} className="relative">
                 {isActive && (
                   <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full"
-                    style={{ background:'linear-gradient(180deg,#7c3aed,#2563eb)' }} />
+                    style={{ background:'linear-gradient(180deg,#f16376,#f89a57)' }} />
                 )}
                 <button onClick={() => { onNav(item.id); onClose() }}
                   title={item.label}
                   className="flex items-center gap-3 w-full pl-4 pr-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200"
-                  style={isActive ? { background:'rgba(139,92,246,0.10)', color:'#c4b5fd' } : { color:'rgba(255,255,255,0.40)' }}>
+                  style={isActive ? { background:'rgba(244,122,99,0.10)', color:'#f8a36d' } : { color:'rgba(255,255,255,0.40)' }}>
                   <item.Icon className="w-4 h-4 flex-shrink-0" />
                   <span className="flex-1 overflow-hidden whitespace-nowrap text-left opacity-100 transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[150px] md:group-hover:opacity-100">{item.label}</span>
                   {badge !== undefined && (
                     <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full transition-all duration-200 ease-out md:max-w-0 md:overflow-hidden md:px-0 md:opacity-0 md:group-hover:max-w-[40px] md:group-hover:px-1.5 md:group-hover:opacity-100"
-                      style={{ background:isActive?'rgba(167,139,250,0.2)':'rgba(255,255,255,0.08)', color:isActive?'#c4b5fd':'rgba(255,255,255,0.35)' }}>
+                      style={{ background:isActive?'rgba(244,122,99,0.2)':'rgba(255,255,255,0.08)', color:isActive?'#f8a36d':'rgba(255,255,255,0.35)' }}>
                       {badge}
                     </span>
                   )}
@@ -428,10 +440,10 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
 
           {/* AI Agent group */}
           <div className="mx-1 mt-3 mb-1 flex items-center gap-2">
-            <div className="flex-1 h-px" style={{ background:'rgba(255,255,255,0.07)' }} />
+            <div className="flex-1 h-px" style={{ background:'rgba(217,133,90,0.10)' }} />
             <span className="overflow-hidden whitespace-nowrap text-[9px] font-bold tracking-[0.15em] uppercase transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[80px] md:group-hover:opacity-100"
-              style={{ color:'rgba(167,139,250,0.5)' }}>AI Agent</span>
-            <div className="flex-1 h-px" style={{ background:'rgba(255,255,255,0.07)' }} />
+              style={{ color:'rgba(248,154,87,0.52)' }}>AI Agent</span>
+            <div className="flex-1 h-px" style={{ background:'rgba(217,133,90,0.10)' }} />
           </div>
 
           {AI_NAV_ITEMS.map(item => {
@@ -440,12 +452,12 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
               <div key={item.id} className="relative">
                 {isActive && (
                   <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full"
-                    style={{ background:'linear-gradient(180deg,#a78bfa,#7c3aed)' }} />
+                    style={{ background:'linear-gradient(180deg,#f8a36d,#f16376)' }} />
                 )}
                 <button onClick={() => { onNav(item.id); onClose() }}
                   title={item.label}
                   className="flex items-center gap-3 w-full pl-4 pr-3 py-2 rounded-xl text-sm font-medium transition-all duration-200"
-                  style={isActive ? { background:'rgba(167,139,250,0.10)', color:'#c4b5fd' } : { color:'rgba(255,255,255,0.35)' }}>
+                  style={isActive ? { background:'rgba(244,122,99,0.10)', color:'#f8a36d' } : { color:'rgba(255,255,255,0.35)' }}>
                   <item.Icon className="w-4 h-4 flex-shrink-0" />
                   <span className="flex-1 overflow-hidden whitespace-nowrap text-left text-[13px] opacity-100 transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[150px] md:group-hover:opacity-100">{item.label}</span>
                 </button>
@@ -454,10 +466,10 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
           })}
         </nav>
 
-        <div className="px-3 pb-5 pt-4" style={{ borderTop:'1px solid rgba(255,255,255,0.06)' }}>
-          <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1" style={{ background:'rgba(255,255,255,0.03)' }}>
+        <div className="px-3 pb-5 pt-4" style={{ borderTop:'1px solid rgba(217,133,90,0.10)' }}>
+          <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1" style={{ background:'rgba(255,255,255,0.035)' }}>
             <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-black text-white flex-shrink-0"
-              style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.6),rgba(37,99,235,0.5))' }}>
+              style={{ background:'linear-gradient(135deg,rgba(244,122,99,0.6),rgba(248,154,87,0.5))' }}>
               {userName.slice(0, 2).toUpperCase()}
             </div>
             <div className="min-w-0 overflow-hidden transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[150px] md:group-hover:opacity-100">
@@ -509,13 +521,13 @@ function OverviewSection({
       label:'New Leads This Week',
       value: m?.newLeadsThisWeek ?? 0,
       sub:`${m?.activeOpportunities ?? 0} active in pipeline`,
-      color:'#a78bfa', trend:'up', Icon:Users,
+      color:'#f8a36d', trend:'up', Icon:Users,
     },
     {
       label:'Active Opportunities',
       value: m?.activeOpportunities ?? 0,
       sub:'in pipeline',
-      color:'#60a5fa', trend:'up', Icon:Target,
+      color:'#948f88', trend:'up', Icon:Target,
     },
     {
       label:'Appointments Booked',
@@ -559,13 +571,13 @@ function OverviewSection({
       label:'Agent Time Saved',
       value: m ? `${m.agentTimeSavedHrs} hrs` : '—',
       sub:'this week (AI replies)',
-      color:'#60a5fa', Icon:Timer,
+      color:'#948f88', Icon:Timer,
     },
     {
       label:'Monthly Deals',
       value: m?.monthlyDeals ?? 0,
       sub:'closed this month',
-      color:'#a78bfa', Icon:CheckCircle,
+      color:'#f8a36d', Icon:CheckCircle,
     },
     {
       label:'Est. Revenue',
@@ -692,7 +704,7 @@ function OverviewSection({
                       <div key={appt.id} className="flex items-center gap-3 px-4 py-3 rounded-xl"
                         style={{ background:`${sc.color}08`, border:`1px solid ${sc.color}20` }}>
                         <div className="w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
-                          style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
+                          style={{ background:'linear-gradient(135deg,rgba(244,122,99,0.5),rgba(248,154,87,0.4))' }}>
                           {initials(liveApptName(appt, leads))}
                         </div>
                         <div className="flex-1 min-w-0">
@@ -740,11 +752,11 @@ function OverviewSection({
           ) : (
             <div className="divide-y divide-white/[0.04]">
               {leads.slice(0, 5).map(lead => (
-                <motion.div key={lead.id} whileHover={{ background:'rgba(139,92,246,0.05)' }}
+                <motion.div key={lead.id} whileHover={{ background:'rgba(244,122,99,0.05)' }}
                   className="flex items-center gap-4 px-5 py-3.5 cursor-pointer transition-colors"
                   onClick={() => onSelectLead(lead.id)}>
                   <div className="w-8 h-8 rounded-xl flex items-center justify-center text-[11px] font-black text-white flex-shrink-0"
-                    style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
+                    style={{ background:'linear-gradient(135deg,rgba(244,122,99,0.5),rgba(248,154,87,0.4))' }}>
                     {initials(lead.name)}
                   </div>
                   <div className="flex-1 min-w-0">
@@ -864,7 +876,7 @@ function SortPanel({
         className="absolute right-0 top-full mt-2 z-50 rounded-2xl overflow-hidden"
         style={{
           minWidth: 180,
-          background:'rgba(10,10,30,0.98)', border:'1px solid rgba(139,92,246,0.22)',
+          background:'rgba(18,17,15,0.98)', border:'1px solid rgba(244,122,99,0.22)',
           boxShadow:'0 24px 60px rgba(0,0,0,0.7)', backdropFilter:'blur(24px)',
         }}
         onClick={e => e.stopPropagation()}
@@ -879,14 +891,14 @@ function SortPanel({
               onClick={() => { onChange(o.key); onClose() }}
               className="w-full flex items-center justify-between px-4 py-2.5 text-xs font-semibold transition-all text-left"
               style={{
-                background: active ? 'rgba(139,92,246,0.15)' : 'transparent',
-                color: active ? '#c4b5fd' : 'rgba(255,255,255,0.55)',
+                background: active ? 'rgba(244,122,99,0.15)' : 'transparent',
+                color: active ? '#f8a36d' : 'rgba(255,255,255,0.55)',
               }}
               onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.04)' }}
               onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}
             >
               {o.label}
-              {active && <span className="w-1.5 h-1.5 rounded-full bg-violet-400 flex-shrink-0" />}
+              {active && <span className="w-1.5 h-1.5 rounded-full bg-orange-400 flex-shrink-0" />}
             </button>
           )
         })}
@@ -921,9 +933,9 @@ function ChipGroup({
           <button key={o.v} onClick={() => onChange(o.v)}
             className="px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all"
             style={on ? {
-              background: o.color ? `${o.color}20` : 'rgba(139,92,246,0.2)',
-              border:`1px solid ${o.color ?? 'rgba(139,92,246,0.4)'}`,
-              color: o.color ?? '#c4b5fd',
+              background: o.color ? `${o.color}20` : 'rgba(244,122,99,0.2)',
+              border:`1px solid ${o.color ?? 'rgba(244,122,99,0.4)'}`,
+              color: o.color ?? '#f8a36d',
             } : {
               background:'rgba(255,255,255,0.04)',
               border:'1px solid rgba(255,255,255,0.08)',
@@ -958,7 +970,7 @@ function FilterPanel({
         transition={{ duration:0.15 }}
         className="absolute right-0 top-full mt-2 z-50 w-[min(320px,calc(100vw-2rem))] rounded-2xl"
         style={{
-          background:'rgba(10,10,30,0.98)', border:'1px solid rgba(139,92,246,0.22)',
+          background:'rgba(18,17,15,0.98)', border:'1px solid rgba(244,122,99,0.22)',
           boxShadow:'0 24px 60px rgba(0,0,0,0.7)', backdropFilter:'blur(24px)',
         }}
         onClick={e => e.stopPropagation()}
@@ -969,7 +981,7 @@ function FilterPanel({
           <span className="text-sm font-bold text-white">Filters</span>
           {ac > 0 && (
             <button onClick={() => onChange(DEFAULT_FILTERS)}
-              className="text-[11px] font-semibold text-violet-400/80 hover:text-violet-300 transition-colors">
+              className="text-[11px] font-semibold text-orange-400/80 hover:text-orange-300 transition-colors">
               Reset all
             </button>
           )}
@@ -982,7 +994,7 @@ function FilterPanel({
                 { v:'all',  label:'All'  },
                 { v:'hot',  label:'Hot',  color:'#f87171' },
                 { v:'warm', label:'Warm', color:'#fb923c' },
-                { v:'cold', label:'Cold', color:'#60a5fa' },
+                { v:'cold', label:'Cold', color:'#948f88' },
               ]} />
           </FSection>
 
@@ -1050,7 +1062,7 @@ function FilterPanel({
           </span>
           <button onClick={onClose}
             className="text-xs font-semibold px-3 py-1.5 rounded-lg transition-all"
-            style={{ background:'rgba(139,92,246,0.15)', border:'1px solid rgba(139,92,246,0.3)', color:'#c4b5fd' }}>
+            style={{ background:'rgba(244,122,99,0.15)', border:'1px solid rgba(244,122,99,0.3)', color:'#f8a36d' }}>
             Done
           </button>
         </div>
@@ -1120,7 +1132,7 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
           {onAddLead && (
             <button onClick={onAddLead}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
-              style={{ background:'rgba(167,139,250,0.12)', border:'1px solid rgba(167,139,250,0.3)', color:'#c4b5fd' }}>
+              style={{ background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.3)', color:'#f8a36d' }}>
               <Plus className="w-3.5 h-3.5" />Add Lead
             </button>
           )}
@@ -1139,7 +1151,7 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
             value={search} onChange={e => setSearch(e.target.value)}
             className="w-full pl-9 pr-9 py-2 rounded-xl text-sm text-white placeholder-white/20 outline-none transition-all"
             style={{ background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)' }}
-            onFocus={e=>{ e.currentTarget.style.border='1px solid rgba(139,92,246,0.4)' }}
+            onFocus={e=>{ e.currentTarget.style.border='1px solid rgba(244,122,99,0.4)' }}
             onBlur={e=>{  e.currentTarget.style.border='1px solid rgba(255,255,255,0.08)' }}
           />
           {search && (
@@ -1155,7 +1167,7 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
           <button onClick={() => { setSortOpen(v => !v); setFilterOpen(false) }}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap"
             style={sort !== DEFAULT_SORT || sortOpen ? {
-              background:'rgba(139,92,246,0.15)', border:'1px solid rgba(139,92,246,0.35)', color:'#c4b5fd',
+              background:'rgba(244,122,99,0.15)', border:'1px solid rgba(244,122,99,0.35)', color:'#f8a36d',
             } : {
               background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', color:'rgba(255,255,255,0.5)',
             }}>
@@ -1179,7 +1191,7 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
           <button onClick={() => { setFilterOpen(v => !v); setSortOpen(false) }}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap"
             style={ac > 0 || filterOpen ? {
-              background:'rgba(139,92,246,0.15)', border:'1px solid rgba(139,92,246,0.35)', color:'#c4b5fd',
+              background:'rgba(244,122,99,0.15)', border:'1px solid rgba(244,122,99,0.35)', color:'#f8a36d',
             } : {
               background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', color:'rgba(255,255,255,0.5)',
             }}>
@@ -1187,7 +1199,7 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
             Filter
             {ac > 0 && (
               <span className="flex items-center justify-center w-4 h-4 rounded-full text-[9px] font-black text-white"
-                style={{ background:'#7c3aed' }}>
+                style={{ background:'#171412' }}>
                 {ac}
               </span>
             )}
@@ -1211,8 +1223,8 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
         {leads.length === 0 ? (
           <div className="px-5 py-16 text-center flex flex-col items-center gap-3">
             <div className="w-12 h-12 rounded-2xl flex items-center justify-center"
-              style={{ background:'rgba(139,92,246,0.08)', border:'1px solid rgba(139,92,246,0.15)' }}>
-              <Users className="w-5 h-5 text-violet-400/40" />
+              style={{ background:'rgba(244,122,99,0.08)', border:'1px solid rgba(244,122,99,0.15)' }}>
+              <Users className="w-5 h-5 text-orange-400/40" />
             </div>
             <p className="text-sm font-semibold text-white/30">No leads yet</p>
             <p className="text-xs text-white/20 max-w-[240px] leading-relaxed">
@@ -1222,7 +1234,7 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
         ) : filtered.length === 0 ? (
           <div className="px-5 py-10 text-center">
             <p className="text-sm text-white/25">No leads match your filters</p>
-            <button onClick={clearAll} className="text-xs text-violet-400 mt-2 block mx-auto">
+            <button onClick={clearAll} className="text-xs text-orange-400 mt-2 block mx-auto">
               Clear all filters
             </button>
           </div>
@@ -1239,7 +1251,7 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
                   style={{ background: isNew ? 'rgba(52,211,153,0.04)' : 'transparent' }}>
                   <div className="relative flex-shrink-0">
                     <div className="w-9 h-9 rounded-xl flex items-center justify-center text-[11px] font-black text-white"
-                      style={{ background: isNew ? 'linear-gradient(135deg,rgba(52,211,153,0.6),rgba(16,185,129,0.5))' : 'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
+                      style={{ background: isNew ? 'linear-gradient(135deg,rgba(52,211,153,0.6),rgba(16,185,129,0.5))' : 'linear-gradient(135deg,rgba(244,122,99,0.5),rgba(248,154,87,0.4))' }}>
                       {initials(lead.name)}
                     </div>
                     {isNew && (
@@ -1283,8 +1295,8 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
                   <td colSpan={8} className="px-5 py-20 text-center">
                     <div className="flex flex-col items-center gap-3">
                       <div className="w-12 h-12 rounded-2xl flex items-center justify-center"
-                        style={{ background:'rgba(139,92,246,0.08)', border:'1px solid rgba(139,92,246,0.15)' }}>
-                        <Users className="w-5 h-5 text-violet-400/40" />
+                        style={{ background:'rgba(244,122,99,0.08)', border:'1px solid rgba(244,122,99,0.15)' }}>
+                        <Users className="w-5 h-5 text-orange-400/40" />
                       </div>
                       <p className="text-sm font-semibold text-white/30">No leads yet</p>
                       <p className="text-xs text-white/18 max-w-[260px] leading-relaxed">
@@ -1297,7 +1309,7 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
                 <tr>
                   <td colSpan={8} className="px-5 py-16 text-center">
                     <p className="text-sm text-white/25">No leads match your filters</p>
-                    <button onClick={clearAll} className="text-xs text-violet-400 mt-2">
+                    <button onClick={clearAll} className="text-xs text-orange-400 mt-2">
                       Clear all filters
                     </button>
                   </td>
@@ -1311,7 +1323,7 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
                   onClick={() => onSelectLead(lead.id)}
                   className="cursor-pointer group"
                   style={{ background: isNew ? 'rgba(52,211,153,0.04)' : 'transparent' }}
-                  onMouseEnter={e=>(e.currentTarget.style.background='rgba(139,92,246,0.04)')}
+                  onMouseEnter={e=>(e.currentTarget.style.background='rgba(244,122,99,0.04)')}
                   onMouseLeave={e=>(e.currentTarget.style.background= isNew ? 'rgba(52,211,153,0.04)' : 'transparent')}>
 
                   {/* Lead / Company */}
@@ -1319,7 +1331,7 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
                     <div className="flex items-center gap-3">
                       <div className="relative flex-shrink-0">
                         <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-black text-white"
-                          style={{ background: isNew ? 'linear-gradient(135deg,rgba(52,211,153,0.6),rgba(16,185,129,0.5))' : 'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
+                          style={{ background: isNew ? 'linear-gradient(135deg,rgba(52,211,153,0.6),rgba(16,185,129,0.5))' : 'linear-gradient(135deg,rgba(244,122,99,0.5),rgba(248,154,87,0.4))' }}>
                           {initials(lead.name)}
                         </div>
                         {isNew && (
@@ -1354,7 +1366,7 @@ function PipelineSection({ onSelectLead, leads, newLeadIds = new Set<string>(), 
                   <td className="px-4 py-3.5">
                     <div className="flex items-center gap-2">
                       <div className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-black text-white flex-shrink-0"
-                        style={{ background:'linear-gradient(135deg,rgba(99,102,241,0.5),rgba(37,99,235,0.5))' }}>
+                        style={{ background:'linear-gradient(135deg,rgba(244,122,99,0.5),rgba(248,154,87,0.5))' }}>
                         {agentInitials(lead.assignedAgent)}
                       </div>
                       <span className="text-xs text-white/55 whitespace-nowrap">{lead.assignedAgent}</span>
@@ -1600,8 +1612,8 @@ function WeekDatePicker({
         transition={{ duration:0.15 }}
         className="absolute left-0 top-full mt-2 z-50 w-72 rounded-2xl overflow-hidden"
         style={{
-          background:    'rgba(10,10,30,0.98)',
-          border:        '1px solid rgba(139,92,246,0.25)',
+          background:    'rgba(18,17,15,0.98)',
+          border:        '1px solid rgba(244,122,99,0.25)',
           boxShadow:     '0 24px 60px rgba(0,0,0,0.7)',
           backdropFilter:'blur(24px)',
         }}
@@ -1647,16 +1659,16 @@ function WeekDatePicker({
             return (
               <button key={i}
                 onClick={() => { onSelect(d); onClose() }}
-                className="h-8 w-8 mx-auto flex items-center justify-center rounded-lg text-xs font-semibold transition-all hover:bg-violet-500/20"
+                className="h-8 w-8 mx-auto flex items-center justify-center rounded-lg text-xs font-semibold transition-all hover:bg-orange-500/20"
                 style={{
-                  background: inWeek   ? 'rgba(139,92,246,0.22)'
-                            : isToday  ? 'rgba(139,92,246,0.10)'
+                  background: inWeek   ? 'rgba(244,122,99,0.22)'
+                            : isToday  ? 'rgba(244,122,99,0.10)'
                             :            'transparent',
-                  color:      inWeek   ? '#c4b5fd'
-                            : isToday  ? '#a78bfa'
+                  color:      inWeek   ? '#f8a36d'
+                            : isToday  ? '#f8a36d'
                             : isWeekend? 'rgba(255,255,255,0.22)'
                             :            'rgba(255,255,255,0.60)',
-                  border:     isToday && !inWeek ? '1px solid rgba(139,92,246,0.35)' : '1px solid transparent',
+                  border:     isToday && !inWeek ? '1px solid rgba(244,122,99,0.35)' : '1px solid transparent',
                 }}>
                 {dayNum}
               </button>
@@ -1789,7 +1801,7 @@ function AppointmentsSection({
                 initial={{ opacity:0, scale:0.9 }} animate={{ opacity:1, scale:1 }}
                 onClick={() => setDayOffset(0)}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold"
-                style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.25)', color:'#c4b5fd' }}>
+                style={{ background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.25)', color:'#f8a36d' }}>
                 Today
               </motion.button>
             )}
@@ -1826,8 +1838,8 @@ function AppointmentsSection({
             return (
               <Card key={day.iso}
                 className={[
-                  day.today ? 'ring-1 ring-violet-500/25' : '',
-                  isDropTarget ? 'ring-1 ring-violet-400/50' : '',
+                  day.today ? 'ring-1 ring-orange-500/25' : '',
+                  isDropTarget ? 'ring-1 ring-orange-400/50' : '',
                 ].filter(Boolean).join(' ')}
                 onDragOver={(e: React.DragEvent) => { e.preventDefault(); setDragOverDate(day.iso) }}
                 onDragLeave={(e: React.DragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverDate(null) }}
@@ -1836,7 +1848,7 @@ function AppointmentsSection({
                 <div className="flex items-center justify-between px-3 py-3"
                   style={{
                     borderBottom: dayAppts.length ? '1px solid rgba(255,255,255,0.07)' : 'none',
-                    background:   isDropTarget ? 'rgba(139,92,246,0.12)' : day.today ? 'rgba(139,92,246,0.07)' : 'transparent',
+                    background:   isDropTarget ? 'rgba(244,122,99,0.12)' : day.today ? 'rgba(244,122,99,0.07)' : 'transparent',
                     transition:   'background 0.15s',
                   }}>
                   <div>
@@ -1845,7 +1857,7 @@ function AppointmentsSection({
                   </div>
                   {day.today && (
                     <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
-                      style={{ background:'rgba(139,92,246,0.22)', color:'#c4b5fd', border:'1px solid rgba(139,92,246,0.35)' }}>
+                      style={{ background:'rgba(244,122,99,0.22)', color:'#f8a36d', border:'1px solid rgba(244,122,99,0.35)' }}>
                       TODAY
                     </span>
                   )}
@@ -1882,7 +1894,7 @@ function AppointmentsSection({
                   </div>
                 ) : (
                   <div className="py-8 text-center"
-                    style={{ background: isDropTarget ? 'rgba(139,92,246,0.06)' : 'transparent', transition:'background 0.15s' }}>
+                    style={{ background: isDropTarget ? 'rgba(244,122,99,0.06)' : 'transparent', transition:'background 0.15s' }}>
                     <div className="text-[10px] text-white/15 font-medium">{isDropTarget ? 'Drop here' : 'Free'}</div>
                   </div>
                 )}
@@ -1911,11 +1923,11 @@ function AppointmentsSection({
                 return (
                   <motion.div key={appt.id}
                     initial={{ opacity:0, y:6 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.05 }}
-                    whileHover={{ background:'rgba(139,92,246,0.04)' }}
+                    whileHover={{ background:'rgba(244,122,99,0.04)' }}
                     className="flex items-center gap-4 px-5 py-3.5 cursor-pointer transition-colors"
                     onClick={() => handleApptClick(appt)}>
                     <div className="w-8 h-8 rounded-xl flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
-                      style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.4),rgba(37,99,235,0.3))' }}>
+                      style={{ background:'linear-gradient(135deg,rgba(244,122,99,0.4),rgba(248,154,87,0.3))' }}>
                       {initials(liveApptName(appt, leads))}
                     </div>
                     <div className="flex-1">
@@ -1970,8 +1982,8 @@ function AutomationSection({ leads, integrations = [], overviewMetrics }: { lead
     : '—'
   const perfCards: { label:string; value:string|number; sub:string; color:string; Icon:React.ComponentType<{className?:string;style?:React.CSSProperties}> }[] = [
     { label:'Conversion Lift',  value: (m?.conversionLiftPct ?? 0) > 0 ? `+${m!.conversionLiftPct}%` : '—', sub:'vs prior week',      color:'#34d399', Icon:TrendingUp  },
-    { label:'Agent Time Saved', value: m ? `${m.agentTimeSavedHrs} hrs` : '—',                              sub:'this week (AI)',     color:'#60a5fa', Icon:Timer       },
-    { label:'Monthly Deals',    value: m?.monthlyDeals ?? 0,                                                 sub:'closed this month', color:'#a78bfa', Icon:CheckCircle },
+    { label:'Agent Time Saved', value: m ? `${m.agentTimeSavedHrs} hrs` : '—',                              sub:'this week (AI)',     color:'#948f88', Icon:Timer       },
+    { label:'Monthly Deals',    value: m?.monthlyDeals ?? 0,                                                 sub:'closed this month', color:'#f8a36d', Icon:CheckCircle },
     { label:'Est. Revenue',     value: revenueStr,                                                           sub:'this month',        color:'#fbbf24', Icon:DollarSign  },
   ]
 
@@ -2051,7 +2063,7 @@ function AutomationSection({ leads, integrations = [], overviewMetrics }: { lead
           ) : leads.map(lead => (
             <div key={lead.id} className="flex items-center gap-3 px-4 py-3">
               <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-black text-white flex-shrink-0"
-                style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
+                style={{ background:'linear-gradient(135deg,rgba(244,122,99,0.5),rgba(248,154,87,0.4))' }}>
                 {initials(lead.name)}
               </div>
               <div className="flex-1 min-w-0">
@@ -2087,7 +2099,7 @@ function AutomationSection({ leads, integrations = [], overviewMetrics }: { lead
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-2.5">
                       <div className="w-6 h-6 rounded-md flex items-center justify-center text-[9px] font-black text-white flex-shrink-0"
-                        style={{ background:'linear-gradient(135deg,rgba(124,58,237,0.5),rgba(37,99,235,0.4))' }}>
+                        style={{ background:'linear-gradient(135deg,rgba(244,122,99,0.5),rgba(248,154,87,0.4))' }}>
                         {initials(lead.name)}
                       </div>
                       <div>
@@ -2131,18 +2143,163 @@ const SETTING_PANELS: {label:string; sub:string; Icon:React.ComponentType<{class
 ]
 
 function SettingsSection() {
+  const [businessType, setBusinessType] = useState('')
+  const [businessTypeLoaded, setBusinessTypeLoaded] = useState(false)
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [rentalSettings, setRentalSettings] = useState<RentalSettings>({ cleaningBufferMinutes: 120, syncDirection: 'none', externalSyncEnabled: false, currency: 'PLN' })
+  const [rentalSettingsStatus, setRentalSettingsStatus] = useState('')
+
+  useEffect(() => {
+    fetch('/api/business/settings')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        const normalized = normalizeBusinessType(data?.businessType)
+        setBusinessType(normalized)
+        localStorage.setItem('instantdesk_business_type', normalized)
+      })
+      .catch(() => {
+        setBusinessType('general_service')
+      })
+      .finally(() => setBusinessTypeLoaded(true))
+  }, [])
+
+  useEffect(() => {
+    if (businessType !== 'car_rental') return
+    fetch('/api/rental/settings')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data?.settings) setRentalSettings(prev => ({ ...prev, ...data.settings }))
+      })
+      .catch(() => {})
+  }, [businessType])
+
+  async function updateBusinessType(nextRaw: string) {
+    const next = normalizeBusinessType(nextRaw)
+    const previous = businessType
+    setBusinessType(next)
+    setSaveState('saving')
+    try {
+      localStorage.setItem('instantdesk_business_type', next)
+      const res = await fetch('/api/business/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ businessType: next }),
+      })
+      setSaveState(res.ok ? 'saved' : 'error')
+      if (res.ok) {
+        setTimeout(() => setSaveState('idle'), 2500)
+      }
+      if (next === 'car_rental' && previous !== 'car_rental' && localStorage.getItem('instantdesk_car_rental_onboarding_done') !== 'true') {
+        window.location.href = '/onboarding/car-rental'
+      }
+    } catch {
+      setSaveState('error')
+    }
+  }
+
+  async function saveRentalSettingsFromSettings() {
+    setRentalSettingsStatus('Saving rental settings...')
+    const res = await fetch('/api/rental/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rentalSettings),
+    })
+    const data = await res.json().catch(() => ({}))
+    setRentalSettingsStatus(res.ok ? 'Rental settings saved.' : data.error ?? 'Rental settings save failed.')
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3 px-1">
         <div className="w-8 h-8 rounded-xl flex items-center justify-center"
-          style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.2)' }}>
-          <Settings className="w-4 h-4 text-violet-400" />
+          style={{ background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.2)' }}>
+          <Settings className="w-4 h-4 text-orange-400" />
         </div>
         <div>
           <h2 className="text-base font-bold text-white">Settings</h2>
           <p className="text-xs text-white/30">Full configuration coming soon</p>
         </div>
       </div>
+      <Card className="p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <Car className="h-4 w-4 text-[#f8a36d]" />
+              <h3 className="text-sm font-semibold text-white">Business type</h3>
+            </div>
+            <p className="mt-1 max-w-2xl text-xs leading-5 text-white/38">
+              Select a niche to unlock operational tools while keeping the core website chat, live chat, CRM, and human handover system active.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <select
+              value={businessTypeLoaded ? businessType : ''}
+              onChange={(event) => void updateBusinessType(event.target.value)}
+              disabled={!businessTypeLoaded}
+              className="h-11 min-w-[220px] rounded-xl border border-white/10 bg-black/30 px-3 text-sm font-medium text-white outline-none transition-colors focus:border-[#f8a36d]/55"
+            >
+              {!businessTypeLoaded && <option value="">Loading...</option>}
+              {CANONICAL_BUSINESS_TYPES.map(type => (
+                <option key={type} value={type}>{BUSINESS_TYPE_CONFIG[type].label}</option>
+              ))}
+            </select>
+            <span className="text-[11px] font-semibold text-white/32">
+              {!businessTypeLoaded ? 'Loading saved workspace type...' : saveState === 'saving' ? 'Saving...' : saveState === 'saved' ? 'Saved' : saveState === 'error' ? 'Saved locally' : businessType === 'car_rental' ? 'Rental tools unlocked' : 'Core tools active'}
+            </span>
+          </div>
+        </div>
+      </Card>
+      {saveState === 'saved' && (
+        <div className="rounded-xl border border-[#f8a36d]/20 bg-[#f8a36d]/10 px-4 py-3 text-sm font-semibold text-[#f8a36d]">Saved</div>
+      )}
+      {businessType === 'car_rental' && (
+        <Card className="p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-white">Car Rental Settings</h3>
+              <p className="mt-1 max-w-2xl text-xs leading-5 text-white/38">Edit policies and operational rules after onboarding. These settings are used by availability checks and the AI rental prompt.</p>
+            </div>
+            <button onClick={() => void saveRentalSettingsFromSettings()} className="btn-primary">Save rental settings</button>
+          </div>
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            <input value={rentalSettings.companyName ?? ''} onChange={e => setRentalSettings(prev => ({ ...prev, companyName: e.target.value }))} placeholder="Company name" className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <input value={rentalSettings.companyPhone ?? ''} onChange={e => setRentalSettings(prev => ({ ...prev, companyPhone: e.target.value }))} placeholder="Phone" className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <input value={rentalSettings.companyWhatsapp ?? ''} onChange={e => setRentalSettings(prev => ({ ...prev, companyWhatsapp: e.target.value }))} placeholder="WhatsApp" className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <input value={rentalSettings.companyEmail ?? ''} onChange={e => setRentalSettings(prev => ({ ...prev, companyEmail: e.target.value }))} placeholder="Email" className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <input value={rentalSettings.companyWebsite ?? ''} onChange={e => setRentalSettings(prev => ({ ...prev, companyWebsite: e.target.value }))} placeholder="Website" className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <select value={rentalSettings.currency ?? 'PLN'} onChange={e => setRentalSettings(prev => ({ ...prev, currency: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+              {['PLN','EUR','USD','GBP'].map(currency => <option key={currency}>{currency}</option>)}
+            </select>
+            <input type="number" value={rentalSettings.cleaningBufferMinutes ?? 120} onChange={e => setRentalSettings(prev => ({ ...prev, cleaningBufferMinutes: Number(e.target.value) || 120 }))} placeholder="Buffer minutes" className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <input value={rentalSettings.minimumRentalDuration ?? ''} onChange={e => setRentalSettings(prev => ({ ...prev, minimumRentalDuration: e.target.value }))} placeholder="Minimum rental duration" className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <input value={rentalSettings.providerName ?? ''} onChange={e => setRentalSettings(prev => ({ ...prev, providerName: e.target.value }))} placeholder="Calendar provider" className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <input value={rentalSettings.apiUrl ?? ''} onChange={e => setRentalSettings(prev => ({ ...prev, apiUrl: e.target.value }))} placeholder="API URL" className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55 md:col-span-2" />
+            <select value={rentalSettings.syncDirection ?? 'none'} onChange={e => setRentalSettings(prev => ({ ...prev, syncDirection: e.target.value as RentalSettings['syncDirection'] }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+              <option value="none">Sync disabled</option>
+              <option value="import">Import only</option>
+              <option value="push">Push only</option>
+              <option value="two_way">Two-way sync</option>
+            </select>
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            {[
+              ['Deposit policy', 'depositPolicy'],
+              ['Pickup/drop-off rules', 'pickupDropoffRules'],
+              ['Return policy', 'returnPolicy'],
+              ['Required documents', 'requiredDocumentsText'],
+              ['Insurance/extras notes', 'insuranceExtrasNotes'],
+              ['Cancellation policy', 'cancellationPolicy'],
+              ['Late return policy', 'lateReturnPolicy'],
+              ['Fuel policy', 'fuelPolicy'],
+              ['Mileage policy', 'mileagePolicy'],
+              ['Cross-border policy', 'crossBorderPolicy'],
+            ].map(([label, key]) => (
+              <textarea key={key} value={String((rentalSettings as unknown as Record<string, unknown>)[key] ?? '')} onChange={e => setRentalSettings(prev => ({ ...prev, [key]: e.target.value }))} placeholder={label} rows={3} className="rounded-xl border border-white/10 bg-black/25 px-3 py-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            ))}
+          </div>
+          {rentalSettingsStatus && <p className="mt-4 text-sm font-semibold text-[#f8a36d]">{rentalSettingsStatus}</p>}
+        </Card>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {SETTING_PANELS.map((p,i)=>(
           <motion.div key={p.label} initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} transition={{ delay:i*0.06 }}>
@@ -2156,7 +2313,7 @@ function SettingsSection() {
                 <div className="text-xs text-white/25 mt-0.5">{p.sub}</div>
               </div>
               <span className="text-[10px] font-bold px-2 py-1 rounded-full mt-0.5 flex-shrink-0"
-                style={{ background:'rgba(139,92,246,0.12)', color:'#a78bfa', border:'1px solid rgba(139,92,246,0.2)' }}>Soon</span>
+                style={{ background:'rgba(244,122,99,0.12)', color:'#f8a36d', border:'1px solid rgba(244,122,99,0.2)' }}>Soon</span>
             </Card>
           </motion.div>
         ))}
@@ -2259,7 +2416,7 @@ function ToastNotification({
     return () => clearTimeout(t)
   }, [onClose, toast.duration])
 
-  const accent = toast.type === 'lead' ? '#a78bfa' : toast.type === 'appointment' ? '#34d399' : '#fbbf24'
+  const accent = toast.type === 'lead' ? '#f8a36d' : toast.type === 'appointment' ? '#34d399' : '#fbbf24'
   const Icon   = toast.type === 'lead' ? Users   : toast.type === 'appointment' ? Calendar : Volume2
 
   return (
@@ -2442,20 +2599,20 @@ const LOG_TYPE_LABELS: Record<string, string> = {
 }
 
 type LogCfg = { color: string; bg: string; Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }> }
-const UNDO_CFG: LogCfg = { color: '#a78bfa', bg: 'rgba(167,139,250,0.08)', Icon: Undo2 }
+const UNDO_CFG: LogCfg = { color: '#f8a36d', bg: 'rgba(244,122,99,0.08)', Icon: Undo2 }
 
 const LOG_CFG: Record<string, LogCfg> = {
   lead_created:         { color: '#34d399', bg: 'rgba(52,211,153,0.12)',   Icon: Users        },
   lead_deleted:         { color: '#f87171', bg: 'rgba(248,113,113,0.12)',  Icon: Trash2       },
-  lead_edited:          { color: '#a78bfa', bg: 'rgba(167,139,250,0.12)',  Icon: Pencil       },
-  lead_updated:         { color: '#a78bfa', bg: 'rgba(167,139,250,0.12)',  Icon: Pencil       },
+  lead_edited:          { color: '#f8a36d', bg: 'rgba(244,122,99,0.12)',  Icon: Pencil       },
+  lead_updated:         { color: '#f8a36d', bg: 'rgba(244,122,99,0.12)',  Icon: Pencil       },
   status_changed:       { color: '#fbbf24', bg: 'rgba(251,191,36,0.12)',   Icon: ArrowUpDown  },
-  notes_changed:        { color: '#60a5fa', bg: 'rgba(96,165,250,0.12)',   Icon: ScrollText   },
+  notes_changed:        { color: '#948f88', bg: 'rgba(148,145,140,0.12)',   Icon: ScrollText   },
   score_changed:        { color: '#fb923c', bg: 'rgba(251,146,60,0.12)',   Icon: TrendingUp   },
   appointment_created:  { color: '#34d399', bg: 'rgba(52,211,153,0.12)',   Icon: CalendarPlus },
   appointment_deleted:  { color: '#f87171', bg: 'rgba(248,113,113,0.12)',  Icon: Trash2       },
-  appointment_edited:   { color: '#a78bfa', bg: 'rgba(167,139,250,0.12)',  Icon: Pencil       },
-  appointment_updated:  { color: '#a78bfa', bg: 'rgba(167,139,250,0.12)',  Icon: Pencil       },
+  appointment_edited:   { color: '#f8a36d', bg: 'rgba(244,122,99,0.12)',  Icon: Pencil       },
+  appointment_updated:  { color: '#f8a36d', bg: 'rgba(244,122,99,0.12)',  Icon: Pencil       },
   appointment_moved:    { color: '#38bdf8', bg: 'rgba(56,189,248,0.12)',   Icon: MoveRight    },
   follow_up_scheduled:  { color: '#fbbf24', bg: 'rgba(251,191,36,0.10)',   Icon: Bot          },
   follow_up_sent:       { color: '#34d399', bg: 'rgba(52,211,153,0.10)',   Icon: Bot          },
@@ -2746,7 +2903,7 @@ function LogSection({ onToast, can, actorName = 'Alex Thompson' }: { onToast: (t
       <AlertCircle className="w-8 h-8 text-red-400/40" />
       <p className="text-sm text-red-400">{error}</p>
       <button onClick={() => void fetchEvents()}
-        className="text-xs text-violet-400 hover:text-violet-300 transition-colors">Retry</button>
+        className="text-xs text-orange-400 hover:text-orange-300 transition-colors">Retry</button>
     </div>
   )
 
@@ -2757,8 +2914,8 @@ function LogSection({ onToast, can, actorName = 'Alex Thompson' }: { onToast: (t
       <div className="flex items-center justify-between px-1 mb-1">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.2)' }}>
-            <History className="w-4 h-4 text-violet-400" />
+            style={{ background: 'rgba(244,122,99,0.12)', border: '1px solid rgba(244,122,99,0.2)' }}>
+            <History className="w-4 h-4 text-orange-400" />
           </div>
           <div>
             <h2 className="text-base font-bold text-white">Audit Log</h2>
@@ -2783,16 +2940,16 @@ function LogSection({ onToast, can, actorName = 'Alex Thompson' }: { onToast: (t
             <button key={f.id} onClick={() => setFilter(f.id)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold transition-all"
               style={{
-                background: active ? 'rgba(139,92,246,0.18)' : 'rgba(255,255,255,0.04)',
-                border:     active ? '1px solid rgba(139,92,246,0.35)' : '1px solid rgba(255,255,255,0.08)',
-                color:      active ? '#c4b5fd' : 'rgba(255,255,255,0.35)',
+                background: active ? 'rgba(244,122,99,0.18)' : 'rgba(255,255,255,0.04)',
+                border:     active ? '1px solid rgba(244,122,99,0.35)' : '1px solid rgba(255,255,255,0.08)',
+                color:      active ? '#f8a36d' : 'rgba(255,255,255,0.35)',
               }}>
               {f.label}
               {count > 0 && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded-full font-bold"
                   style={{
-                    background: active ? 'rgba(139,92,246,0.25)' : 'rgba(255,255,255,0.06)',
-                    color:      active ? '#c4b5fd' : 'rgba(255,255,255,0.25)',
+                    background: active ? 'rgba(244,122,99,0.25)' : 'rgba(255,255,255,0.06)',
+                    color:      active ? '#f8a36d' : 'rgba(255,255,255,0.25)',
                   }}>
                   {count}
                 </span>
@@ -2830,7 +2987,7 @@ function LogSection({ onToast, can, actorName = 'Alex Thompson' }: { onToast: (t
           ) : (
             <>
               <p className="text-sm text-white/25 font-medium">No {filter} events</p>
-              <button onClick={() => setFilter('all')} className="text-xs text-violet-400/60 hover:text-violet-400 transition-colors">
+              <button onClick={() => setFilter('all')} className="text-xs text-orange-400/60 hover:text-orange-400 transition-colors">
                 Clear filter
               </button>
             </>
@@ -2909,16 +3066,16 @@ function LogSection({ onToast, can, actorName = 'Alex Thompson' }: { onToast: (t
                           )}
                           {isProcessing && (
                             <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold"
-                              style={{ background:'rgba(139,92,246,0.08)', border:'1px solid rgba(139,92,246,0.20)', color:'rgba(196,181,253,0.6)' }}>
-                              <motion.span className="w-2.5 h-2.5 rounded-full border-2 border-violet-400/30 border-t-violet-400"
+                              style={{ background:'rgba(244,122,99,0.08)', border:'1px solid rgba(244,122,99,0.20)', color:'rgba(196,181,253,0.6)' }}>
+                              <motion.span className="w-2.5 h-2.5 rounded-full border-2 border-orange-400/30 border-t-orange-400"
                                 animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity, ease:'linear' }} />
                               Undoing…
                             </span>
                           )}
                           {undoable && (
                             <button onClick={() => handleUndo(ev)}
-                              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all hover:bg-violet-500/15 active:scale-95"
-                              style={{ background:'rgba(139,92,246,0.10)', border:'1px solid rgba(139,92,246,0.28)', color:'#c4b5fd' }}>
+                              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all hover:bg-orange-500/15 active:scale-95"
+                              style={{ background:'rgba(244,122,99,0.10)', border:'1px solid rgba(244,122,99,0.28)', color:'#f8a36d' }}>
                               <Undo2 className="w-2.5 h-2.5" /><span>Undo</span>
                             </button>
                           )}
@@ -2973,8 +3130,8 @@ function ViewAsSelector({
 
   const rolePalette: Record<Role, { label: string; color: string }> = {
     owner:       { label:'Owner',       color:'#fbbf24' },
-    team_leader: { label:'Team Leader', color:'#a78bfa' },
-    agent:       { label:'Agent',       color:'#60a5fa' },
+    team_leader: { label:'Team Leader', color:'#f8a36d' },
+    agent:       { label:'Agent',       color:'#948f88' },
     viewer:      { label:'Viewer',      color:'rgba(255,255,255,0.5)' },
   }
 
@@ -3001,7 +3158,12 @@ function ViewAsSelector({
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute right-0 top-full mt-1.5 z-50 rounded-xl overflow-hidden min-w-[180px]"
-            style={{ background:'#0e0e1e', border:'1px solid rgba(255,255,255,0.1)', boxShadow:'0 8px 32px rgba(0,0,0,0.5)' }}>
+            style={{
+              background:'rgba(19,20,22,0.92)',
+              border:'1px solid rgba(217,133,90,0.16)',
+              boxShadow:'0 18px 48px rgba(0,0,0,0.42)',
+              backdropFilter:'blur(18px)',
+            }}>
             <div className="px-3 pt-2.5 pb-1 text-[9px] font-black uppercase tracking-widest text-white/25">View as (demo)</div>
             {options.map(opt => {
               const oc = rolePalette[opt.role]
@@ -3028,8 +3190,8 @@ function ViewAsSelector({
 
 const ROLE_CFG: Record<Role, { label: string; color: string; bg: string; border: string; desc: string }> = {
   owner:       { label:'Owner',       color:'#fbbf24', bg:'rgba(251,191,36,0.10)',   border:'rgba(251,191,36,0.22)',   desc:'Full access to everything'              },
-  team_leader: { label:'Team Leader', color:'#a78bfa', bg:'rgba(167,139,250,0.10)',  border:'rgba(167,139,250,0.22)',  desc:'Manage agents and assigned leads'        },
-  agent:       { label:'Agent',       color:'#60a5fa', bg:'rgba(96,165,250,0.10)',   border:'rgba(96,165,250,0.22)',   desc:'View and update assigned leads'          },
+  team_leader: { label:'Team Leader', color:'#f8a36d', bg:'rgba(244,122,99,0.10)',  border:'rgba(244,122,99,0.22)',  desc:'Manage agents and assigned leads'        },
+  agent:       { label:'Agent',       color:'#948f88', bg:'rgba(148,145,140,0.10)',   border:'rgba(148,145,140,0.22)',   desc:'View and update assigned leads'          },
   viewer:      { label:'Viewer',      color:'rgba(255,255,255,0.35)', bg:'rgba(255,255,255,0.05)', border:'rgba(255,255,255,0.12)', desc:'Read-only access' },
 }
 
@@ -3130,7 +3292,7 @@ function TeamSection({
                 }
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
-              style={{ background:'rgba(167,139,250,0.12)', border:'1px solid rgba(167,139,250,0.3)', color:'#c4b5fd' }}>
+              style={{ background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.3)', color:'#f8a36d' }}>
               <UserPlus className="w-3.5 h-3.5" />{showInvite ? 'Cancel' : 'Invite Member'}
             </button>
           )}
@@ -3149,13 +3311,13 @@ function TeamSection({
                   onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                   className="px-3 py-2 rounded-xl text-sm text-white placeholder-white/20 outline-none"
                   style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }}
-                  onFocus={e=>{ e.currentTarget.style.border='1px solid rgba(139,92,246,0.4)' }}
+                  onFocus={e=>{ e.currentTarget.style.border='1px solid rgba(244,122,99,0.4)' }}
                   onBlur={e=>{  e.currentTarget.style.border='1px solid rgba(255,255,255,0.1)'  }} />
                 <input type="email" placeholder="Email address" value={form.email}
                   onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
                   className="px-3 py-2 rounded-xl text-sm text-white placeholder-white/20 outline-none"
                   style={{ background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)' }}
-                  onFocus={e=>{ e.currentTarget.style.border='1px solid rgba(139,92,246,0.4)' }}
+                  onFocus={e=>{ e.currentTarget.style.border='1px solid rgba(244,122,99,0.4)' }}
                   onBlur={e=>{  e.currentTarget.style.border='1px solid rgba(255,255,255,0.1)'  }} />
                 <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value as Role }))}
                   className="px-3 py-2 rounded-xl text-sm outline-none appearance-none"
@@ -3170,9 +3332,9 @@ function TeamSection({
               <div className="flex gap-3">
                 <button onClick={() => void handleInvite()} disabled={inviting}
                   className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-all"
-                  style={{ background:'rgba(139,92,246,0.18)', border:'1px solid rgba(139,92,246,0.35)', color:'#c4b5fd' }}>
+                  style={{ background:'rgba(244,122,99,0.18)', border:'1px solid rgba(244,122,99,0.35)', color:'#f8a36d' }}>
                   {inviting
-                    ? <><motion.span className="w-3 h-3 rounded-full border-2 border-violet-400/30 border-t-violet-400"
+                    ? <><motion.span className="w-3 h-3 rounded-full border-2 border-orange-400/30 border-t-orange-400"
                         animate={{ rotate:360 }} transition={{ duration:0.7, repeat:Infinity, ease:'linear' }} />Inviting…</>
                     : <><UserPlus className="w-3.5 h-3.5" />Send Invite</>}
                 </button>
@@ -3209,11 +3371,11 @@ function TeamSection({
 
       {/* SQL prerequisite notice */}
       <div className="flex items-start gap-3 px-4 py-3 rounded-xl"
-        style={{ background:'rgba(96,165,250,0.06)', border:'1px solid rgba(96,165,250,0.15)' }}>
-        <AlertCircle className="w-4 h-4 text-blue-400/60 flex-shrink-0 mt-0.5" />
+        style={{ background:'rgba(148,145,140,0.06)', border:'1px solid rgba(148,145,140,0.15)' }}>
+        <AlertCircle className="w-4 h-4 text-stone-400/60 flex-shrink-0 mt-0.5" />
         <div>
-          <p className="text-xs font-semibold text-blue-300/80">Database setup required to use this feature</p>
-          <p className="text-[10px] text-blue-300/50 mt-0.5">Run once in your Supabase SQL editor — see the comment at the top of <code>app/dashboard/types.ts</code></p>
+          <p className="text-xs font-semibold text-stone-300/80">Database setup required to use this feature</p>
+          <p className="text-[10px] text-stone-300/50 mt-0.5">Run once in your Supabase SQL editor — see the comment at the top of <code>app/dashboard/types.ts</code></p>
         </div>
       </div>
 
@@ -3234,7 +3396,7 @@ function TeamSection({
               <Card key={member.id} className="px-4 py-4 flex items-center gap-4 flex-wrap sm:flex-nowrap">
                 {/* Avatar */}
                 <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-black text-white flex-shrink-0"
-                  style={{ background:'linear-gradient(135deg,rgba(139,92,246,0.45),rgba(59,130,246,0.45))' }}>
+                  style={{ background:'linear-gradient(135deg,rgba(244,122,99,0.45),rgba(148,145,140,0.45))' }}>
                   {member.name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()}
                 </div>
 
@@ -3272,7 +3434,7 @@ function TeamSection({
                         onChange={e => void handleRoleChange(member.id, e.target.value as Role)}
                         onBlur={() => setEditRoleId(null)}
                         className="px-2 py-1 rounded-lg text-xs outline-none appearance-none"
-                        style={{ background:'rgba(139,92,246,0.12)', border:'1px solid rgba(139,92,246,0.3)', color:'#c4b5fd', colorScheme:'dark' }}>
+                        style={{ background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.3)', color:'#f8a36d', colorScheme:'dark' }}>
                         {currentUserRole !== 'team_leader' && <option value="owner">Owner</option>}
                         <option value="team_leader">Team Leader</option>
                         <option value="agent">Agent</option>
@@ -3319,10 +3481,962 @@ function TeamSection({
   )
 }
 
+type RentalTab = 'fleet' | 'calendar' | 'availability' | 'booking' | 'locations' | 'documents' | 'sync'
+
+const RENTAL_TABS: { id: RentalTab; label: string; Icon: React.ComponentType<{ className?: string }> }[] = [
+  { id: 'fleet', label: 'Fleet', Icon: Car },
+  { id: 'calendar', label: 'Calendar', Icon: Calendar },
+  { id: 'availability', label: 'Availability', Icon: Search },
+  { id: 'booking', label: 'Booking', Icon: CalendarPlus },
+  { id: 'locations', label: 'Locations', Icon: MapPin },
+  { id: 'documents', label: 'Documents', Icon: FileText },
+  { id: 'sync', label: 'Sync & Rules', Icon: Link2 },
+]
+
+const RENTAL_STATUS_CFG: Record<string, { color: string; bg: string; label: string }> = {
+  pending: { color: '#fbbf24', bg: 'rgba(251,191,36,0.12)', label: 'Pending' },
+  confirmed: { color: '#f8a36d', bg: 'rgba(248,163,109,0.12)', label: 'Confirmed' },
+  paid: { color: '#34d399', bg: 'rgba(52,211,153,0.12)', label: 'Paid' },
+  picked_up: { color: '#f47a63', bg: 'rgba(244,122,99,0.12)', label: 'Picked up' },
+  returned: { color: '#948f88', bg: 'rgba(148,145,140,0.12)', label: 'Returned' },
+  extended: { color: '#fb923c', bg: 'rgba(251,146,60,0.12)', label: 'Extended' },
+  cancelled: { color: '#f87171', bg: 'rgba(248,113,113,0.12)', label: 'Cancelled' },
+  maintenance: { color: '#cbd5e1', bg: 'rgba(203,213,225,0.10)', label: 'Maintenance' },
+  available: { color: '#34d399', bg: 'rgba(52,211,153,0.10)', label: 'Available' },
+  inactive: { color: '#64748b', bg: 'rgba(100,116,139,0.12)', label: 'Inactive' },
+}
+
+const RENTAL_MAKES = ['Toyota', 'Hyundai', 'Kia', 'Honda', 'Nissan', 'Volkswagen', 'Skoda', 'Mercedes', 'BMW', 'Audi', 'Ford', 'Renault', 'Peugeot', 'Opel', 'Fiat', 'Tesla']
+const RENTAL_MODELS_BY_MAKE: Record<string, string[]> = {
+  Toyota: ['Corolla', 'Yaris', 'Camry', 'RAV4', 'Prius', 'CHR', 'Land Cruiser', 'Proace'],
+  Hyundai: ['i10', 'i20', 'i30', 'Elantra', 'Tucson', 'Santa Fe', 'Kona'],
+  Kia: ['Picanto', 'Rio', 'Ceed', 'Sportage', 'Sorento', 'Stonic'],
+  Honda: ['Jazz', 'Civic', 'Accord', 'HR-V', 'CR-V'],
+  Nissan: ['Micra', 'Juke', 'Qashqai', 'X-Trail', 'Leaf'],
+  Volkswagen: ['Polo', 'Golf', 'Passat', 'T-Roc', 'Tiguan', 'Transporter'],
+  Skoda: ['Fabia', 'Octavia', 'Superb', 'Kamiq', 'Karoq', 'Kodiaq'],
+  Mercedes: ['A-Class', 'C-Class', 'E-Class', 'GLC', 'Vito', 'Sprinter'],
+  BMW: ['1 Series', '3 Series', '5 Series', 'X1', 'X3', 'X5'],
+  Audi: ['A1', 'A3', 'A4', 'A6', 'Q3', 'Q5', 'Q7'],
+  Ford: ['Fiesta', 'Focus', 'Mondeo', 'Kuga', 'Transit'],
+  Renault: ['Clio', 'Megane', 'Captur', 'Kadjar', 'Trafic'],
+  Peugeot: ['208', '308', '3008', '5008', 'Partner'],
+  Opel: ['Corsa', 'Astra', 'Insignia', 'Mokka', 'Vivaro'],
+  Fiat: ['500', 'Panda', 'Tipo', 'Doblo', 'Ducato'],
+  Tesla: ['Model 3', 'Model Y', 'Model S', 'Model X'],
+}
+const RENTAL_CLASSES = ['Economy', 'Compact', 'Sedan', 'SUV', 'Luxury', 'Van', 'Truck']
+const RENTAL_TRANSMISSIONS = ['Automatic', 'Manual']
+const RENTAL_FUEL_TYPES = ['Petrol', 'Diesel', 'LPG', 'Hybrid', 'Plug-in Hybrid', 'Electric']
+const RENTAL_CAR_STATUSES = ['Available', 'Reserved', 'Rented', 'Cleaning', 'Maintenance', 'Out of service']
+
+type RentalCarForm = {
+  id?: string
+  make: string
+  model: string
+  name: string
+  className: string
+  transmission: string
+  seats: string
+  fuelType: string
+  dailyPrice: string
+  deposit: string
+  licensePlate: string
+  locationName: string
+  status: string
+  imageUrl: string
+  notes: string
+  active: boolean
+}
+
+type RentalLocationForm = {
+  id?: string
+  locationType: 'pickup' | 'dropoff' | 'both'
+  name: string
+  address: string
+  googleMapsLink: string
+  latitude: string
+  longitude: string
+  terminalInstructions: string
+  pickupInstructionText: string
+  dropoffInstructionText: string
+  active: boolean
+}
+
+function emptyRentalCarForm(locations: RentalLocation[] = []): RentalCarForm {
+  return {
+    make: 'Toyota',
+    model: 'Corolla',
+    name: 'Toyota Corolla',
+    className: 'Economy',
+    transmission: 'Automatic',
+    seats: '5',
+    fuelType: 'Petrol',
+    dailyPrice: '',
+    deposit: '',
+    licensePlate: '',
+    locationName: locations[0]?.name ?? '',
+    status: 'Available',
+    imageUrl: '',
+    notes: '',
+    active: true,
+  }
+}
+
+function emptyRentalLocationForm(): RentalLocationForm {
+  return {
+    locationType: 'both',
+    name: '',
+    address: '',
+    googleMapsLink: '',
+    latitude: '',
+    longitude: '',
+    terminalInstructions: '',
+    pickupInstructionText: '',
+    dropoffInstructionText: '',
+    active: true,
+  }
+}
+
+function RentalStatusBadge({ status }: { status: string }) {
+  const cfg = RENTAL_STATUS_CFG[status] ?? RENTAL_STATUS_CFG.pending
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold" style={{ color: cfg.color, background: cfg.bg }}>
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: cfg.color }} />
+      {cfg.label}
+    </span>
+  )
+}
+
+function toInputDateTime(value: Date) {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`
+}
+
+function bookingTouchesDay(booking: RentalBooking, day: Date) {
+  const start = new Date(day)
+  start.setHours(0, 0, 0, 0)
+  const end = new Date(start)
+  end.setDate(end.getDate() + 1)
+  return new Date(booking.pickupAt) < end && new Date(booking.returnAt) > start
+}
+
+function RentalOperationsSection() {
+  const tomorrow = useMemo(() => {
+    const date = new Date()
+    date.setDate(date.getDate() + 1)
+    date.setHours(10, 0, 0, 0)
+    return date
+  }, [])
+  const later = useMemo(() => {
+    const date = new Date(tomorrow)
+    date.setDate(date.getDate() + 3)
+    date.setHours(12, 0, 0, 0)
+    return date
+  }, [tomorrow])
+
+  const [tab, setTab] = useState<RentalTab>('fleet')
+  const [loading, setLoading] = useState(true)
+  const [migrationRequired, setMigrationRequired] = useState(false)
+  const [cars, setCars] = useState<RentalCar[]>([])
+  const [bookings, setBookings] = useState<RentalBooking[]>([])
+  const [locations, setLocations] = useState<RentalLocation[]>([])
+  const [settings, setSettings] = useState<RentalSettings>({
+    cleaningBufferMinutes: 120,
+    externalSyncEnabled: false,
+    syncDirection: 'two_way',
+  })
+  const [availabilityForm, setAvailabilityForm] = useState({
+    pickupDateTime: toInputDateTime(tomorrow),
+    returnDateTime: toInputDateTime(later),
+    pickupLocation: '',
+    dropoffLocation: '',
+    carClass: 'Compact',
+    transmission: '',
+    seats: '',
+    budget: '',
+  })
+  const [matches, setMatches] = useState<AvailabilityMatch[]>([])
+  const [availabilityStatus, setAvailabilityStatus] = useState<string>('')
+  const [bookingForm, setBookingForm] = useState({
+    customerName: '',
+    phone: '',
+    email: '',
+    pickupDateTime: toInputDateTime(tomorrow),
+    returnDateTime: toInputDateTime(later),
+    pickupLocationId: '',
+    dropoffLocationId: '',
+    carId: '',
+    carClass: 'Compact',
+    extras: '',
+    totalPrice: '0',
+    deposit: '0',
+    paymentStatus: 'pending',
+  })
+  const [createdBooking, setCreatedBooking] = useState<{ bookingNumber: string; confirmationUrl: string; whatsappMessage: string } | null>(null)
+  const [syncStatus, setSyncStatus] = useState<string>('')
+  const [ocrStatus, setOcrStatus] = useState<string>('')
+  const [carModalOpen, setCarModalOpen] = useState(false)
+  const [locationModalOpen, setLocationModalOpen] = useState(false)
+  const [carForm, setCarForm] = useState<RentalCarForm>(() => emptyRentalCarForm())
+  const [locationForm, setLocationForm] = useState<RentalLocationForm>(() => emptyRentalLocationForm())
+  const [crudStatus, setCrudStatus] = useState('')
+  const fleetCsvRef = useRef<HTMLInputElement>(null)
+
+  const reloadFleet = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch('/api/rental/fleet')
+      const data = await res.json()
+      setCars(data.cars ?? [])
+      setBookings(data.bookings ?? [])
+      setLocations(data.locations ?? [])
+      setSettings(data.settings ?? { cleaningBufferMinutes: 120, externalSyncEnabled: false, syncDirection: 'two_way' })
+      setMigrationRequired(Boolean(data.migrationRequired))
+      const firstLocation = data.locations?.[0]?.id ?? data.locations?.[0]?.name ?? ''
+      const firstCar = data.cars?.[0]?.id ?? ''
+      setBookingForm(prev => ({ ...prev, pickupLocationId: prev.pickupLocationId || firstLocation, dropoffLocationId: prev.dropoffLocationId || firstLocation, carId: prev.carId || firstCar }))
+      setAvailabilityForm(prev => ({ ...prev, pickupLocation: prev.pickupLocation || data.locations?.[0]?.name || '', dropoffLocation: prev.dropoffLocation || data.locations?.[0]?.name || '' }))
+    } catch {
+      setMigrationRequired(true)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void reloadFleet() }, [reloadFleet])
+
+  const days = useMemo(() => Array.from({ length: 7 }, (_, index) => {
+    const day = new Date()
+    day.setDate(day.getDate() + index)
+    return day
+  }), [])
+
+  async function runAvailabilityCheck() {
+    setAvailabilityStatus('Checking fleet availability...')
+    setMatches([])
+    try {
+      const res = await fetch('/api/rental/availability', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...availabilityForm,
+          seats: availabilityForm.seats ? Number(availabilityForm.seats) : undefined,
+          budget: availabilityForm.budget ? Number(availabilityForm.budget) : undefined,
+        }),
+      })
+      const data = await res.json()
+      setMatches(data.matches ?? [])
+      setAvailabilityStatus((data.matches?.length ?? 0) ? `${data.matches.length} available option(s)` : 'No good option found. Human handover recommended.')
+    } catch {
+      setAvailabilityStatus('Availability check failed. Try again or hand over to a human.')
+    }
+  }
+
+  function openAddCar() {
+    setCarForm(emptyRentalCarForm(locations))
+    setCarModalOpen(true)
+  }
+
+  function openEditCar(car: RentalCar) {
+    const makeMatch = RENTAL_MAKES.find(make => car.name.toLowerCase().startsWith(make.toLowerCase())) ?? 'Toyota'
+    setCarForm({
+      id: car.id,
+      make: makeMatch,
+      model: car.model ?? RENTAL_MODELS_BY_MAKE[makeMatch]?.[0] ?? '',
+      name: car.name,
+      className: car.className,
+      transmission: car.transmission === 'manual' ? 'Manual' : 'Automatic',
+      seats: String(car.seats ?? ''),
+      fuelType: car.fuelType ?? 'Petrol',
+      dailyPrice: String(car.dailyPrice ?? ''),
+      deposit: String(car.deposit ?? ''),
+      licensePlate: car.licensePlate ?? '',
+      locationName: car.locationName ?? locations[0]?.name ?? '',
+      status: RENTAL_STATUS_CFG[car.status]?.label ?? 'Available',
+      imageUrl: car.imageUrl ?? '',
+      notes: car.notes ?? '',
+      active: car.active,
+    })
+    setCarModalOpen(true)
+  }
+
+  async function saveCarForm() {
+    setCrudStatus(carForm.id ? 'Updating car...' : 'Adding car...')
+    const url = carForm.id ? `/api/rental/cars?id=${encodeURIComponent(carForm.id)}` : '/api/rental/cars'
+    const res = await fetch(url, {
+      method: carForm.id ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(carForm),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      setCrudStatus(data.error ?? 'Car save failed')
+      return
+    }
+    setCarModalOpen(false)
+    setCrudStatus('Saved car.')
+    await reloadFleet()
+  }
+
+  async function deleteCar(id: string) {
+    setCrudStatus('Deleting car...')
+    const res = await fetch(`/api/rental/cars?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+    const data = await res.json().catch(() => ({}))
+    setCrudStatus(res.ok ? 'Car deleted.' : data.error ?? 'Delete failed')
+    if (res.ok) await reloadFleet()
+  }
+
+  async function toggleCarActive(car: RentalCar) {
+    const status = car.active ? 'Out of service' : 'Available'
+    const res = await fetch(`/api/rental/cars?id=${encodeURIComponent(car.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: car.name,
+        model: car.model,
+        className: car.className,
+        transmission: car.transmission,
+        seats: car.seats,
+        fuelType: car.fuelType,
+        dailyPrice: car.dailyPrice,
+        deposit: car.deposit,
+        licensePlate: car.licensePlate,
+        locationName: car.locationName,
+        imageUrl: car.imageUrl,
+        notes: car.notes,
+        status,
+        active: !car.active,
+      }),
+    })
+    setCrudStatus(res.ok ? 'Car status updated.' : 'Status update failed')
+    if (res.ok) await reloadFleet()
+  }
+
+  function openAddLocation() {
+    setLocationForm(emptyRentalLocationForm())
+    setLocationModalOpen(true)
+  }
+
+  function openEditLocation(location: RentalLocation) {
+    setLocationForm({
+      id: location.id,
+      locationType: location.locationType ?? 'both',
+      name: location.name,
+      address: location.address ?? '',
+      googleMapsLink: location.googleMapsLink ?? '',
+      latitude: location.latitude == null ? '' : String(location.latitude),
+      longitude: location.longitude == null ? '' : String(location.longitude),
+      terminalInstructions: location.terminalInstructions ?? '',
+      pickupInstructionText: location.pickupInstructionText ?? location.whatsappText ?? '',
+      dropoffInstructionText: location.dropoffInstructionText ?? location.whatsappText ?? '',
+      active: location.active,
+    })
+    setLocationModalOpen(true)
+  }
+
+  async function saveLocationForm() {
+    setCrudStatus(locationForm.id ? 'Updating location...' : 'Adding location...')
+    const url = locationForm.id ? `/api/rental/locations?id=${encodeURIComponent(locationForm.id)}` : '/api/rental/locations'
+    const res = await fetch(url, {
+      method: locationForm.id ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(locationForm),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      setCrudStatus(data.error ?? 'Location save failed')
+      return
+    }
+    setLocationModalOpen(false)
+    setCrudStatus('Saved location.')
+    await reloadFleet()
+  }
+
+  async function deleteLocation(id: string) {
+    setCrudStatus('Deleting location...')
+    const res = await fetch(`/api/rental/locations?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+    const data = await res.json().catch(() => ({}))
+    setCrudStatus(res.ok ? 'Location deleted.' : data.error ?? 'Delete failed')
+    if (res.ok) await reloadFleet()
+  }
+
+  async function toggleLocationActive(location: RentalLocation) {
+    const res = await fetch(`/api/rental/locations?id=${encodeURIComponent(location.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...location,
+        locationType: location.locationType ?? 'both',
+        active: !location.active,
+      }),
+    })
+    setCrudStatus(res.ok ? 'Location status updated.' : 'Status update failed')
+    if (res.ok) await reloadFleet()
+  }
+
+  async function useDemoFleetNow() {
+    setCrudStatus('Importing demo fleet...')
+    const res = await fetch('/api/rental/cars?action=demo', { method: 'POST' })
+    const data = await res.json().catch(() => ({}))
+    setCrudStatus(res.ok ? `Imported ${data.importedCars ?? 0} demo cars.` : data.error ?? 'Demo import failed')
+    if (res.ok) await reloadFleet()
+  }
+
+  async function useDemoLocationsNow() {
+    setCrudStatus('Importing demo locations...')
+    const res = await fetch('/api/rental/locations?action=demo', { method: 'POST' })
+    const data = await res.json().catch(() => ({}))
+    setCrudStatus(res.ok ? `Imported ${data.importedLocations ?? 0} demo locations.` : data.error ?? 'Demo import failed')
+    if (res.ok) await reloadFleet()
+  }
+
+  async function importFleetCsv(file: File) {
+    setCrudStatus('Reading CSV...')
+    const text = await file.text()
+    const [headerLine, ...lines] = text.split(/\r?\n/).filter(Boolean)
+    const headers = headerLine.split(',').map(h => h.trim())
+    const required = ['car_name', 'make', 'model', 'class_name', 'transmission', 'seats', 'fuel_type', 'daily_price', 'deposit', 'license_plate', 'location', 'status']
+    const missing = required.filter(col => !headers.includes(col))
+    if (missing.length) {
+      setCrudStatus(`CSV missing columns: ${missing.join(', ')}`)
+      return
+    }
+    let imported = 0
+    for (const line of lines) {
+      const values = line.split(',').map(v => v.trim())
+      const row = Object.fromEntries(headers.map((header, index) => [header, values[index] ?? '']))
+      if (!row.car_name) continue
+      const res = await fetch('/api/rental/cars', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: row.car_name,
+          make: row.make,
+          model: row.model,
+          className: row.class_name,
+          transmission: row.transmission,
+          seats: row.seats,
+          fuelType: row.fuel_type,
+          dailyPrice: row.daily_price,
+          deposit: row.deposit,
+          licensePlate: row.license_plate,
+          locationName: row.location,
+          status: row.status,
+        }),
+      })
+      if (res.ok) imported++
+    }
+    setCrudStatus(`Imported ${imported} cars from CSV.`)
+    await reloadFleet()
+  }
+
+  async function createBooking() {
+    setCreatedBooking(null)
+    try {
+      const selectedCar = cars.find(car => car.id === bookingForm.carId)
+      const res = await fetch('/api/rental/bookings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...bookingForm,
+          carClass: selectedCar?.className ?? bookingForm.carClass,
+          totalPrice: Number(bookingForm.totalPrice || selectedCar?.dailyPrice || 0),
+          deposit: Number(bookingForm.deposit || selectedCar?.deposit || 0),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Booking failed')
+      setCreatedBooking(data)
+      await reloadFleet()
+    } catch (error) {
+      setCreatedBooking({
+        bookingNumber: 'Needs review',
+        confirmationUrl: '',
+        whatsappMessage: error instanceof Error ? error.message : 'Booking failed',
+      })
+    }
+  }
+
+  async function saveRentalSettings(syncNow = false) {
+    setSyncStatus(syncNow ? 'Sync requested...' : 'Saving settings...')
+    try {
+      const res = await fetch('/api/rental/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...settings, syncNow }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Save failed')
+      setSyncStatus(syncNow ? 'Manual sync queued. Check sync logs for external API errors.' : 'Rental settings saved.')
+      await reloadFleet()
+    } catch (error) {
+      setSyncStatus(error instanceof Error ? error.message : 'Settings save failed')
+    }
+  }
+
+  async function runOcrPlaceholder() {
+    setOcrStatus('Preparing secure OCR review...')
+    try {
+      const res = await fetch('/api/rental/documents/ocr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentType: 'driver_license', consent: true }),
+      })
+      const data = await res.json()
+      setOcrStatus(`${data.validationStatus ?? 'needs_review'} · confidence ${Math.round((data.confidence ?? 0) * 100)}% · human review required before accepting documents.`)
+    } catch {
+      setOcrStatus('OCR placeholder failed. Keep document review in human handover.')
+    }
+  }
+
+  const statusCounts = useMemo(() => {
+    return bookings.reduce<Record<string, number>>((acc, booking) => {
+      acc[booking.status] = (acc[booking.status] ?? 0) + 1
+      return acc
+    }, {})
+  }, [bookings])
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
+        <Card className="p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <Car className="h-5 w-5 text-[#f8a36d]" />
+                <h2 className="text-lg font-black text-white">Car Rental Operations Assistant</h2>
+              </div>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-white/46">
+                Manage fleet availability, website chat booking requests, human handover, driver documents, extensions, pickup instructions, and external calendar sync from one operational layer.
+              </p>
+            </div>
+            <button onClick={() => void reloadFleet()} className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-white px-4 text-sm font-semibold text-black transition-colors hover:bg-[#f5f0ea]">
+              <RefreshCw className="h-4 w-4" />
+              Refresh
+            </button>
+          </div>
+          {migrationRequired && (
+            <div className="mt-4 rounded-xl border border-[#f8a36d]/25 bg-[#f8a36d]/10 p-3 text-sm font-semibold text-[#f8a36d]">
+              Demo rental data is showing because the rental SQL migration has not been applied yet. Run sql/create_rental_operations.sql to activate live fleet tables.
+            </div>
+          )}
+        </Card>
+        <Card className="p-5">
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-white/34">Today</p>
+          <div className="mt-4 grid grid-cols-3 gap-3">
+            <div><p className="text-2xl font-black text-white">{cars.length}</p><p className="text-xs text-white/36">Cars</p></div>
+            <div><p className="text-2xl font-black text-white">{bookings.length}</p><p className="text-xs text-white/36">Bookings</p></div>
+            <div><p className="text-2xl font-black text-white">{settings.cleaningBufferMinutes ?? 120}m</p><p className="text-xs text-white/36">Buffer</p></div>
+          </div>
+        </Card>
+      </div>
+
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {RENTAL_TABS.map(item => (
+          <button
+            key={item.id}
+            onClick={() => setTab(item.id)}
+            className="inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-sm font-semibold transition-colors"
+            style={{
+              borderColor: tab === item.id ? 'rgba(248,163,109,0.42)' : 'rgba(255,255,255,0.08)',
+              background: tab === item.id ? 'rgba(248,163,109,0.12)' : 'rgba(255,255,255,0.035)',
+              color: tab === item.id ? '#f8a36d' : 'rgba(255,255,255,0.62)',
+            }}
+          >
+            <item.Icon className="h-4 w-4" />
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      {loading && <Card className="p-6 text-sm font-semibold text-white/46">Loading rental operations...</Card>}
+
+      {!loading && tab === 'fleet' && (
+        <Card className="overflow-hidden">
+          <div className="flex flex-col gap-4 border-b border-white/8 p-5 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h3 className="text-base font-black text-white">Fleet management</h3>
+              <p className="mt-1 text-sm text-white/40">Cars include class, transmission, seats, fuel, daily price, deposit, location, license plate, image slot, notes, and active state.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={openAddCar} className="btn-primary"><Plus className="h-4 w-4" />Add car</button>
+              <input ref={fleetCsvRef} type="file" accept=".csv" className="hidden" onChange={event => { const file = event.target.files?.[0]; if (file) void importFleetCsv(file) }} />
+              <button onClick={() => fleetCsvRef.current?.click()} className="btn-muted"><UploadCloud className="h-4 w-4" />Import CSV</button>
+              <button onClick={() => void useDemoFleetNow()} className="btn-muted"><Check className="h-4 w-4" />Use demo fleet</button>
+            </div>
+          </div>
+          {cars.length === 0 ? (
+            <div className="p-8 text-center">
+              <p className="text-base font-semibold text-white">No cars yet. Add your first car, import CSV, or use demo fleet.</p>
+              <div className="mt-5 flex justify-center gap-2">
+                <button onClick={openAddCar} className="btn-primary"><Plus className="h-4 w-4" />Add first car</button>
+                <button onClick={() => void useDemoFleetNow()} className="btn-muted">Use demo fleet</button>
+              </div>
+            </div>
+          ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px] text-left">
+              <thead className="bg-white/[0.025] text-[11px] uppercase tracking-[0.14em] text-white/34">
+                <tr>
+                  {['Car', 'Class', 'Specs', 'Price', 'Deposit', 'Location', 'Plate', 'Status', 'Notes', 'Actions'].map(column => <th key={column} className="px-5 py-4 font-black">{column}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {cars.map(car => (
+                  <tr key={car.id} className="border-t border-white/8">
+                    <td className="px-5 py-4">
+                      <div className="font-semibold text-white">{car.name}</div>
+                      <div className="mt-1 text-xs text-white/32">{car.imageUrl ? 'Image connected' : 'Image slot ready'}</div>
+                    </td>
+                    <td className="px-5 py-4 text-sm font-semibold text-white/68">{car.className}</td>
+                    <td className="px-5 py-4 text-sm text-white/48">{car.transmission} · {car.seats} seats · {car.fuelType}</td>
+                    <td className="px-5 py-4 text-sm font-semibold text-white/70">{car.dailyPrice} zł/day</td>
+                    <td className="px-5 py-4 text-sm text-white/50">{car.deposit} zł</td>
+                    <td className="px-5 py-4 text-sm text-white/50">{car.locationName ?? 'Unassigned'}</td>
+                    <td className="px-5 py-4 font-mono text-xs text-white/46">{car.licensePlate ?? '-'}</td>
+                    <td className="px-5 py-4"><RentalStatusBadge status={car.active ? car.status : 'inactive'} /></td>
+                    <td className="max-w-[220px] px-5 py-4 text-sm text-white/36">{car.notes ?? 'No notes'}</td>
+                    <td className="px-5 py-4">
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => openEditCar(car)} className="icon-btn" title="Edit car"><Pencil className="h-3.5 w-3.5" /></button>
+                        <button onClick={() => void toggleCarActive(car)} className="icon-btn" title={car.active ? 'Set inactive' : 'Set active'}><Eye className="h-3.5 w-3.5" /></button>
+                        <button onClick={() => void deleteCar(car.id)} className="icon-btn" title="Delete car"><Trash2 className="h-3.5 w-3.5" /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          )}
+          {crudStatus && <p className="border-t border-white/8 p-4 text-sm font-semibold text-[#f8a36d]">{crudStatus}</p>}
+        </Card>
+      )}
+
+      {!loading && tab === 'calendar' && (
+        <Card className="overflow-hidden">
+          <div className="border-b border-white/8 p-5">
+            <h3 className="text-base font-black text-white">Fleet booking calendar</h3>
+            <p className="mt-1 text-sm text-white/40">Rows are cars, columns are dates. Maintenance and unavailable periods block the same availability checker used by the bot.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <div className="min-w-[980px]">
+              <div className="grid grid-cols-[220px_repeat(7,1fr)] border-b border-white/8 bg-white/[0.025]">
+                <div className="p-4 text-xs font-black uppercase tracking-[0.14em] text-white/34">Car</div>
+                {days.map(day => <div key={day.toISOString()} className="p-4 text-xs font-black uppercase tracking-[0.14em] text-white/34">{fmtDate(day.toISOString())}</div>)}
+              </div>
+              {cars.map(car => (
+                <div key={car.id} className="grid grid-cols-[220px_repeat(7,1fr)] border-b border-white/8 last:border-b-0">
+                  <div className="p-4">
+                    <p className="text-sm font-semibold text-white">{car.name}</p>
+                    <p className="mt-1 text-xs text-white/34">{car.className}</p>
+                  </div>
+                  {days.map(day => {
+                    const dayBookings = bookings.filter(booking => booking.carId === car.id && bookingTouchesDay(booking, day))
+                    return (
+                      <div key={`${car.id}-${day.toISOString()}`} className="min-h-24 border-l border-white/8 p-2">
+                        {dayBookings.map(booking => (
+                          <div key={booking.id} className="mb-2 rounded-lg px-2 py-2 text-xs font-semibold" style={{ background: RENTAL_STATUS_CFG[booking.status]?.bg ?? 'rgba(255,255,255,0.06)', color: RENTAL_STATUS_CFG[booking.status]?.color ?? 'rgba(255,255,255,0.7)' }}>
+                            <div>{booking.bookingNumber}</div>
+                            <div className="mt-1 opacity-75">{RENTAL_STATUS_CFG[booking.status]?.label ?? booking.status}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="grid gap-3 border-t border-white/8 p-5 sm:grid-cols-3">
+            {Object.entries(statusCounts).map(([status, count]) => <div key={status} className="flex items-center justify-between rounded-xl border border-white/8 bg-white/[0.025] px-4 py-3"><RentalStatusBadge status={status} /><span className="text-sm font-black text-white">{count}</span></div>)}
+          </div>
+        </Card>
+      )}
+
+      {!loading && tab === 'availability' && (
+        <Card className="p-5">
+          <h3 className="text-base font-black text-white">Bot availability checker</h3>
+          <p className="mt-1 text-sm text-white/40">This is the same logic the AI tool uses before offering cars: internal bookings first, buffer applied, then exact, same-class, and nearest-class alternatives.</p>
+          <div className="mt-5 grid gap-3 md:grid-cols-4">
+            <input type="datetime-local" value={availabilityForm.pickupDateTime} onChange={e => setAvailabilityForm(prev => ({ ...prev, pickupDateTime: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <input type="datetime-local" value={availabilityForm.returnDateTime} onChange={e => setAvailabilityForm(prev => ({ ...prev, returnDateTime: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <input value={availabilityForm.carClass} onChange={e => setAvailabilityForm(prev => ({ ...prev, carClass: e.target.value }))} placeholder="Class" className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <select value={availabilityForm.transmission} onChange={e => setAvailabilityForm(prev => ({ ...prev, transmission: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+              <option value="">Any transmission</option>
+              <option value="automatic">Automatic</option>
+              <option value="manual">Manual</option>
+            </select>
+            <select value={availabilityForm.pickupLocation} onChange={e => setAvailabilityForm(prev => ({ ...prev, pickupLocation: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+              <option value="">Pickup location</option>
+              {locations.map(location => <option key={location.id} value={location.name}>{location.name}</option>)}
+            </select>
+            <select value={availabilityForm.dropoffLocation} onChange={e => setAvailabilityForm(prev => ({ ...prev, dropoffLocation: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+              <option value="">Drop-off location</option>
+              {locations.map(location => <option key={location.id} value={location.name}>{location.name}</option>)}
+            </select>
+            <input value={availabilityForm.seats} onChange={e => setAvailabilityForm(prev => ({ ...prev, seats: e.target.value }))} placeholder="Seats" inputMode="numeric" className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <input value={availabilityForm.budget} onChange={e => setAvailabilityForm(prev => ({ ...prev, budget: e.target.value }))} placeholder="Budget/day" inputMode="numeric" className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+          </div>
+          <button onClick={() => void runAvailabilityCheck()} className="mt-4 inline-flex h-10 items-center gap-2 rounded-full bg-white px-5 text-sm font-semibold text-black transition-colors hover:bg-[#f5f0ea]"><Search className="h-4 w-4" />Check availability</button>
+          {availabilityStatus && <p className="mt-4 text-sm font-semibold text-[#f8a36d]">{availabilityStatus}</p>}
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            {matches.map(match => (
+              <div key={`${match.matchType}-${match.car.id}`} className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+                <p className="text-sm font-black text-white">{match.car.name}</p>
+                <p className="mt-1 text-xs text-white/42">{match.car.className} · {match.car.transmission} · {match.car.seats} seats</p>
+                <p className="mt-4 text-2xl font-black text-white">{match.car.dailyPrice} zł/day</p>
+                <p className="mt-2 text-xs font-semibold text-[#f8a36d]">{match.reason}</p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {!loading && tab === 'booking' && (
+        <Card className="p-5">
+          <h3 className="text-base font-black text-white">Manual booking and confirmation workflow</h3>
+          <p className="mt-1 text-sm text-white/40">Creates a booking, blocks the calendar, prepares a confirmation PDF, and generates WhatsApp-ready confirmation text.</p>
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            <input placeholder="Customer name" value={bookingForm.customerName} onChange={e => setBookingForm(prev => ({ ...prev, customerName: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <input placeholder="Phone" value={bookingForm.phone} onChange={e => setBookingForm(prev => ({ ...prev, phone: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <input placeholder="Email" value={bookingForm.email} onChange={e => setBookingForm(prev => ({ ...prev, email: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <input type="datetime-local" value={bookingForm.pickupDateTime} onChange={e => setBookingForm(prev => ({ ...prev, pickupDateTime: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <input type="datetime-local" value={bookingForm.returnDateTime} onChange={e => setBookingForm(prev => ({ ...prev, returnDateTime: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <select value={bookingForm.carId} onChange={e => setBookingForm(prev => ({ ...prev, carId: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+              <option value="">Select car</option>
+              {cars.map(car => <option key={car.id} value={car.id}>{car.name} · {car.className}</option>)}
+            </select>
+            <select value={bookingForm.pickupLocationId} onChange={e => setBookingForm(prev => ({ ...prev, pickupLocationId: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+              <option value="">Pickup location</option>
+              {locations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}
+            </select>
+            <input placeholder="Extras" value={bookingForm.extras} onChange={e => setBookingForm(prev => ({ ...prev, extras: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+            <input placeholder="Total price" value={bookingForm.totalPrice} onChange={e => setBookingForm(prev => ({ ...prev, totalPrice: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+          </div>
+          <button onClick={() => void createBooking()} className="mt-4 inline-flex h-10 items-center gap-2 rounded-full bg-white px-5 text-sm font-semibold text-black transition-colors hover:bg-[#f5f0ea]"><CreditCard className="h-4 w-4" />Create booking</button>
+          {createdBooking && (
+            <div className="mt-5 rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+              <p className="text-sm font-black text-white">Booking {createdBooking.bookingNumber}</p>
+              {createdBooking.confirmationUrl && <a href={createdBooking.confirmationUrl} target="_blank" className="mt-2 inline-flex items-center gap-2 text-sm font-semibold text-[#f8a36d]">Download confirmation PDF <ExternalLink className="h-3.5 w-3.5" /></a>}
+              <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-white/48">{createdBooking.whatsappMessage}</p>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {!loading && tab === 'locations' && (
+        <Card className="p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h3 className="text-base font-black text-white">Pickup and drop-off locations</h3>
+              <p className="mt-1 text-sm text-white/40">No locations yet? Add pickup/drop-off locations so the bot can guide customers.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={openAddLocation} className="btn-primary"><Plus className="h-4 w-4" />Add location</button>
+              <button onClick={() => void useDemoLocationsNow()} className="btn-muted">Use demo locations</button>
+            </div>
+          </div>
+          {locations.length === 0 ? (
+            <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.025] p-8 text-center">
+              <p className="text-base font-semibold text-white">No locations yet. Add pickup/drop-off locations so the bot can guide customers.</p>
+              <button onClick={openAddLocation} className="btn-primary mt-5"><Plus className="h-4 w-4" />Add pickup/drop-off location</button>
+            </div>
+          ) : (
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            {locations.map(location => (
+            <div key={location.id} className="rounded-2xl border border-white/8 bg-white/[0.025] p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-base font-black text-white">{location.name}</h3>
+                  <p className="mt-1 text-sm text-white/42">{location.address}</p>
+                  <p className="mt-1 text-xs font-semibold uppercase tracking-[0.12em] text-[#f8a36d]">{location.locationType ?? 'both'} · {location.active ? 'active' : 'inactive'}</p>
+                </div>
+                <div className="flex gap-2">
+                  {location.googleMapsLink && <a href={location.googleMapsLink} target="_blank" className="rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-white/62 hover:text-white">Map</a>}
+                  <button onClick={() => openEditLocation(location)} className="icon-btn"><Pencil className="h-3.5 w-3.5" /></button>
+                  <button onClick={() => void toggleLocationActive(location)} className="icon-btn"><Eye className="h-3.5 w-3.5" /></button>
+                  <button onClick={() => void deleteLocation(location.id)} className="icon-btn"><Trash2 className="h-3.5 w-3.5" /></button>
+                </div>
+              </div>
+              <p className="mt-4 text-sm leading-6 text-white/52">{location.terminalInstructions ?? 'Add terminal, meeting point, parking zone, and pickup card instructions.'}</p>
+              <div className="mt-4 rounded-xl bg-black/30 p-3 text-xs leading-5 text-white/44">
+                Pickup: {location.pickupInstructionText ?? location.whatsappText ?? `Your pickup point is ${location.name}.`}
+                <br />
+                Drop-off: {location.dropoffInstructionText ?? location.whatsappText ?? `Return the car at ${location.name}.`}
+              </div>
+            </div>
+          ))}
+          </div>
+          )}
+          {crudStatus && <p className="mt-4 text-sm font-semibold text-[#f8a36d]">{crudStatus}</p>}
+        </Card>
+      )}
+
+      {!loading && tab === 'documents' && (
+        <div className="grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
+          <Card className="p-5">
+            <h3 className="text-base font-black text-white">Document collection and OCR placeholder</h3>
+            <p className="mt-2 text-sm leading-6 text-white/44">
+              Customers should see a consent/privacy notice before uploading driver license, passport, or ID documents. OCR extracts name, document number, expiry date, and date of birth when connected.
+            </p>
+            <button onClick={() => void runOcrPlaceholder()} className="mt-5 inline-flex h-10 items-center gap-2 rounded-full bg-white px-5 text-sm font-semibold text-black transition-colors hover:bg-[#f5f0ea]">
+              <UploadCloud className="h-4 w-4" />
+              Test OCR placeholder
+            </button>
+            {ocrStatus && <p className="mt-4 text-sm font-semibold text-[#f8a36d]">{ocrStatus}</p>}
+          </Card>
+          <Card className="p-5">
+            <h3 className="text-base font-black text-white">Validation rules</h3>
+            <div className="mt-4 grid gap-3">
+              {['Expired document', 'Missing expiry date', 'Low OCR confidence', 'Name mismatch', 'Unreadable document'].map(rule => (
+                <div key={rule} className="flex items-center gap-3 rounded-xl border border-white/8 bg-white/[0.025] p-3 text-sm font-semibold text-white/58">
+                  <Shield className="h-4 w-4 text-[#f8a36d]" />
+                  {rule} triggers human review
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {!loading && tab === 'sync' && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card className="p-5">
+            <h3 className="text-base font-black text-white">External booking calendar API</h3>
+            <p className="mt-1 text-sm text-white/40">Connect an existing website booking calendar. Availability checks can consider imported bookings, and bot-created bookings can be pushed back out.</p>
+            <div className="mt-5 grid gap-3">
+              <input placeholder="Provider name" value={settings.providerName ?? ''} onChange={e => setSettings(prev => ({ ...prev, providerName: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+              <input placeholder="API URL" value={settings.apiUrl ?? ''} onChange={e => setSettings(prev => ({ ...prev, apiUrl: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+              <input placeholder="API key/token" type="password" onChange={e => setSettings(prev => ({ ...prev, apiKeyConfigured: Boolean(e.target.value) }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+              <input placeholder="Webhook URL" value={settings.webhookUrl ?? ''} onChange={e => setSettings(prev => ({ ...prev, webhookUrl: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+              <select value={settings.syncDirection ?? 'two_way'} onChange={e => setSettings(prev => ({ ...prev, syncDirection: e.target.value as RentalSettings['syncDirection'] }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+                <option value="none">Disabled</option>
+                <option value="import">Import only</option>
+                <option value="push">Push only</option>
+                <option value="two_way">Import and push</option>
+              </select>
+              <label className="flex items-center gap-3 text-sm font-semibold text-white/58">
+                <input type="checkbox" checked={Boolean(settings.externalSyncEnabled)} onChange={e => setSettings(prev => ({ ...prev, externalSyncEnabled: e.target.checked }))} />
+                External sync enabled
+              </label>
+            </div>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <button onClick={() => void saveRentalSettings(false)} className="inline-flex h-10 items-center gap-2 rounded-full bg-white px-5 text-sm font-semibold text-black transition-colors hover:bg-[#f5f0ea]">Save settings</button>
+              <button onClick={() => void saveRentalSettings(true)} className="inline-flex h-10 items-center gap-2 rounded-full border border-white/12 px-5 text-sm font-semibold text-white/70 transition-colors hover:border-[#f8a36d]/35 hover:text-white"><RefreshCw className="h-4 w-4" />Sync now</button>
+            </div>
+            {syncStatus && <p className="mt-4 text-sm font-semibold text-[#f8a36d]">{syncStatus}</p>}
+          </Card>
+          <Card className="p-5">
+            <h3 className="text-base font-black text-white">Extension and handover rules</h3>
+            <div className="mt-4 space-y-3">
+              {[
+                ['Extension workflow', 'Identify booking by phone, email, or booking number, check same-car availability with buffer, calculate extra cost, prepare payment link placeholder, and regenerate PDF after confirmation.'],
+                ['Location help', 'When customers ask where to go, identify booking pickup location and send the Google Maps pin plus terminal or parking instructions.'],
+                ['Auto-handover', 'No availability, discount/refund/deposit requests, document issues, angry customers, unresolved location issues, high-value bookings, or low confidence.'],
+              ].map(([title, copy]) => (
+                <div key={title} className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+                  <p className="text-sm font-black text-white">{title}</p>
+                  <p className="mt-2 text-sm leading-6 text-white/46">{copy}</p>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      <AnimatePresence>
+        {carModalOpen && (
+          <motion.div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-4 backdrop-blur-xl" initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}>
+            <motion.div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-3xl border border-white/10 bg-[#0d0d0c] p-6 shadow-2xl" initial={{ y:16, scale:0.98 }} animate={{ y:0, scale:1 }} exit={{ y:12, scale:0.98 }}>
+              <div className="flex items-center justify-between gap-4">
+                <h3 className="text-lg font-black text-white">{carForm.id ? 'Edit car' : 'Add car'}</h3>
+                <button onClick={() => setCarModalOpen(false)} className="icon-btn"><X className="h-4 w-4" /></button>
+              </div>
+              <div className="mt-5 grid gap-3 md:grid-cols-3">
+                <select value={carForm.make} onChange={e => {
+                  const make = e.target.value
+                  const model = RENTAL_MODELS_BY_MAKE[make]?.[0] ?? ''
+                  setCarForm(prev => ({ ...prev, make, model, name: `${make} ${model}`.trim() }))
+                }} className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+                  {RENTAL_MAKES.map(make => <option key={make}>{make}</option>)}
+                </select>
+                <select value={carForm.model} onChange={e => setCarForm(prev => ({ ...prev, model: e.target.value, name: `${prev.make} ${e.target.value}`.trim() }))} className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+                  {(RENTAL_MODELS_BY_MAKE[carForm.make] ?? []).map(model => <option key={model}>{model}</option>)}
+                </select>
+                <input value={carForm.name} onChange={e => setCarForm(prev => ({ ...prev, name: e.target.value }))} placeholder="Car name/model" className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+                <select value={carForm.className} onChange={e => setCarForm(prev => ({ ...prev, className: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+                  {RENTAL_CLASSES.map(value => <option key={value}>{value}</option>)}
+                </select>
+                <select value={carForm.transmission} onChange={e => setCarForm(prev => ({ ...prev, transmission: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+                  {RENTAL_TRANSMISSIONS.map(value => <option key={value}>{value}</option>)}
+                </select>
+                <select value={carForm.fuelType} onChange={e => setCarForm(prev => ({ ...prev, fuelType: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+                  {RENTAL_FUEL_TYPES.map(value => <option key={value}>{value}</option>)}
+                </select>
+                <input value={carForm.seats} onChange={e => setCarForm(prev => ({ ...prev, seats: e.target.value }))} placeholder="Seats" type="number" className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+                <input value={carForm.dailyPrice} onChange={e => setCarForm(prev => ({ ...prev, dailyPrice: e.target.value }))} placeholder="Daily price" type="number" className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+                <input value={carForm.deposit} onChange={e => setCarForm(prev => ({ ...prev, deposit: e.target.value }))} placeholder="Deposit" type="number" className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+                <input value={carForm.licensePlate} onChange={e => setCarForm(prev => ({ ...prev, licensePlate: e.target.value }))} placeholder="License plate" className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+                <select value={carForm.locationName} onChange={e => setCarForm(prev => ({ ...prev, locationName: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+                  <option value="">No base location</option>
+                  {locations.map(location => <option key={location.id} value={location.name}>{location.name}</option>)}
+                </select>
+                <select value={carForm.status} onChange={e => setCarForm(prev => ({ ...prev, status: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+                  {RENTAL_CAR_STATUSES.map(value => <option key={value}>{value}</option>)}
+                </select>
+                <input value={carForm.imageUrl} onChange={e => setCarForm(prev => ({ ...prev, imageUrl: e.target.value }))} placeholder="Image URL/upload placeholder" className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55 md:col-span-2" />
+                <label className="flex h-11 items-center gap-3 rounded-xl border border-white/10 bg-black/30 px-3 text-sm font-semibold text-white/60"><input type="checkbox" checked={carForm.active} onChange={e => setCarForm(prev => ({ ...prev, active: e.target.checked }))} />Active</label>
+                <textarea value={carForm.notes} onChange={e => setCarForm(prev => ({ ...prev, notes: e.target.value }))} placeholder="Notes" rows={3} className="rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none focus:border-[#f8a36d]/55 md:col-span-3" />
+              </div>
+              <div className="mt-5 flex justify-end gap-3">
+                <button onClick={() => setCarModalOpen(false)} className="btn-muted">Cancel</button>
+                <button onClick={() => void saveCarForm()} className="btn-primary">Save car</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {locationModalOpen && (
+          <motion.div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-4 backdrop-blur-xl" initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}>
+            <motion.div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-3xl border border-white/10 bg-[#0d0d0c] p-6 shadow-2xl" initial={{ y:16, scale:0.98 }} animate={{ y:0, scale:1 }} exit={{ y:12, scale:0.98 }}>
+              <div className="flex items-center justify-between gap-4">
+                <h3 className="text-lg font-black text-white">{locationForm.id ? 'Edit location' : 'Add location'}</h3>
+                <button onClick={() => setLocationModalOpen(false)} className="icon-btn"><X className="h-4 w-4" /></button>
+              </div>
+              <div className="mt-5 grid gap-3 md:grid-cols-3">
+                <select value={locationForm.locationType} onChange={e => setLocationForm(prev => ({ ...prev, locationType: e.target.value as RentalLocationForm['locationType'] }))} className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+                  <option value="pickup">Pickup</option>
+                  <option value="dropoff">Drop-off</option>
+                  <option value="both">Both</option>
+                </select>
+                <input value={locationForm.name} onChange={e => setLocationForm(prev => ({ ...prev, name: e.target.value }))} placeholder="Location name" className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+                <input value={locationForm.address} onChange={e => setLocationForm(prev => ({ ...prev, address: e.target.value }))} placeholder="Address" className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+                <input value={locationForm.googleMapsLink} onChange={e => setLocationForm(prev => ({ ...prev, googleMapsLink: e.target.value }))} placeholder="Google Maps link" className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55 md:col-span-3" />
+                <input value={locationForm.latitude} onChange={e => setLocationForm(prev => ({ ...prev, latitude: e.target.value }))} placeholder="Latitude optional" className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+                <input value={locationForm.longitude} onChange={e => setLocationForm(prev => ({ ...prev, longitude: e.target.value }))} placeholder="Longitude optional" className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
+                <label className="flex h-11 items-center gap-3 rounded-xl border border-white/10 bg-black/30 px-3 text-sm font-semibold text-white/60"><input type="checkbox" checked={locationForm.active} onChange={e => setLocationForm(prev => ({ ...prev, active: e.target.checked }))} />Active</label>
+                <textarea value={locationForm.terminalInstructions} onChange={e => setLocationForm(prev => ({ ...prev, terminalInstructions: e.target.value }))} placeholder="Airport terminal instructions" rows={3} className="rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none focus:border-[#f8a36d]/55 md:col-span-3" />
+                <textarea value={locationForm.pickupInstructionText} onChange={e => setLocationForm(prev => ({ ...prev, pickupInstructionText: e.target.value }))} placeholder="Pickup instruction text" rows={3} className="rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none focus:border-[#f8a36d]/55 md:col-span-3" />
+                <textarea value={locationForm.dropoffInstructionText} onChange={e => setLocationForm(prev => ({ ...prev, dropoffInstructionText: e.target.value }))} placeholder="Drop-off instruction text" rows={3} className="rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none focus:border-[#f8a36d]/55 md:col-span-3" />
+              </div>
+              <div className="mt-5 flex justify-end gap-3">
+                <button onClick={() => setLocationModalOpen(false)} className="btn-muted">Cancel</button>
+                <button onClick={() => void saveLocationForm()} className="btn-primary">Save location</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
 /* ─── Hash persistence helpers ───────────────────────────────── */
 
 const VALID_SECTIONS = new Set<string>([
-  'overview','analytics','pipeline','live_chat','activity','appointments','log','team','automation','settings',
+  'overview','analytics','pipeline','live_chat','activity','appointments','rental_ops','log','team','automation','settings',
   'ai_overview','ai_instructions','ai_knowledge','ai_qualification','ai_test',
 ])
 
@@ -3506,7 +4620,7 @@ export default function ClientDashboard({
         if (prev.some(t => t.leadId === leadId && t.type === 'lead')) return prev
         const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
         const badgeColor = lead.scoreLabel === 'hot' ? '#f87171'
-          : lead.scoreLabel === 'warm' ? '#fb923c' : '#60a5fa'
+          : lead.scoreLabel === 'warm' ? '#fb923c' : '#948f88'
         return [{
           id: crypto.randomUUID(), type: 'lead' as const,
           title:      lead.name || 'New Lead',
@@ -3686,7 +4800,7 @@ export default function ClientDashboard({
           }, ...prev.map(i => ({ ...i, live: false })).slice(0, 14)])
 
           const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
-          const badgeColor = lead.scoreLabel === 'hot' ? '#f87171' : lead.scoreLabel === 'warm' ? '#fb923c' : '#60a5fa'
+          const badgeColor = lead.scoreLabel === 'hot' ? '#f87171' : lead.scoreLabel === 'warm' ? '#fb923c' : '#948f88'
 
           setToasts(prev => [{
             id:         crypto.randomUUID(),
@@ -3920,7 +5034,7 @@ export default function ClientDashboard({
               title:      `Follow-up sent`,
               sub:        `${label} — AI message delivered`,
               badge:      'AI Follow-up',
-              badgeColor: '#60a5fa',
+              badgeColor: '#948f88',
               duration:   5500,
             }, ...prev.slice(0, 3)])
           }
@@ -4007,23 +5121,33 @@ export default function ClientDashboard({
   }, [])
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background:'#050510' }}>
-      <Sidebar
-        active={section} onNav={handleNav} open={sidebarOpen} onClose={() => setSidebarOpen(false)}
-        badges={navBadges}
-        userName={currentUser.name}
-        businessName={businessNameProp || 'My Business'}
-        onLogout={async () => {
-          await fetch('/api/auth/logout', { method: 'POST' })
-          await fetch('/api/logout', { method: 'POST' }).catch(() => {})
-          window.location.replace('/login')
-        }}
-      />
+    <div data-testid="dashboard-shell" className="dashboard-premium-bg h-screen overflow-hidden">
+      <div className="flex h-full w-full overflow-hidden">
+        <Sidebar
+          active={section} onNav={handleNav} open={sidebarOpen} onClose={() => setSidebarOpen(false)}
+          badges={navBadges}
+          userName={currentUser.name}
+          businessName={businessNameProp || 'My Business'}
+          onLogout={async () => {
+            await fetch('/api/auth/logout', { method: 'POST' })
+            await fetch('/api/logout', { method: 'POST' }).catch(() => {})
+            window.location.replace('/login')
+          }}
+        />
 
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
+        <div
+          ref={scrollContainerRef}
+          data-testid="dashboard-content"
+          className="flex-1 w-full max-w-full overflow-y-auto overflow-x-hidden min-w-0"
+        >
         {/* Sticky header */}
         <div className="sticky top-0 z-20 px-4 sm:px-8 py-4"
-          style={{ background:'rgba(5,5,16,0.95)', backdropFilter:'blur(20px)', borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+          style={{
+            background:'rgba(7,8,9,0.64)',
+            backdropFilter:'blur(24px)',
+            borderBottom:'1px solid rgba(217,133,90,0.08)',
+            boxShadow:'0 18px 52px rgba(0,0,0,0.16)',
+          }}>
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               {/* Mobile hamburger */}
@@ -4066,10 +5190,11 @@ export default function ClientDashboard({
         </div>
 
         {/* Content — pb-28 clears the floating chat widget (≈80px) on every section */}
-        <div className="px-4 sm:px-8 py-6 pb-28">
+        <div className="w-full max-w-none px-4 sm:px-8 py-6 pb-28">
           <AnimatePresence mode="wait">
             {section && (
               <motion.div key={section}
+                className="w-full max-w-none"
                 initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-8 }}
                 transition={{ duration:0.22 }}>
                 {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={visibleLeads} appointments={appointments} activity={activityFeed} overviewMetrics={overviewMetrics} />}
@@ -4078,6 +5203,7 @@ export default function ClientDashboard({
                 {section==='live_chat'    && <LiveChatSection businessId={businessIdProp ?? '0616a47a-2c01-49ce-a798-385f8276b92b'} />}
                 {section==='activity'     && <ActivitySection feed={activityFeed} />}
                 {section==='appointments' && <AppointmentsSection appointments={appointments} leads={visibleLeads} onSelectLead={handleSelectLead} onApptUpdated={handleApptUpdated} onAddAppointment={can.canAddAppt ? () => openAddAppt() : undefined} actorName={currentUser.name} />}
+                {section==='rental_ops'   && <RentalOperationsSection />}
                 {section==='log'          && <LogSection can={can} actorName={currentUser.name} onToast={(title, sub, ok) =>
                   setToasts(prev => [{
                     id: crypto.randomUUID(), type: 'hint' as const,
@@ -4106,6 +5232,7 @@ export default function ClientDashboard({
             )}
           </AnimatePresence>
         </div>
+      </div>
       </div>
 
       {/* Lead detail panel */}

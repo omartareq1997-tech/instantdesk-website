@@ -336,20 +336,20 @@ function MessageSplitCard({ aiMessages, userMessages }: { aiMessages: number; us
       viewport={{ once: true, margin: '-40px' }} transition={{ duration: 0.5 }}
       className="rounded-2xl p-5 flex flex-col gap-4"
       style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}
-      whileHover={{ borderColor:'rgba(129,140,248,0.3)', boxShadow:'0 0 32px rgba(129,140,248,0.1)' }}
+      whileHover={{ borderColor:'rgba(244,122,99,0.3)', boxShadow:'0 0 32px rgba(244,122,99,0.1)' }}
     >
       <div className="flex items-center justify-between">
         <div className="text-[10px] font-bold uppercase tracking-widest text-white/30">Message Volume</div>
         <div className="w-7 h-7 rounded-lg flex items-center justify-center"
-          style={{ background:'rgba(129,140,248,0.12)', border:'1px solid rgba(129,140,248,0.2)' }}>
-          <Activity className="w-3.5 h-3.5" style={{ color:'#818cf8' }} />
+          style={{ background:'rgba(244,122,99,0.12)', border:'1px solid rgba(244,122,99,0.2)' }}>
+          <Activity className="w-3.5 h-3.5" style={{ color:'#f47a63' }} />
         </div>
       </div>
 
       {aiMessages === 0 && userMessages === 0 ? <EmptyBreakdown /> : (
         <div className="flex flex-col gap-3">
           <div className="flex gap-1 h-5 rounded-full overflow-hidden">
-            <motion.div className="h-full rounded-l-full" style={{ background:'#818cf8' }}
+            <motion.div className="h-full rounded-l-full" style={{ background:'#f47a63' }}
               initial={{ width: 0 }} whileInView={{ width: `${aiPct}%` }} viewport={{ once: true }}
               transition={{ duration: 0.9, ease: 'easeOut' }} />
             <motion.div className="h-full rounded-r-full flex-1" style={{ background:'rgba(52,211,153,0.6)' }}
@@ -358,7 +358,7 @@ function MessageSplitCard({ aiMessages, userMessages }: { aiMessages: number; us
           </div>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full" style={{ background:'#818cf8' }} />
+              <span className="w-2 h-2 rounded-full" style={{ background:'#f47a63' }} />
               <span className="text-[11px] text-white/50">AI replies</span>
               <span className="text-[11px] font-bold text-white">{aiMessages.toLocaleString()}</span>
               <span className="text-[10px] text-white/25">({aiPct}%)</span>
@@ -406,11 +406,11 @@ export default function AnalyticsSection({
   const leadTrend = calcTrend(leadData)
 
   const kpis = [
-    { label:'Conversations', value: live.totalConversations, suffix:'', color:'#a78bfa', Icon: MessageCircle },
-    { label:'Total messages', value: live.totalMessages,     suffix:'', color:'#60a5fa', Icon: BarChart2     },
+    { label:'Conversations', value: live.totalConversations, suffix:'', color:'#f8a36d', Icon: MessageCircle },
+    { label:'Total messages', value: live.totalMessages,     suffix:'', color:'#948f88', Icon: BarChart2     },
     { label:'Leads captured', value: live.totalLeads,        suffix:'', color:'#34d399', Icon: UserCheck     },
     { label:'Conversion rate',value: live.conversionRate,   suffix:'%', color:'#fbbf24', Icon: Target        },
-    { label:'AI replies',     value: live.aiMessages,        suffix:'', color:'#818cf8', Icon: Bot           },
+    { label:'AI replies',     value: live.aiMessages,        suffix:'', color:'#f47a63', Icon: Bot           },
   ]
 
   return (
@@ -440,7 +440,7 @@ export default function AnalyticsSection({
       {/* Time-series charts */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <LineCard
-          id="msgs-day" title="Messages / day" color="#a78bfa" Icon={MessageCircle}
+          id="msgs-day" title="Messages / day" color="#f8a36d" Icon={MessageCircle}
           value={live.totalMessages} suffix=" total"
           trend={msgTrend.trend} trendLabel={msgTrend.label}
           data={msgData} labels={msgLabels}
@@ -495,7 +495,7 @@ export default function AnalyticsSection({
         <BreakdownCard
           title="Lead source breakdown"
           items={live.sourceBreakdown}
-          color="#60a5fa"
+          color="#948f88"
           Icon={MessageCircle}
         />
         <BreakdownCard

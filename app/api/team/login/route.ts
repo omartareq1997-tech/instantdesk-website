@@ -70,7 +70,9 @@ export async function POST(req: NextRequest) {
 
     return response
   } catch (err) {
-    console.error('[POST /api/team/login]', err)
+    console.warn('[team/login] unexpected failure', {
+      name: err instanceof Error ? err.name : 'UnknownError',
+    })
     return NextResponse.json({ error: 'Login failed' }, { status: 500 })
   }
 }

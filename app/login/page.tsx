@@ -4,7 +4,7 @@ import { useState, useEffect, Suspense } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { createBrowserClient } from '@supabase/ssr'
-import { Zap, Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react'
+import { Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react'
 
 function createClient() {
   return createBrowserClient(
@@ -13,13 +13,33 @@ function createClient() {
   )
 }
 
+function friendlyAuthError(message?: string) {
+  const text = message ?? 'Authentication failed. Please try again.'
+  const lower = text.toLowerCase()
+
+  if (lower.includes('rate limit') || lower.includes('too many') || lower.includes('email rate limit')) {
+    return 'Too many emails sent. Please wait a few minutes and try again.'
+  }
+
+  if (lower.includes('invalid login credentials')) {
+    return 'Incorrect email or password.'
+  }
+
+  if (lower.includes('email not confirmed')) {
+    return 'Please confirm your email before signing in.'
+  }
+
+  return text
+}
+
 function LoginForm() {
   const searchParams  = useSearchParams()
   const nextPath      = searchParams.get('next') ?? '/dashboard'
   const authError     = searchParams.get('error')
   const status        = searchParams.get('status')
+  const initialMode   = searchParams.get('mode') === 'signup' ? 'signup' : 'login'
 
-  const [mode,     setMode]     = useState<'login' | 'signup'>('login')
+  const [mode,     setMode]     = useState<'login' | 'signup'>(initialMode)
   const [email,    setEmail]    = useState('')
   const [password, setPassword] = useState('')
   const [showPw,   setShowPw]   = useState(false)
@@ -36,12 +56,42 @@ function LoginForm() {
   )
 
   useEffect(() => {
+    setMode(initialMode)
+    setLoading(false)
+    setError(authError === 'auth_callback_failed'
+      ? 'The sign-in link is invalid or has expired. Please try again.'
+      : null)
+    setMessage(status === 'password_updated'
+      ? 'Your password has been updated. Sign in with your new password.'
+      : null)
+    setPassword('')
+  }, [authError, initialMode, status])
+
+  useEffect(() => {
     // If user is already logged in, redirect immediately
     const sb = createClient()
-    sb.auth.getUser().then(({ data: { user } }) => {
+    sb.auth.getUser().then(({ data: { user }, error: userError }) => {
+      if (userError && userError.name !== 'AuthSessionMissingError') {
+        console.warn('[login] existing session check failed', {
+          name: userError.name,
+          status: userError.status,
+        })
+      }
       if (user) window.location.replace(nextPath)
     })
   }, [nextPath])
+
+  useEffect(() => {
+    const clearTransientState = (event: PageTransitionEvent) => {
+      if (!event.persisted) return
+      setLoading(false)
+      if (!authError) setError(null)
+      if (!status) setMessage(null)
+    }
+
+    window.addEventListener('pageshow', clearTransientState)
+    return () => window.removeEventListener('pageshow', clearTransientState)
+  }, [authError, status])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -58,42 +108,75 @@ function LoginForm() {
         password,
         options:  { emailRedirectTo: `${window.location.origin}/auth/callback` },
       })
-      setLoading(false)
       if (signUpError) {
-        setError(signUpError.message)
+        setLoading(false)
+        setError(friendlyAuthError(signUpError.message))
       } else {
-        setMessage('Check your email for a confirmation link.')
+        const requiresConfirmation = process.env.NEXT_PUBLIC_AUTH_REQUIRE_EMAIL_CONFIRMATION === 'true'
+        if (requiresConfirmation) {
+          setLoading(false)
+          setMessage('Check your email for a confirmation link.')
+          return
+        }
+
+        setMessage('Account created. Signing you in...')
+        const response = await fetch('/api/auth/login', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ email: email.trim(), password }),
+        })
+
+        if (response.ok) {
+          window.location.replace(nextPath)
+          return
+        }
+
+        const { data: sessionData, error: sessionError } = await sb.auth.getSession()
+        if (sessionError) {
+          console.warn('[signup] immediate session lookup failed', { name: sessionError.name, message: sessionError.message })
+        }
+        if (sessionData.session) {
+          window.location.replace(nextPath)
+          return
+        }
+
+        const data = await response.json().catch(() => ({} as { error?: string }))
+        setLoading(false)
+        setError(friendlyAuthError(data.error ?? 'Account was created, but automatic sign-in failed. Please sign in.'))
       }
       return
     }
 
-    // Login
-    const { error: signInError } = await sb.auth.signInWithPassword({
-      email:    email.trim(),
-      password,
+    // Login through a route handler so Supabase auth cookies are set before
+    // navigating to the dashboard guarded by the proxy.
+    const response = await fetch('/api/auth/login', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ email: email.trim(), password }),
     })
-    setLoading(false)
-    if (signInError) {
-      setError(signInError.message)
+
+    if (!response.ok) {
+      setLoading(false)
+      const data = await response.json().catch(() => ({} as { error?: string }))
+      console.warn('[login] password sign-in rejected', { status: response.status })
+      setError(friendlyAuthError(data.error))
       return
     }
+
     window.location.replace(nextPath)
   }
 
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
+    <div className="auth-premium-bg min-h-screen flex items-center justify-center p-4">
+      <div className="relative w-full max-w-md">
         {/* Logo */}
-        <div className="flex items-center gap-2 justify-center mb-8">
-          <div className="w-8 h-8 bg-[#7C3AED] rounded-lg flex items-center justify-center">
-            <Zap className="w-4 h-4 text-white" />
-          </div>
-          <span className="text-white font-bold text-xl tracking-tight">InstantDesk</span>
+        <div className="flex items-center justify-center mb-8">
+          <img src="/assets/instantdesk-logo.png" alt="InstantDesk" className="h-9 w-auto" />
         </div>
 
         {/* Card */}
-        <div className="bg-[#111] border border-white/10 rounded-2xl p-8">
-          <h1 className="text-white text-2xl font-bold mb-1">
+        <div className="auth-premium-card rounded-2xl p-8">
+          <h1 className="text-white text-2xl font-semibold mb-1">
             {mode === 'login' ? 'Sign in' : 'Create account'}
           </h1>
           <p className="text-white/40 text-sm mb-6">
@@ -124,7 +207,7 @@ function LoginForm() {
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 required
-                className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-white placeholder-white/30 text-sm focus:outline-none focus:border-[#7C3AED]/60 focus:ring-1 focus:ring-[#7C3AED]/30"
+                className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-white placeholder-white/30 text-sm focus:outline-none focus:border-orange-300/60 focus:ring-1 focus:ring-orange-300/20"
               />
             </div>
 
@@ -138,7 +221,7 @@ function LoginForm() {
                 onChange={e => setPassword(e.target.value)}
                 required
                 minLength={6}
-                className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-10 py-3 text-white placeholder-white/30 text-sm focus:outline-none focus:border-[#7C3AED]/60 focus:ring-1 focus:ring-[#7C3AED]/30"
+                className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-10 py-3 text-white placeholder-white/30 text-sm focus:outline-none focus:border-orange-300/60 focus:ring-1 focus:ring-orange-300/20"
               />
               <button
                 type="button"
@@ -151,7 +234,7 @@ function LoginForm() {
 
             {mode === 'login' && (
               <div className="-mt-1 text-right">
-                <Link href="/forgot-password" className="text-xs text-[#7C3AED] hover:text-[#9F5FFF]">
+                <Link href="/forgot-password" className="text-xs text-orange-300/80 hover:text-orange-200">
                   Forgot password?
                 </Link>
               </div>
@@ -160,7 +243,7 @@ function LoginForm() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-[#7C3AED] hover:bg-[#6D28D9] disabled:opacity-50 text-white font-medium rounded-xl py-3 flex items-center justify-center gap-2 transition-colors"
+              className="w-full bg-white text-neutral-950 hover:bg-orange-100 disabled:opacity-50 font-medium rounded-xl py-3 flex items-center justify-center gap-2 transition-colors"
             >
               {loading ? (
                 <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -177,14 +260,14 @@ function LoginForm() {
             {mode === 'login' ? (
               <>
                 No account?{' '}
-                <button onClick={() => { setMode('signup'); setError(null); setMessage(null) }} className="text-[#7C3AED] hover:text-[#9F5FFF]">
+                <button onClick={() => { setMode('signup'); setError(null); setMessage(null) }} className="text-orange-300/80 hover:text-orange-200">
                   Sign up
                 </button>
               </>
             ) : (
               <>
                 Already have an account?{' '}
-                <button onClick={() => { setMode('login'); setError(null); setMessage(null) }} className="text-[#7C3AED] hover:text-[#9F5FFF]">
+                <button onClick={() => { setMode('login'); setError(null); setMessage(null) }} className="text-orange-300/80 hover:text-orange-200">
                   Sign in
                 </button>
               </>
@@ -205,8 +288,8 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <span className="w-6 h-6 border-2 border-white/20 border-t-[#7C3AED] rounded-full animate-spin" />
+      <div className="auth-premium-bg min-h-screen flex items-center justify-center">
+        <span className="w-6 h-6 border-2 border-white/20 border-t-orange-300 rounded-full animate-spin" />
       </div>
     }>
       <LoginForm />

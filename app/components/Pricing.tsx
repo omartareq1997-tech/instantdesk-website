@@ -52,7 +52,7 @@ const tiers = [
     cta: 'Start Growing',
     ctaStyle: 'gradient',
     highlight: true,
-    checkGradient: 'from-violet-600 to-blue-500',
+    checkGradient: 'from-orange-600 to-stone-500',
   },
   {
     name: 'Enterprise',
@@ -83,7 +83,7 @@ export default function Pricing() {
   return (
     <section id="pricing" className="relative py-32 overflow-hidden">
       <div className="absolute inset-0 -z-10">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] rounded-full bg-gradient-to-br from-violet-900/15 to-blue-900/8 blur-3xl" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] rounded-full bg-gradient-to-br from-orange-900/15 to-stone-900/8 blur-3xl" />
       </div>
 
       <div className="max-w-7xl mx-auto px-6">
@@ -94,7 +94,7 @@ export default function Pricing() {
           transition={{ duration: 0.6 }}
           className="text-center mb-20"
         >
-          <span className="inline-block text-xs font-semibold tracking-widest uppercase text-violet-400 mb-4">
+          <span className="inline-block text-xs font-semibold tracking-widest uppercase text-orange-400 mb-4">
             Transparent pricing
           </span>
           <h2 className="text-4xl md:text-5xl font-black text-white mb-5 leading-tight">
@@ -117,12 +117,12 @@ export default function Pricing() {
               whileHover={{ y: tier.highlight ? -10 : -5, transition: { duration: 0.25 } }}
               className={`relative rounded-3xl flex flex-col overflow-hidden ${
                 tier.highlight
-                  ? 'shadow-2xl shadow-violet-500/25'
+                  ? 'shadow-2xl shadow-orange-500/25'
                   : ''
               }`}
               style={tier.highlight ? {
-                background: 'linear-gradient(180deg, rgba(91,60,200,0.18) 0%, rgba(37,99,235,0.10) 100%)',
-                border: '1px solid rgba(139,92,246,0.35)',
+                background: 'linear-gradient(180deg, rgba(91,60,200,0.18) 0%, rgba(248,154,87,0.10) 100%)',
+                border: '1px solid rgba(244,122,99,0.35)',
               } : {
                 background: 'rgba(255,255,255,0.025)',
                 border: '1px solid rgba(255,255,255,0.07)',
@@ -132,7 +132,7 @@ export default function Pricing() {
               {tier.badge && (
                 <div className="absolute -top-px left-0 right-0 flex justify-center">
                   <div className="flex items-center gap-1.5 px-5 py-1.5 rounded-b-xl font-bold text-xs text-white"
-                    style={{ background: 'linear-gradient(90deg, #7c3aed, #2563eb)' }}
+                    style={{ background: 'linear-gradient(90deg, #171412, #f89a57)' }}
                   >
                     <Zap className="w-3 h-3" />
                     {tier.badge}
@@ -213,8 +213,8 @@ export default function Pricing() {
                       : 'border border-white/10 text-white hover:bg-white/5'
                   }`}
                   style={tier.ctaStyle === 'gradient' ? {
-                    background: 'linear-gradient(135deg, #7c3aed 0%, #2563eb 100%)',
-                    boxShadow: '0 4px 20px rgba(99,102,241,0.35)',
+                    background: 'linear-gradient(135deg, #171412 0%, #f89a57 100%)',
+                    boxShadow: '0 4px 20px rgba(244,122,99,0.35)',
                   } : {}}
                 >
                   {tier.cta}

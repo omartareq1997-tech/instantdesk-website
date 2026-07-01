@@ -42,6 +42,38 @@ async function createTestAiBusiness(options: { aiAutoRepliesEnabled: boolean; li
   return { sb, businessId }
 }
 
+async function createTestAiBusinessWithoutAgent(options: { aiAutoRepliesEnabled: boolean; liveChatEnabled: boolean }) {
+  const sb = adminClient()
+  const businessId = crypto.randomUUID()
+  await sb.from('businesses').insert({ id: businessId, name: 'QA Test AI Default Agent Business' })
+  await sb.from('live_chat_settings').insert({
+    business_id: businessId,
+    ai_auto_replies_enabled: options.aiAutoRepliesEnabled,
+    live_chat_enabled: options.liveChatEnabled,
+    human_handover_enabled: true,
+    trigger_customer_asks_human: true,
+    trigger_ai_cannot_answer: true,
+    trigger_phrases: ['human', 'agent', 'support'],
+  })
+  return { sb, businessId }
+}
+
+async function createTestAiBusinessWithInactiveAgent(options: { aiAutoRepliesEnabled: boolean; liveChatEnabled: boolean }) {
+  const { sb, businessId } = await createTestAiBusinessWithoutAgent(options)
+  await sb.from('agents').insert({
+    business_id: businessId,
+    name: 'QA Inactive Test Agent',
+    active: false,
+    persona: 'You are an inactive agent that should be restored for Test AI.',
+    objective: 'Answer Test AI prompts after activation.',
+    tone: 'professional',
+    fallback_msg: 'I do not know.',
+    model: 'gpt-4o-mini',
+    temperature: 0.1,
+  })
+  return { sb, businessId }
+}
+
 async function cleanupTestAiBusiness(sb: ReturnType<typeof adminClient>, businessId: string) {
   const { data: conversations } = await sb.from('conversations').select('id').eq('business_id', businessId)
   const conversationIds = (conversations ?? []).map(row => row.id as string)
@@ -160,6 +192,64 @@ test.describe('Live Chat API production boundaries', () => {
       expect(response.status).toBe(500)
       expect(body.error).toBe(MISSING_OPENAI_KEY_MESSAGE)
       expect(body.error).not.toBe('No response')
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('Test AI creates a default active agent when none exists for the current business', async () => {
+    const { sb, businessId } = await createTestAiBusinessWithoutAgent({ aiAutoRepliesEnabled: false, liveChatEnabled: true })
+
+    try {
+      const response = await postChatRouteWithMissingOpenAi({
+        business_id: businessId,
+        message: 'Use the default agent for Test AI.',
+        debug: true,
+        test_ai: true,
+      })
+      const body = await response.json() as { error?: string }
+
+      expect(response.status).toBe(500)
+      expect(body.error).toBe(MISSING_OPENAI_KEY_MESSAGE)
+
+      const { data: agent, error } = await sb
+        .from('agents')
+        .select('business_id, name, active')
+        .eq('business_id', businessId)
+        .eq('active', true)
+        .maybeSingle()
+      expect(error).toBeNull()
+      expect(agent?.business_id).toBe(businessId)
+      expect(agent?.name).toBe('AI Assistant')
+      expect(agent?.active).toBe(true)
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('Test AI reactivates an existing inactive agent instead of reporting no active agent', async () => {
+    const { sb, businessId } = await createTestAiBusinessWithInactiveAgent({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
+
+    try {
+      const response = await postChatRouteWithMissingOpenAi({
+        business_id: businessId,
+        message: 'Reactivate the existing Test AI agent.',
+        debug: true,
+        test_ai: true,
+      })
+      const body = await response.json() as { error?: string }
+
+      expect(response.status).toBe(500)
+      expect(body.error).toBe(MISSING_OPENAI_KEY_MESSAGE)
+
+      const { data: agents, error } = await sb
+        .from('agents')
+        .select('name, active')
+        .eq('business_id', businessId)
+      expect(error).toBeNull()
+      expect(agents).toHaveLength(1)
+      expect(agents?.[0]?.name).toBe('QA Inactive Test Agent')
+      expect(agents?.[0]?.active).toBe(true)
     } finally {
       await cleanupTestAiBusiness(sb, businessId)
     }

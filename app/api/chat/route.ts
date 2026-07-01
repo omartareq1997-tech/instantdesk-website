@@ -209,6 +209,136 @@ function hasMeaningfulSlot(s: Slots): boolean {
   return Object.values(s).some(Boolean)
 }
 
+function defaultAgentPayload(businessId: string) {
+  return {
+    business_id:  businessId,
+    name:         'AI Assistant',
+    active:       true,
+    persona:      'You are a helpful assistant for this business.',
+    objective:    'Answer customer questions clearly, qualify leads, and help customers take the next step.',
+    tone:         'professional',
+    fallback_msg: 'I do not know that yet, but I can connect you with the team.',
+    model:        'gpt-4o-mini',
+    temperature:  0.4,
+  }
+}
+
+interface OpenAiAdminErrorLogContext {
+  businessId: string
+  model: string
+}
+
+function openAiErrorDetails(error: unknown) {
+  const err = error as {
+    name?: unknown
+    message?: unknown
+    status?: unknown
+    code?: unknown
+    type?: unknown
+    param?: unknown
+    requestID?: unknown
+    headers?: { get?: (name: string) => string | null }
+    error?: { message?: unknown; type?: unknown; code?: unknown; param?: unknown }
+  }
+  const status = typeof err.status === 'number' ? err.status : null
+  const code = typeof err.code === 'string'
+    ? err.code
+    : typeof err.error?.code === 'string'
+      ? err.error.code
+      : null
+  const type = typeof err.type === 'string'
+    ? err.type
+    : typeof err.error?.type === 'string'
+      ? err.error.type
+      : null
+  const message = typeof err.error?.message === 'string'
+    ? err.error.message
+    : typeof err.message === 'string'
+      ? err.message
+      : 'Unexpected OpenAI API error.'
+  const requestId = typeof err.requestID === 'string'
+    ? err.requestID
+    : err.headers?.get?.('x-request-id') ?? err.headers?.get?.('openai-request-id') ?? null
+
+  return {
+    name: typeof err.name === 'string' ? err.name : null,
+    message,
+    status,
+    code,
+    type,
+    param: typeof err.param === 'string' ? err.param : typeof err.error?.param === 'string' ? err.error.param : null,
+    requestId,
+    payload: {
+      message,
+      type,
+      code,
+      param: typeof err.param === 'string' ? err.param : typeof err.error?.param === 'string' ? err.error.param : null,
+    },
+  }
+}
+
+function openAiAdminError(error: unknown) {
+  const details = openAiErrorDetails(error)
+  const status = details.status
+  const code = details.code
+  const type = details.type
+  const name = details.name ?? ''
+  const message = details.message
+  const lowerMessage = message.toLowerCase()
+
+  let adminMessage: string
+  let responseStatus = status && status >= 400 ? status : 502
+
+  if (status === 401 || code === 'invalid_api_key') {
+    adminMessage = 'OPENAI_API_KEY is invalid. Replace it in Vercel Environment Variables and redeploy.'
+    responseStatus = 500
+  } else if (code === 'insufficient_quota' || lowerMessage.includes('quota')) {
+    adminMessage = `OpenAI quota exceeded: ${message}`
+    responseStatus = 402
+  } else if (status === 429 || code === 'rate_limit_exceeded') {
+    adminMessage = `OpenAI rate limit exceeded: ${message}`
+    responseStatus = 429
+  } else if (code === 'model_not_found' || lowerMessage.includes('model') && lowerMessage.includes('does not exist')) {
+    adminMessage = `Selected OpenAI model does not exist or is unavailable: ${message}`
+    responseStatus = 500
+  } else if (lowerMessage.includes('unsupported') && lowerMessage.includes('model')) {
+    adminMessage = `Unsupported OpenAI model selected: ${message}`
+    responseStatus = 500
+  } else if (code === 'context_length_exceeded' || lowerMessage.includes('context length')) {
+    adminMessage = `OpenAI context length exceeded: ${message}`
+    responseStatus = 400
+  } else if (name.includes('Timeout') || code === 'ETIMEDOUT' || lowerMessage.includes('timeout')) {
+    adminMessage = `OpenAI request timed out: ${message}`
+    responseStatus = 504
+  } else if (name.includes('APIConnection') || code === 'ECONNRESET' || code === 'ENOTFOUND' || code === 'ECONNREFUSED') {
+    adminMessage = `OpenAI network/connectivity error: ${message}`
+    responseStatus = 502
+  } else if (!process.env.OPENAI_API_KEY) {
+    adminMessage = 'OPENAI_API_KEY is missing. Add it in Vercel Environment Variables and redeploy.'
+    responseStatus = 500
+  } else {
+    adminMessage = `Unexpected OpenAI API error: ${message}`
+  }
+
+  return { adminMessage, responseStatus, details }
+}
+
+function logOpenAiError(error: unknown, context: OpenAiAdminErrorLogContext) {
+  const classified = openAiAdminError(error)
+  console.error('[POST /api/chat] OpenAI API failure', {
+    timestamp: new Date().toISOString(),
+    endpoint: '/api/chat',
+    business_id: context.businessId,
+    selected_model: context.model,
+    openai_request_id: classified.details.requestId,
+    http_status: classified.details.status,
+    openai_error_code: classified.details.code,
+    openai_error_type: classified.details.type,
+    complete_error_payload: classified.details.payload,
+  })
+  return classified
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    DETERMINISTIC SLOT EXTRACTORS
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -1123,6 +1253,61 @@ export async function POST(req: NextRequest) {
   }
 
   if (!agentRow) {
+    if (testAiMode) {
+      const { data: existingAgents, error: existingAgentsErr } = await sb
+        .from('agents').select('*')
+        .eq('business_id', businessId)
+        .order('created_at', { ascending: true })
+        .limit(1)
+
+      if (existingAgentsErr) {
+        console.error('[POST /api/chat] Test AI fallback agent lookup error:', JSON.stringify(existingAgentsErr))
+        return NextResponse.json({ error: 'Failed to load agent', details: existingAgentsErr }, { status: 500 })
+      }
+
+      const existingAgent = existingAgents?.[0] as AgentRow | undefined
+      if (existingAgent?.id) {
+        const { data: activatedAgent, error: activateErr } = await sb
+          .from('agents')
+          .update({ active: true })
+          .eq('id', existingAgent.id)
+          .select('*')
+          .maybeSingle()
+
+        if (activateErr) {
+          console.error('[POST /api/chat] Test AI fallback agent activation error:', JSON.stringify(activateErr))
+          return NextResponse.json({ error: 'Failed to activate default AI agent', details: activateErr.message }, { status: 500 })
+        }
+
+        agentRow = activatedAgent as AgentRow
+        agentLookupId = businessId
+        console.log('[POST /api/chat] Test AI activated existing agent fallback:', {
+          business_id: businessId,
+          agent_id: agentRow?.id,
+        })
+      } else {
+        const { data: createdAgent, error: createErr } = await sb
+          .from('agents')
+          .insert(defaultAgentPayload(businessId))
+          .select('*')
+          .maybeSingle()
+
+        if (createErr) {
+          console.error('[POST /api/chat] Test AI default agent creation error:', JSON.stringify(createErr))
+          return NextResponse.json({ error: 'Failed to create default AI agent', details: createErr.message }, { status: 500 })
+        }
+
+        agentRow = createdAgent as AgentRow
+        agentLookupId = businessId
+        console.log('[POST /api/chat] Test AI created default active agent:', {
+          business_id: businessId,
+          agent_id: agentRow?.id,
+        })
+      }
+    }
+  }
+
+  if (!agentRow) {
     // Diagnostic: count ALL agents for both IDs to help debug
     const { data: allAgents } = await sb
       .from('agents').select('id, business_id, active, name')
@@ -1438,8 +1623,8 @@ export async function POST(req: NextRequest) {
   try {
     rawReply = await callOpenAI(openai, agent.model, agent.temperature, systemPrompt, historyForLLM, messageText)
   } catch (err) {
-    console.error('[POST /api/chat] OpenAI error:', err)
-    return NextResponse.json({ error: 'Failed to get AI response' }, { status: 502 })
+    const classified = logOpenAiError(err, { businessId, model: agent.model })
+    return NextResponse.json({ error: classified.adminMessage }, { status: classified.responseStatus })
   }
 
   /* 11. Guard reply — block any answer that re-asks confirmed slots ───────── */

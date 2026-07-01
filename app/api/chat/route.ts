@@ -633,6 +633,10 @@ function extractServiceInterest(text: string): string | null {
 /* ── Combined extractor ────────────────────────────────────────────────── */
 
 function extractFromText(text: string): Partial<Slots> {
+  const returnOnlyCorrection =
+    /\b(?:return|drop(?:off|-off)?)\b/i.test(text) &&
+    /\b(?:wrong|preferred|correct|change|update)\b/i.test(text) &&
+    !/\b(?:pick\s*up|pickup|pick-up|from)\s+(?:on\s+)?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}[./-]|\d{4}-\d{2}-\d{2})\b/i.test(text)
   const carClass = text.match(/\b(economy|compact|suv|van|minivan|premium|luxury|standard)\b/i)?.[1]
   const transmission = text.match(/\b(automatic|manual)\b/i)?.[1]
   const seats = text.match(/\b(\d+)\s*(?:seats?|people|passengers)\b/i)?.[1]
@@ -660,7 +664,7 @@ function extractFromText(text: string): Partial<Slots> {
     viewing_time:  extractViewingTime(text)  ?? undefined,
     pickup_location: pickupLocation?.trim() ?? (airportMention ? 'Airport' : undefined),
     dropoff_location: dropoffLocation?.trim() ?? undefined,
-    pickup_datetime: rentalWindow.pickupAt ?? extractViewingTime(text) ?? undefined,
+    pickup_datetime: returnOnlyCorrection ? undefined : rentalWindow.pickupAt ?? undefined,
     return_datetime: rentalWindow.dropoffAt ?? (/\b(?:return|drop(?:off|-off)?)\b/i.test(text) ? extractViewingTime(text) ?? undefined : undefined),
     selected_vehicle: extractRentalVehicleName(text) ?? undefined,
     car_class: carClass ? carClass.toLowerCase() : undefined,
@@ -750,6 +754,10 @@ function buildConfirmedSlots(
     const suggestedLocation = latestAssistantSuggestedLocation(history)
     if (suggestedLocation) extracted.pickup_location = suggestedLocation
   }
+  if (!currentExtracted.dropoff_location && /\b(?:drop(?:off|-off)?|return)\b.*\bsame location\b|\bsame location\b.*\b(?:drop(?:off|-off)?|return)\b/i.test(currentMsg)) {
+    const pickupLocation = extracted.pickup_location ?? fromDB.pickup_location
+    if (pickupLocation) extracted.dropoff_location = pickupLocation
+  }
 
   // Stable identity fields keep DB continuity; operational rental fields use
   // latest confirmed values so corrections update immediately.
@@ -795,7 +803,11 @@ function defaultSlotDefsForBusinessType(businessType: string | null | undefined)
 }
 
 function computeMissingSlots(confirmed: Slots, slotDefs: SlotDef[]): SlotDef[] {
-  return slotDefs.filter(def => !confirmed[def.key])
+  return slotDefs.filter(def => {
+    if (def.key === 'car_class' && confirmed.selected_vehicle) return false
+    if (def.key === 'selected_vehicle' && confirmed.car_class) return false
+    return !confirmed[def.key]
+  })
 }
 
 function computeQualificationStage(confirmed: Slots, missing: SlotDef[]): string {

@@ -109,6 +109,16 @@ export function planOperationalTools(context: AgentToolContext): AgentToolName[]
   if (businessType !== 'car_rental') return []
   const text = norm(context.message)
   const tools: AgentToolName[] = []
+  const hasCompleteBookingData = Boolean(
+    (context.slots.selected_vehicle || context.slots.car_class) &&
+    context.slots.pickup_location &&
+    context.slots.dropoff_location &&
+    context.slots.pickup_datetime &&
+    context.slots.return_datetime &&
+    context.slots.name &&
+    context.slots.phone &&
+    context.slots.email,
+  )
   if (includesAny(text, ['policy', 'deposit', 'documents', 'license', 'insurance', 'mileage', 'late fee', 'cancel', 'cancellation', 'age requirement'])) {
     tools.push('getBusinessPolicies')
   }
@@ -134,6 +144,11 @@ export function planOperationalTools(context: AgentToolContext): AgentToolName[]
     if (!tools.includes('searchFleet')) tools.push('searchFleet')
     if (!tools.includes('checkAvailability')) tools.push('checkAvailability')
     tools.push('createBooking')
+  }
+  if (hasCompleteBookingData && includesAny(text, ['same location', 'drop off', 'drop-off', 'return location', 'automatic', 'manual', 'correct'])) {
+    if (!tools.includes('searchFleet')) tools.push('searchFleet')
+    if (!tools.includes('checkAvailability')) tools.push('checkAvailability')
+    if (!tools.includes('createBooking')) tools.push('createBooking')
   }
   if (includesAny(text, ['how much', 'cost', 'price', 'total', 'deposit', 'fee'])) {
     if (!tools.includes('searchFleet')) tools.push('searchFleet')

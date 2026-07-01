@@ -1,6 +1,6 @@
 export type RentalBookingStatus =
   | 'pending' | 'confirmed' | 'paid' | 'picked_up' | 'returned'
-  | 'extended' | 'cancelled' | 'maintenance'
+  | 'extended' | 'cancelled' | 'maintenance' | 'active' | 'completed'
 
 export type RentalCarStatus = RentalBookingStatus | 'available' | 'inactive'
 
@@ -35,13 +35,18 @@ export interface RentalBooking {
   customerEmail?: string | null
   pickupAt: string
   returnAt: string
+  dropoffAt?: string
+  bufferUntil?: string | null
   pickupLocation?: string | null
+  pickupLocationId?: string | null
   dropoffLocation?: string | null
+  dropoffLocationId?: string | null
   status: RentalBookingStatus
   totalPrice: number
   deposit: number
   paymentStatus: string
   source?: string | null
+  notes?: string | null
 }
 
 export interface RentalLocation {

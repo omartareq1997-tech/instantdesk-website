@@ -329,8 +329,13 @@ export default function CarRentalOnboardingPage() {
           useDemoLocations: false,
         }),
       })
-      const data = await response.json().catch(() => ({})) as { error?: string; importedCars?: number; importedLocations?: number }
+      const data = await response.json().catch(() => ({})) as { success?: boolean; error?: string; step?: string; code?: string | null; details?: string | null; hint?: string | null; importedCars?: number; importedLocations?: number }
       if (!response.ok) {
+        console.error('[CarRentalOnboarding] save failed', {
+          status: response.status,
+          statusText: response.statusText,
+          response: data,
+        })
         showToast(data.error ?? 'Could not save onboarding.')
         return
       }

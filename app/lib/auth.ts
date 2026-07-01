@@ -45,7 +45,13 @@ async function hmacKey(secret: string): Promise<CryptoKey> {
 }
 
 function memberSecret(): string {
-  return process.env.MEMBER_SESSION_SECRET ?? process.env.ADMIN_PASSWORD ?? 'instantdesk-member-v1'
+  const explicitSecret = process.env.MEMBER_SESSION_SECRET?.trim()
+  if (explicitSecret) return explicitSecret
+
+  const adminPassword = process.env.ADMIN_PASSWORD?.trim()
+  if (adminPassword) return adminPassword
+
+  return 'instantdesk-member-v1'
 }
 
 export interface MemberPayload { id: string; name: string; role: string; iat: number }

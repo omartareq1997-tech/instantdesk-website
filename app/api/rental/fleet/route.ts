@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createAdminClient } from '../../../lib/supabase-server'
 import { getSessionBusinessId } from '../../../lib/getSessionBusinessId'
 import { demoRentalBookings, demoRentalCars, demoRentalLocations, demoRentalSettings, type RentalSettings } from '../../../lib/rental'
+import { normalizeRentalBooking } from '../../../lib/rentalAvailability'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,7 +20,7 @@ export async function GET() {
 
   const [carsRes, bookingsRes, locationsRes, settingsRes] = await Promise.all([
     sb.from('cars').select('id,name,model,transmission,seats,fuel_type,daily_price,deposit,status,image_url,license_plate,notes,active,car_class_id,location_id,car_classes(name),rental_locations(name)').eq('business_id', businessId).order('created_at', { ascending: false }),
-    sb.from('bookings').select('id,booking_number,car_id,pickup_at,return_at,status,total_price,deposit,payment_status,source,cars(name,car_classes(name)),rental_customers(name,phone,email),pickup:rental_locations!bookings_pickup_location_id_fkey(name),dropoff:rental_locations!bookings_dropoff_location_id_fkey(name)').eq('business_id', businessId).order('pickup_at', { ascending: true }),
+    sb.from('rental_bookings').select('id,business_id,car_id,customer_name,customer_phone,customer_email,pickup_location_id,dropoff_location_id,pickup_at,dropoff_at,status,total_price,notes,created_at,updated_at,cars(name,car_classes(name)),pickup:rental_locations!rental_bookings_pickup_location_id_fkey(name),dropoff:rental_locations!rental_bookings_dropoff_location_id_fkey(name)').eq('business_id', businessId).order('pickup_at', { ascending: true }),
     sb.from('rental_locations').select('*').eq('business_id', businessId).order('name'),
     sb.from('rental_settings').select('*').eq('business_id', businessId).maybeSingle(),
   ])
@@ -58,26 +59,6 @@ export async function GET() {
     active: row.active,
   }))
 
-  const bookings = (bookingsRes.data ?? []).map((row: any) => ({
-    id: row.id,
-    bookingNumber: row.booking_number,
-    carId: row.car_id,
-    carName: row.cars?.name ?? null,
-    carClass: row.cars?.car_classes?.name ?? null,
-    customerName: row.rental_customers?.name ?? 'Customer',
-    customerPhone: row.rental_customers?.phone ?? null,
-    customerEmail: row.rental_customers?.email ?? null,
-    pickupAt: row.pickup_at,
-    returnAt: row.return_at,
-    pickupLocation: row.pickup?.name ?? null,
-    dropoffLocation: row.dropoff?.name ?? null,
-    status: row.status,
-    totalPrice: Number(row.total_price ?? 0),
-    deposit: Number(row.deposit ?? 0),
-    paymentStatus: row.payment_status,
-    source: row.source,
-  }))
-
   const locations = (locationsRes.data ?? []).map((row: any) => ({
     id: row.id,
     locationType: row.location_type ?? 'both',
@@ -98,7 +79,6 @@ export async function GET() {
   return NextResponse.json({
     migrationRequired: false,
     cars,
-    bookings,
     locations,
     settings: s ? {
       cleaningBufferMinutes: s.cleaning_buffer_minutes ?? 120,
@@ -129,6 +109,7 @@ export async function GET() {
       lastSyncStatus: s.last_sync_status,
       lastSyncError: s.last_sync_error,
     } : defaultSettings,
+    bookings: (bookingsRes.data ?? []).map((row: any) => normalizeRentalBooking(row, s?.cleaning_buffer_minutes ?? 120)),
   })
 }
 

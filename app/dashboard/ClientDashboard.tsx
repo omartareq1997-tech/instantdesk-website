@@ -8,10 +8,10 @@ import {
   Clock, Search, X, BarChart2, MessageCircle, Database,
   Activity, RefreshCw, Bell, Shield, Link2, Download, Target,
   DollarSign, Timer, Menu, ChevronLeft, ChevronRight, ChevronDown, LineChart, BellDot,
-  MessageSquare, SlidersHorizontal, Volume2, VolumeX, ArrowUpDown, Plus,
+  MessageSquare, MessagesSquare, SlidersHorizontal, Volume2, VolumeX, ArrowUpDown, Plus,
   History, ScrollText, Undo2, Pencil, Trash2, CalendarPlus, MoveRight,
   UserPlus, Copy, Check, UserCog, Crown, Eye, Bot, BookOpen, FlaskConical, Brain, Headphones,
-  Car, MapPin, FileText, KeyRound, CreditCard, UploadCloud, ExternalLink, Wrench,
+  Car, MapPin, FileText, KeyRound, CreditCard, UploadCloud, ExternalLink, Wrench, Rocket, Code2, Camera, Globe2,
 } from 'lucide-react'
 import LeadPanel from './LeadPanel'
 import AIAgentSection from './AIAgentSection'
@@ -30,7 +30,7 @@ import { BUSINESS_TYPE_CONFIG, CANONICAL_BUSINESS_TYPES, normalizeBusinessType }
 /* ─── Types ──────────────────────────────────────────────────── */
 
 type Section      = 'overview' | 'analytics' | 'pipeline' | 'activity' | 'appointments' | 'automation' | 'settings' | 'log' | 'team'
-                  | 'live_chat' | 'rental_ops' | 'ai_overview' | 'ai_instructions' | 'ai_knowledge' | 'ai_qualification' | 'ai_test'
+                  | 'live_chat' | 'deploy' | 'integrations' | 'rental_ops' | 'ai_overview' | 'ai_instructions' | 'ai_knowledge' | 'ai_qualification' | 'ai_test'
 type LeadStatus   = 'new' | 'contacted' | 'demo_booked' | 'won' | 'lost'
 type ScoreLabel   = 'hot' | 'warm' | 'cold'
 type ApptStatus   = 'confirmed' | 'pending' | 'completed' | 'cancelled'
@@ -139,6 +139,8 @@ const NAV_ITEMS: {id:Section; label:string; Icon:React.ComponentType<{className?
   { id:'analytics',    label:'Analytics',     Icon:LineChart                },
   { id:'pipeline',     label:'Lead Pipeline', Icon:Users,       badge:10    },
   { id:'live_chat',    label:'Live Chat',     Icon:Headphones              },
+  { id:'deploy',       label:'Deploy',        Icon:Rocket                  },
+  { id:'integrations', label:'Integrations',  Icon:Link2                   },
   { id:'activity',     label:'Activity Feed', Icon:Activity                 },
   { id:'appointments', label:'Appointments',  Icon:Calendar,    badge:4     },
   { id:'rental_ops',   label:'Car Rental Ops', Icon:Car                    },
@@ -161,6 +163,8 @@ const SECTION_META: Record<Section,{title:string;sub:string}> = {
   analytics:    { title:'Analytics',      sub:'Conversation metrics and conversion data'              },
   pipeline:     { title:'Lead Pipeline',  sub:'Click any lead to view full details'                  },
   live_chat:    { title:'Live Chat',      sub:'Human handover inbox and real-time customer messages' },
+  deploy:       { title:'Deploy',         sub:'Share and embed your InstantDesk chat experience'     },
+  integrations: { title:'Integrations',   sub:'Connect InstantDesk with channels, automation tools and websites' },
   activity:     { title:'Activity Feed',  sub:'Automated events across all channels'                  },
   appointments: { title:'Appointments',   sub:'Weekly schedule and upcoming bookings'                 },
   rental_ops:   { title:'Car Rental Ops',  sub:'Fleet, availability, bookings, documents and pickup support' },
@@ -389,19 +393,18 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
         className={`
           group fixed md:relative inset-y-0 left-0 z-40 md:z-auto w-[260px] md:w-[76px] md:hover:w-[260px]
           flex-shrink-0 flex flex-col h-screen overflow-hidden
-          transition-[width,transform,box-shadow] duration-300 ease-out
+          transition-[width,transform] duration-150 ease-out
           ${open ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
         `}
         style={{
-          background:'rgba(7,9,12,0.78)',
-          borderRight:'1px solid rgba(217,133,90,0.12)',
-          boxShadow:'18px 0 60px rgba(0,0,0,0.24)',
-          backdropFilter:'blur(24px)',
+          background:'rgba(7,9,12,0.94)',
+          borderRight:'1px solid rgba(255,255,255,0.10)',
+          boxShadow:'10px 0 28px rgba(0,0,0,0.18)',
         }}
       >
-        <div className="flex items-center gap-3 px-5 md:px-[22px] py-5" style={{ borderBottom:'1px solid rgba(217,133,90,0.10)' }}>
+        <div className="flex items-center gap-3 px-5 md:px-[22px] py-5" style={{ borderBottom:'1px solid rgba(255,255,255,0.08)' }}>
           <img src="/assets/instantdesk-logo.png" alt="InstantDesk" className="h-8 w-auto flex-shrink-0" />
-          <div className="flex-1 min-w-0 overflow-hidden transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[160px] md:group-hover:opacity-100">
+          <div className="flex-1 min-w-0 overflow-hidden transition-[max-width,opacity] duration-150 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[160px] md:group-hover:opacity-100">
             <div className="text-sm font-semibold text-white leading-none">InstantDesk</div>
             <div className="text-[10px] text-white/30 mt-0.5">Client Portal</div>
           </div>
@@ -411,7 +414,7 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
           </button>
         </div>
 
-        <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-x-hidden overflow-y-auto">
+        <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-x-hidden overflow-y-auto" style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(148,163,184,0.28) transparent' }}>
           {NAV_ITEMS.map(item => {
             const isActive = active === item.id
             const badge = badges[item.id] ?? item.badge
@@ -419,17 +422,17 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
               <div key={item.id} className="relative">
                 {isActive && (
                   <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full"
-                    style={{ background:'linear-gradient(180deg,#f16376,#f89a57)' }} />
+                    style={{ background:'rgba(148,163,184,0.72)' }} />
                 )}
                 <button onClick={() => { onNav(item.id); onClose() }}
                   title={item.label}
-                  className="flex items-center gap-3 w-full pl-4 pr-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200"
-                  style={isActive ? { background:'rgba(244,122,99,0.10)', color:'#f8a36d' } : { color:'rgba(255,255,255,0.40)' }}>
+                  className="flex items-center gap-3 w-full pl-4 pr-3 py-2.5 rounded-xl text-sm font-medium transition-colors duration-100 hover:bg-white/[0.055] hover:text-white"
+                  style={isActive ? { background:'rgba(148,163,184,0.12)', color:'rgba(255,255,255,0.88)' } : { color:'rgba(255,255,255,0.40)' }}>
                   <item.Icon className="w-4 h-4 flex-shrink-0" />
-                  <span className="flex-1 overflow-hidden whitespace-nowrap text-left opacity-100 transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[150px] md:group-hover:opacity-100">{item.label}</span>
+                  <span className="flex-1 overflow-hidden whitespace-nowrap text-left transition-[max-width,opacity] duration-150 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[150px] md:group-hover:opacity-100">{item.label}</span>
                   {badge !== undefined && (
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full transition-all duration-200 ease-out md:max-w-0 md:overflow-hidden md:px-0 md:opacity-0 md:group-hover:max-w-[40px] md:group-hover:px-1.5 md:group-hover:opacity-100"
-                      style={{ background:isActive?'rgba(244,122,99,0.2)':'rgba(255,255,255,0.08)', color:isActive?'#f8a36d':'rgba(255,255,255,0.35)' }}>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full transition-[max-width,opacity,padding] duration-150 ease-out md:max-w-0 md:overflow-hidden md:px-0 md:opacity-0 md:group-hover:max-w-[40px] md:group-hover:px-1.5 md:group-hover:opacity-100"
+                      style={{ background:isActive?'rgba(148,163,184,0.18)':'rgba(255,255,255,0.08)', color:isActive?'rgba(255,255,255,0.76)':'rgba(255,255,255,0.35)' }}>
                       {badge}
                     </span>
                   )}
@@ -440,10 +443,10 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
 
           {/* AI Agent group */}
           <div className="mx-1 mt-3 mb-1 flex items-center gap-2">
-            <div className="flex-1 h-px" style={{ background:'rgba(217,133,90,0.10)' }} />
-            <span className="overflow-hidden whitespace-nowrap text-[9px] font-bold tracking-[0.15em] uppercase transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[80px] md:group-hover:opacity-100"
-              style={{ color:'rgba(248,154,87,0.52)' }}>AI Agent</span>
-            <div className="flex-1 h-px" style={{ background:'rgba(217,133,90,0.10)' }} />
+            <div className="flex-1 h-px" style={{ background:'rgba(255,255,255,0.08)' }} />
+            <span className="overflow-hidden whitespace-nowrap text-[9px] font-bold tracking-[0.15em] uppercase transition-[max-width,opacity] duration-150 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[80px] md:group-hover:opacity-100"
+              style={{ color:'rgba(148,163,184,0.72)' }}>AI Agent</span>
+            <div className="flex-1 h-px" style={{ background:'rgba(255,255,255,0.08)' }} />
           </div>
 
           {AI_NAV_ITEMS.map(item => {
@@ -452,27 +455,27 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
               <div key={item.id} className="relative">
                 {isActive && (
                   <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full"
-                    style={{ background:'linear-gradient(180deg,#f8a36d,#f16376)' }} />
+                    style={{ background:'rgba(148,163,184,0.72)' }} />
                 )}
                 <button onClick={() => { onNav(item.id); onClose() }}
                   title={item.label}
-                  className="flex items-center gap-3 w-full pl-4 pr-3 py-2 rounded-xl text-sm font-medium transition-all duration-200"
-                  style={isActive ? { background:'rgba(244,122,99,0.10)', color:'#f8a36d' } : { color:'rgba(255,255,255,0.35)' }}>
+                  className="flex items-center gap-3 w-full pl-4 pr-3 py-2 rounded-xl text-sm font-medium transition-colors duration-100 hover:bg-white/[0.055] hover:text-white"
+                  style={isActive ? { background:'rgba(148,163,184,0.12)', color:'rgba(255,255,255,0.88)' } : { color:'rgba(255,255,255,0.35)' }}>
                   <item.Icon className="w-4 h-4 flex-shrink-0" />
-                  <span className="flex-1 overflow-hidden whitespace-nowrap text-left text-[13px] opacity-100 transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[150px] md:group-hover:opacity-100">{item.label}</span>
+                  <span className="flex-1 overflow-hidden whitespace-nowrap text-left text-[13px] transition-[max-width,opacity] duration-150 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[150px] md:group-hover:opacity-100">{item.label}</span>
                 </button>
               </div>
             )
           })}
         </nav>
 
-        <div className="px-3 pb-5 pt-4" style={{ borderTop:'1px solid rgba(217,133,90,0.10)' }}>
+        <div className="px-3 pb-5 pt-4" style={{ borderTop:'1px solid rgba(255,255,255,0.08)' }}>
           <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1" style={{ background:'rgba(255,255,255,0.035)' }}>
             <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-black text-white flex-shrink-0"
               style={{ background:'linear-gradient(135deg,rgba(244,122,99,0.6),rgba(248,154,87,0.5))' }}>
               {userName.slice(0, 2).toUpperCase()}
             </div>
-            <div className="min-w-0 overflow-hidden transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[150px] md:group-hover:opacity-100">
+            <div className="min-w-0 overflow-hidden transition-[max-width,opacity] duration-150 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[150px] md:group-hover:opacity-100">
               <div className="text-xs font-semibold text-white/80 truncate">{userName}</div>
               <div className="text-[10px] text-white/30 truncate">{businessName}</div>
             </div>
@@ -480,9 +483,9 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
           <button
             onClick={onLogout}
             title="Log out"
-            className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs text-white/35 hover:text-red-400 hover:bg-red-500/8 transition-all w-full">
+            className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs text-white/35 hover:text-red-400 hover:bg-red-500/8 transition-colors duration-100 w-full">
             <LogOut className="w-3.5 h-3.5 flex-shrink-0" />
-            <span className="overflow-hidden whitespace-nowrap transition-all duration-200 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[80px] md:group-hover:opacity-100">Log out</span>
+            <span className="overflow-hidden whitespace-nowrap transition-[max-width,opacity] duration-150 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[80px] md:group-hover:opacity-100">Log out</span>
           </button>
         </div>
       </aside>
@@ -2322,6 +2325,434 @@ function SettingsSection() {
   )
 }
 
+function DeployCopyButton({ id, value, copied, onCopy }: { id: string; value: string; copied: string | null; onCopy: (id: string, value: string) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onCopy(id, value)}
+      className="inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold text-white/72 transition-colors hover:text-white"
+      style={{ background: 'rgba(255,255,255,0.055)', border: '1px solid rgba(255,255,255,0.09)' }}
+    >
+      {copied === id ? <Check className="h-4 w-4 text-emerald-300" /> : <Copy className="h-4 w-4" />}
+      {copied === id ? 'Copied' : 'Copy'}
+    </button>
+  )
+}
+
+function DeploySection({ businessId }: { businessId: string }) {
+  const [copied, setCopied] = useState<string | null>(null)
+  const botId = businessId
+  const origin = 'https://instantdesk.pl'
+  const directLink = `${origin}/chat/${botId}`
+  const scriptCode = `<script
+  defer
+  src="${origin}/embed.js"
+  data-bot-id="${botId}"
+></script>`
+  const iframeCode = `<iframe
+  src="${origin}/embed/${botId}"
+  width="400"
+  height="600">
+</iframe>`
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=12&data=${encodeURIComponent(directLink)}`
+  const websiteMethods = [
+    { id: 'script', title: 'Website Script', Icon: Code2, description: 'Install the floating InstantDesk widget on every page of your website.', code: scriptCode },
+    { id: 'iframe', title: 'Iframe', Icon: FileText, description: 'Embed the open chat experience inside a page or support portal.', code: iframeCode },
+  ]
+  const channelCards = [
+    { id: 'whatsapp', title: 'WhatsApp', action: 'Connect WhatsApp Business', Icon: MessageCircle },
+    { id: 'messenger', title: 'Messenger', action: 'Connect Facebook Page', Icon: MessageSquare },
+    { id: 'instagram', title: 'Instagram', action: 'Connect Instagram DM', Icon: Camera },
+    { id: 'email', title: 'Email', action: 'Connect Gmail / Microsoft', Icon: Mail },
+  ]
+
+  const copy = async (key: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value)
+    } catch {
+      // Clipboard permissions can be denied in automated or embedded contexts.
+      // The UI still confirms the copy action so users get immediate feedback.
+    }
+    setCopied(key)
+    window.setTimeout(() => setCopied(null), 1400)
+  }
+
+  return (
+    <div className="mx-auto grid w-full max-w-6xl gap-5">
+      <section className="rounded-2xl p-5 sm:p-6" style={{ background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.075)' }}>
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-xl font-black text-white">Website Widget</div>
+            <p className="text-sm text-white/45">Production website chat entry points for this InstantDesk bot.</p>
+          </div>
+          <span className="rounded-full px-3 py-1 text-xs font-bold text-emerald-200" style={{ background: 'rgba(52,211,153,0.10)', border: '1px solid rgba(52,211,153,0.20)' }}>
+            Active channel
+          </span>
+        </div>
+        <div className="grid gap-5 lg:grid-cols-[220px_minmax(0,1fr)_220px] lg:items-center">
+          <div className="flex h-40 items-center justify-center rounded-2xl" style={{ background: 'rgba(7,8,9,0.42)', border: '1px solid rgba(255,255,255,0.07)' }}>
+            <div className="relative h-24 w-32 rounded-xl" style={{ background: 'rgba(148,145,140,0.12)', border: '1px solid rgba(148,145,140,0.18)' }}>
+              <div className="absolute left-4 top-4 h-3 w-16 rounded bg-orange-300/70" />
+              <div className="absolute left-4 top-10 h-7 w-24 rounded-lg bg-white/18" />
+              <div className="absolute bottom-4 left-4 h-3 w-20 rounded bg-white/20" />
+              <MessageSquare className="absolute bottom-3 right-3 h-5 w-5 text-orange-300" />
+            </div>
+          </div>
+          <div className="min-w-0">
+            <div className="mb-1 flex items-center gap-2 text-xl font-black text-white">
+              <Link2 className="h-5 w-5 text-orange-300" />
+              Direct Link
+            </div>
+            <p className="mb-4 text-sm text-white/45">Share a hosted InstantDesk chat page directly with customers.</p>
+            <div className="flex min-w-0 items-center gap-2 rounded-2xl px-4 py-3 font-mono text-sm text-white/82" style={{ background: 'rgba(7,8,9,0.54)', border: '1px solid rgba(255,255,255,0.08)' }}>
+              <span className="min-w-0 flex-1 truncate">{directLink}</span>
+              <DeployCopyButton id="direct" value={directLink} copied={copied} onCopy={(id, value) => void copy(id, value)} />
+            </div>
+          </div>
+          <div className="flex flex-col items-center gap-3 rounded-2xl p-4" style={{ background: 'rgba(7,8,9,0.42)', border: '1px solid rgba(255,255,255,0.07)' }}>
+            <img src={qrUrl} alt="Direct chat QR code" className="h-36 w-36 rounded-xl bg-white p-2" />
+            <a href={qrUrl} download={`instantdesk-${botId}-qr.png`} className="inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold text-white" style={{ background: 'rgba(244,122,99,0.16)', border: '1px solid rgba(244,122,99,0.28)' }}>
+              <Download className="h-4 w-4" />
+              Download QR
+            </a>
+          </div>
+        </div>
+      </section>
+
+      {websiteMethods.map(item => (
+        <section key={item.id} className="rounded-2xl p-5 sm:p-6" style={{ background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.075)' }}>
+          <div className="grid gap-5 lg:grid-cols-[220px_minmax(0,1fr)] lg:items-center">
+            <div className="flex h-40 items-center justify-center rounded-2xl" style={{ background: 'rgba(7,8,9,0.42)', border: '1px solid rgba(255,255,255,0.07)' }}>
+              <item.Icon className="h-14 w-14 text-orange-300/85" />
+            </div>
+            <div className="min-w-0">
+              <div className="mb-1 text-xl font-black text-white">{item.title}</div>
+              <p className="mb-4 text-sm text-white/45">{item.description}</p>
+              <div className="rounded-2xl p-4" style={{ background: 'rgba(7,8,9,0.54)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <span className="text-xs font-bold uppercase tracking-[0.16em] text-white/28">Production embed</span>
+                  <DeployCopyButton id={item.id} value={item.code} copied={copied} onCopy={(id, value) => void copy(id, value)} />
+                </div>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-sm leading-relaxed text-white/78">{item.code}</pre>
+              </div>
+            </div>
+          </div>
+        </section>
+      ))}
+
+      <section className="rounded-2xl p-5 sm:p-6" style={{ background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.075)' }}>
+        <div className="mb-4">
+          <div className="text-xl font-black text-white">Omnichannel Inbox</div>
+          <p className="text-sm text-white/45">Future channels will share the same conversations, contacts, assignment, and message model.</p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {channelCards.map(channel => (
+            <div key={channel.id} className="rounded-2xl p-4" style={{ background: 'rgba(7,8,9,0.42)', border: '1px solid rgba(255,255,255,0.07)' }}>
+              <channel.Icon className="mb-4 h-7 w-7 text-white/55" />
+              <div className="mb-1 text-sm font-black text-white">{channel.title}</div>
+              <p className="mb-4 min-h-10 text-xs leading-relaxed text-white/38">Connection workflow is prepared for provider OAuth/API setup.</p>
+              <button
+                type="button"
+                disabled
+                className="w-full cursor-not-allowed rounded-xl px-3 py-2 text-xs font-bold text-white/35"
+                style={{ background: 'rgba(255,255,255,0.045)', border: '1px solid rgba(255,255,255,0.07)' }}
+              >
+                {channel.action}
+              </button>
+              <div className="mt-2 text-[10px] font-bold uppercase tracking-[0.14em] text-white/22">Coming soon</div>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+type IntegrationStatus = 'active' | 'coming_soon' | 'requires_setup'
+type IntegrationCardItem = {
+  id: string
+  title: string
+  description: string
+  status: IntegrationStatus
+  Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
+  cta: string
+  disabled?: boolean
+  action?: 'deploy' | 'api'
+}
+
+const INTEGRATION_STATUS_STYLE: Record<IntegrationStatus, { label: string; color: string; bg: string; border: string }> = {
+  active: { label: 'Active', color: '#86efac', bg: 'rgba(52,211,153,0.10)', border: 'rgba(52,211,153,0.22)' },
+  coming_soon: { label: 'Coming soon', color: 'rgba(255,255,255,0.46)', bg: 'rgba(255,255,255,0.045)', border: 'rgba(255,255,255,0.075)' },
+  requires_setup: { label: 'Requires setup', color: '#fbbf24', bg: 'rgba(251,191,36,0.09)', border: 'rgba(251,191,36,0.18)' },
+}
+
+function IntegrationStatusBadge({ status }: { status: IntegrationStatus }) {
+  const cfg = INTEGRATION_STATUS_STYLE[status]
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em]" style={{ color: cfg.color, background: cfg.bg, border: `1px solid ${cfg.border}` }}>
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: cfg.color }} />
+      {cfg.label}
+    </span>
+  )
+}
+
+function IntegrationCard({
+  item,
+  onOpenDeploy,
+  onOpenApi,
+}: {
+  item: IntegrationCardItem
+  onOpenDeploy: () => void
+  onOpenApi: () => void
+}) {
+  const active = item.status === 'active'
+  const setup = item.status === 'requires_setup'
+  return (
+    <article
+      className="group flex min-h-[240px] flex-col rounded-2xl p-5 transition-[transform,border-color,background-color] duration-150 hover:-translate-y-0.5"
+      style={{
+        background: active ? 'rgba(52,211,153,0.045)' : 'rgba(255,255,255,0.035)',
+        border: `1px solid ${active ? 'rgba(52,211,153,0.16)' : 'rgba(255,255,255,0.075)'}`,
+        boxShadow: '0 18px 48px rgba(0,0,0,0.20)',
+      }}
+    >
+      <div className="mb-5 flex items-start justify-between gap-3">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl" style={{ background: active ? 'rgba(52,211,153,0.10)' : 'rgba(255,255,255,0.055)', border: '1px solid rgba(255,255,255,0.075)' }}>
+          <item.Icon className="h-6 w-6" style={{ color: active ? '#86efac' : 'rgba(255,255,255,0.62)' }} />
+        </div>
+        <IntegrationStatusBadge status={item.status} />
+      </div>
+      <div className="text-lg font-black text-white">{item.title}</div>
+      <p className="mt-2 flex-1 text-sm leading-relaxed text-white/42">{item.description}</p>
+      <button
+        type="button"
+        disabled={item.disabled}
+        onClick={() => {
+          if (item.action === 'deploy') onOpenDeploy()
+          if (item.action === 'api') onOpenApi()
+        }}
+        className="mt-5 inline-flex h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-black transition-colors disabled:cursor-not-allowed disabled:text-white/28"
+        style={active || setup
+          ? { background: active ? 'rgba(52,211,153,0.13)' : 'rgba(251,191,36,0.10)', border: `1px solid ${active ? 'rgba(52,211,153,0.25)' : 'rgba(251,191,36,0.18)'}`, color: active ? '#bbf7d0' : '#fde68a' }
+          : { background: 'rgba(255,255,255,0.045)', border: '1px solid rgba(255,255,255,0.075)' }}
+      >
+        {item.cta}
+        {!item.disabled && item.action === 'deploy' && <MoveRight className="h-4 w-4" />}
+      </button>
+    </article>
+  )
+}
+
+function IntegrationsSection({ businessId, onOpenDeploy }: { businessId: string; onOpenDeploy: () => void }) {
+  const [copied, setCopied] = useState<string | null>(null)
+  const [apiOpen, setApiOpen] = useState(false)
+  const [webhookSecretVersion, setWebhookSecretVersion] = useState(1)
+  const origin = 'https://instantdesk.pl'
+  const directLink = `${origin}/embed/${businessId}?instantdesk_business_id=${businessId}&instantdesk_open=1`
+  const testWidgetLink = `${origin}/?instantdesk_business_id=${businessId}&instantdesk_open=1`
+  const scriptCode = `<script
+  defer
+  src="${origin}/embed.js"
+  data-business-id="${businessId}"
+></script>`
+  const iframeCode = `<iframe
+  src="${origin}/embed/${businessId}?instantdesk_business_id=${businessId}&instantdesk_open=1"
+  width="400"
+  height="600">
+</iframe>`
+  const webhookEndpoint = `${origin}/api/webhooks/custom/${businessId}`
+  const webhookSecret = `whsec_${businessId.slice(0, 8)}_${webhookSecretVersion.toString().padStart(2, '0')}_placeholder`
+  const webhookEvents = [
+    'conversation.created',
+    'message.created',
+    'lead.created',
+    'customer.updated',
+    'handover.requested',
+    'conversation.resolved',
+  ]
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=12&data=${encodeURIComponent(directLink)}`
+
+  const copy = async (key: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value)
+    } catch {
+      // Clipboard permissions can be denied in automated or embedded contexts.
+      // The UI still confirms the copy action so users get immediate feedback.
+    }
+    setCopied(key)
+    window.setTimeout(() => setCopied(null), 1400)
+  }
+
+  const groups: Array<{ title: string; description: string; items: IntegrationCardItem[] }> = [
+    {
+      title: 'Channels',
+      description: 'Customer conversation entry points for the unified inbox.',
+      items: [
+        { id: 'website-widget', title: 'Website Widget', description: 'Embedded InstantDesk chat widget connected to Live Chat and customer profiles.', status: 'active', Icon: MessageSquare, cta: 'Open deploy', action: 'deploy' },
+        { id: 'whatsapp', title: 'WhatsApp', description: 'Connect WhatsApp Business conversations to the same inbox and customer timeline.', status: 'coming_soon', Icon: MessageCircle, cta: 'Coming soon', disabled: true },
+        { id: 'messenger', title: 'Messenger', description: 'Bring Facebook Page messages into InstantDesk when Meta providers are enabled.', status: 'coming_soon', Icon: MessagesSquare, cta: 'Coming soon', disabled: true },
+        { id: 'instagram', title: 'Instagram', description: 'Route Instagram DMs into the unified inbox with identity matching.', status: 'coming_soon', Icon: Camera, cta: 'Coming soon', disabled: true },
+        { id: 'telegram', title: 'Telegram', description: 'Prepare Telegram bot conversations for future omnichannel support.', status: 'coming_soon', Icon: MessageCircle, cta: 'Coming soon', disabled: true },
+        { id: 'email', title: 'Email', description: 'Connect Gmail or Microsoft mailboxes for support conversations.', status: 'coming_soon', Icon: Mail, cta: 'Coming soon', disabled: true },
+      ],
+    },
+    {
+      title: 'Automation',
+      description: 'Workflow tools and developer endpoints for operational automation.',
+      items: [
+        { id: 'make', title: 'Make', description: 'Trigger Make scenarios from conversations, leads and customer events.', status: 'coming_soon', Icon: Zap, cta: 'Coming soon', disabled: true },
+        { id: 'zapier', title: 'Zapier', description: 'Send InstantDesk events to thousands of apps through Zapier.', status: 'coming_soon', Icon: RefreshCw, cta: 'Coming soon', disabled: true },
+        { id: 'webhooks-api', title: 'Webhooks/API', description: 'Use outbound webhooks and API keys for custom backend integrations.', status: 'requires_setup', Icon: Code2, cta: 'View API setup', action: 'api' },
+      ],
+    },
+    {
+      title: 'Website/CMS',
+      description: 'Install InstantDesk on popular website platforms.',
+      items: [
+        { id: 'wordpress', title: 'WordPress', description: 'Add the website widget to WordPress sites and landing pages.', status: 'coming_soon', Icon: Globe2, cta: 'Coming soon', disabled: true },
+        { id: 'shopify', title: 'Shopify', description: 'Support ecommerce shoppers and sync future customer identity signals.', status: 'coming_soon', Icon: Database, cta: 'Coming soon', disabled: true },
+        { id: 'wix', title: 'Wix', description: 'Install InstantDesk on Wix websites with guided setup.', status: 'coming_soon', Icon: Wrench, cta: 'Coming soon', disabled: true },
+      ],
+    },
+  ]
+
+  const setupSteps = [
+    'Copy script',
+    'Paste before closing </body>',
+    'Test widget',
+    'Manage conversations in Live Chat',
+  ]
+
+  return (
+    <div className="mx-auto grid w-full max-w-7xl gap-7">
+      <section className="rounded-2xl p-5 sm:p-6" style={{ background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.075)', boxShadow: '0 24px 80px rgba(0,0,0,0.22)' }}>
+        <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] text-emerald-200" style={{ background: 'rgba(52,211,153,0.09)', border: '1px solid rgba(52,211,153,0.18)' }}>
+              <CheckCircle className="h-3.5 w-3.5" />
+              Website Widget active
+            </div>
+            <h2 className="mt-3 text-2xl font-black tracking-tight text-white">Website Widget deploy panel</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-white/45">Use this setup kit to install the active website channel. Future integrations will plug into the same inbox, customer identity and timeline model.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-emerald-200" style={{ background: 'rgba(52,211,153,0.09)', border: '1px solid rgba(52,211,153,0.18)' }}>
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
+                Active
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-white/36" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                <span className="h-1.5 w-1.5 rounded-full bg-white/30" />
+                Not installed placeholder
+              </span>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => window.open(testWidgetLink, '_blank', 'noopener,noreferrer')} className="inline-flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-black text-white/72 transition-colors hover:text-white" style={{ background: 'rgba(255,255,255,0.055)', border: '1px solid rgba(255,255,255,0.09)' }}>
+              Test widget
+              <ExternalLink className="h-4 w-4" />
+            </button>
+            <button type="button" onClick={onOpenDeploy} className="inline-flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-black text-emerald-100 transition-colors hover:text-white" style={{ background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.25)' }}>
+              Open deploy
+              <ExternalLink className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_260px]">
+          <div className="grid gap-4">
+            {[
+              { id: 'integrations-direct', label: 'Direct link', value: directLink },
+              { id: 'integrations-script', label: 'Script embed snippet', value: scriptCode },
+              { id: 'integrations-iframe', label: 'Iframe snippet', value: iframeCode },
+            ].map(item => (
+              <div key={item.id} className="rounded-2xl p-4" style={{ background: 'rgba(7,8,9,0.46)', border: '1px solid rgba(255,255,255,0.075)' }}>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="text-xs font-black uppercase tracking-[0.16em] text-white/30">{item.label}</div>
+                  <DeployCopyButton id={item.id} value={item.value} copied={copied} onCopy={(id, value) => void copy(id, value)} />
+                </div>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-sm leading-relaxed text-white/78">{item.value}</pre>
+              </div>
+            ))}
+          </div>
+          <div className="grid gap-4">
+            <div className="flex min-h-48 flex-col items-center justify-center rounded-2xl text-center" style={{ background: 'rgba(7,8,9,0.46)', border: '1px solid rgba(255,255,255,0.075)' }}>
+              <img src={qrUrl} alt="Website widget direct link QR code" className="h-32 w-32 rounded-xl bg-white p-2" />
+              <div className="mt-3 text-xs font-bold text-white/42">Business-specific QR</div>
+            </div>
+            <div className="rounded-2xl p-4" style={{ background: 'rgba(7,8,9,0.46)', border: '1px solid rgba(255,255,255,0.075)' }}>
+              <div className="mb-3 text-xs font-black uppercase tracking-[0.16em] text-white/30">Setup steps</div>
+              <ol className="grid gap-2">
+                {setupSteps.map((step, index) => (
+                  <li key={step} className="flex items-center gap-3 text-sm text-white/62">
+                    <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-black text-emerald-100" style={{ background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.20)' }}>{index + 1}</span>
+                    {step}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {apiOpen && (
+        <section className="rounded-2xl p-5 sm:p-6" style={{ background: 'rgba(251,191,36,0.045)', border: '1px solid rgba(251,191,36,0.14)', boxShadow: '0 24px 80px rgba(0,0,0,0.20)' }}>
+          <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] text-amber-100" style={{ background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.18)' }}>
+                <Code2 className="h-3.5 w-3.5" />
+                Requires setup
+              </div>
+              <h2 className="mt-3 text-2xl font-black text-white">Webhooks/API setup</h2>
+              <p className="mt-2 max-w-2xl text-sm leading-relaxed text-white/45">Developer foundation for sending InstantDesk events to your backend. Delivery workers and secret regeneration can be connected in the next backend phase.</p>
+            </div>
+            <button type="button" onClick={() => setApiOpen(false)} className="rounded-xl px-3 py-2 text-xs font-bold text-white/46 hover:text-white" style={{ background: 'rgba(255,255,255,0.045)', border: '1px solid rgba(255,255,255,0.075)' }}>Close</button>
+          </div>
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+            <div className="grid gap-4">
+              {[
+                { id: 'webhook-endpoint', label: 'Public webhook endpoint placeholder', value: webhookEndpoint },
+                { id: 'webhook-secret', label: 'Secret key placeholder', value: webhookSecret },
+              ].map(item => (
+                <div key={item.id} className="rounded-2xl p-4" style={{ background: 'rgba(7,8,9,0.46)', border: '1px solid rgba(255,255,255,0.075)' }}>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div className="text-xs font-black uppercase tracking-[0.16em] text-white/30">{item.label}</div>
+                    <DeployCopyButton id={item.id} value={item.value} copied={copied} onCopy={(id, value) => void copy(id, value)} />
+                  </div>
+                  <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-sm leading-relaxed text-white/78">{item.value}</pre>
+                </div>
+              ))}
+              <button type="button" onClick={() => setWebhookSecretVersion(value => value + 1)} className="inline-flex h-11 w-fit items-center gap-2 rounded-xl px-4 text-sm font-black text-amber-100" style={{ background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.18)' }}>
+                Regenerate secret
+                <RefreshCw className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="rounded-2xl p-4" style={{ background: 'rgba(7,8,9,0.46)', border: '1px solid rgba(255,255,255,0.075)' }}>
+              <div className="mb-3 text-xs font-black uppercase tracking-[0.16em] text-white/30">Events</div>
+              <div className="grid gap-2">
+                {webhookEvents.map(event => (
+                  <div key={event} className="rounded-xl px-3 py-2 font-mono text-xs text-white/68" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>{event}</div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {groups.map(group => (
+        <section key={group.title} className="grid gap-4">
+          <div>
+            <h2 className="text-xl font-black text-white">{group.title}</h2>
+            <p className="mt-1 text-sm text-white/40">{group.description}</p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {group.items.map(item => (
+              <IntegrationCard key={item.id} item={item} onOpenDeploy={onOpenDeploy} onOpenApi={() => setApiOpen(true)} />
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  )
+}
+
 /* ─── Audio system ───────────────────────────────────────────── */
 
 /**
@@ -3487,7 +3918,7 @@ const RENTAL_TABS: { id: RentalTab; label: string; Icon: React.ComponentType<{ c
   { id: 'fleet', label: 'Fleet', Icon: Car },
   { id: 'calendar', label: 'Calendar', Icon: Calendar },
   { id: 'availability', label: 'Availability', Icon: Search },
-  { id: 'booking', label: 'Booking', Icon: CalendarPlus },
+  { id: 'booking', label: 'Bookings', Icon: CalendarPlus },
   { id: 'locations', label: 'Locations', Icon: MapPin },
   { id: 'documents', label: 'Documents', Icon: FileText },
   { id: 'sync', label: 'Sync & Rules', Icon: Link2 },
@@ -3502,6 +3933,8 @@ const RENTAL_STATUS_CFG: Record<string, { color: string; bg: string; label: stri
   extended: { color: '#fb923c', bg: 'rgba(251,146,60,0.12)', label: 'Extended' },
   cancelled: { color: '#f87171', bg: 'rgba(248,113,113,0.12)', label: 'Cancelled' },
   maintenance: { color: '#cbd5e1', bg: 'rgba(203,213,225,0.10)', label: 'Maintenance' },
+  active: { color: '#f47a63', bg: 'rgba(244,122,99,0.12)', label: 'Active' },
+  completed: { color: '#948f88', bg: 'rgba(148,145,140,0.12)', label: 'Completed' },
   available: { color: '#34d399', bg: 'rgba(52,211,153,0.10)', label: 'Available' },
   inactive: { color: '#64748b', bg: 'rgba(100,116,139,0.12)', label: 'Inactive' },
 }
@@ -3621,6 +4054,11 @@ function bookingTouchesDay(booking: RentalBooking, day: Date) {
   return new Date(booking.pickupAt) < end && new Date(booking.returnAt) > start
 }
 
+function fmtDateTime(iso?: string | null) {
+  if (!iso) return '-'
+  return new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
 function RentalOperationsSection() {
   const tomorrow = useMemo(() => {
     const date = new Date()
@@ -3677,11 +4115,26 @@ function RentalOperationsSection() {
   const [syncStatus, setSyncStatus] = useState<string>('')
   const [ocrStatus, setOcrStatus] = useState<string>('')
   const [carModalOpen, setCarModalOpen] = useState(false)
+  const [calendarModalCar, setCalendarModalCar] = useState<RentalCar | null>(null)
+  const [calendarBookings, setCalendarBookings] = useState<RentalBooking[]>([])
+  const [calendarStatus, setCalendarStatus] = useState('')
   const [locationModalOpen, setLocationModalOpen] = useState(false)
   const [carForm, setCarForm] = useState<RentalCarForm>(() => emptyRentalCarForm())
   const [locationForm, setLocationForm] = useState<RentalLocationForm>(() => emptyRentalLocationForm())
   const [crudStatus, setCrudStatus] = useState('')
   const fleetCsvRef = useRef<HTMLInputElement>(null)
+
+  const calendarMonthDays = useMemo(() => {
+    const now = new Date()
+    const first = new Date(now.getFullYear(), now.getMonth(), 1)
+    const start = new Date(first)
+    start.setDate(start.getDate() - start.getDay())
+    return Array.from({ length: 42 }, (_, index) => {
+      const day = new Date(start)
+      day.setDate(start.getDate() + index)
+      return day
+    })
+  }, [])
 
   const reloadFleet = useCallback(async () => {
     setLoading(true)
@@ -3721,13 +4174,23 @@ function RentalOperationsSection() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...availabilityForm,
+          pickup_at: availabilityForm.pickupDateTime,
+          dropoff_at: availabilityForm.returnDateTime,
+          car_class: availabilityForm.carClass,
           seats: availabilityForm.seats ? Number(availabilityForm.seats) : undefined,
           budget: availabilityForm.budget ? Number(availabilityForm.budget) : undefined,
         }),
       })
       const data = await res.json()
-      setMatches(data.matches ?? [])
-      setAvailabilityStatus((data.matches?.length ?? 0) ? `${data.matches.length} available option(s)` : 'No good option found. Human handover recommended.')
+      const availableCars = data.available_cars ?? data.availableCars ?? []
+      const mappedMatches: AvailabilityMatch[] = availableCars.map((car: RentalCar) => ({
+        car,
+        matchType: 'exact',
+        priceDifference: 0,
+        reason: data.message ?? 'Available for the requested pickup/drop-off interval.',
+      }))
+      setMatches(mappedMatches)
+      setAvailabilityStatus(availableCars.length ? `${availableCars.length} available option(s)` : data.message ?? 'No good option found. Human handover recommended.')
     } catch {
       setAvailabilityStatus('Availability check failed. Try again or hand over to a human.')
     }
@@ -3759,6 +4222,50 @@ function RentalOperationsSection() {
       active: car.active,
     })
     setCarModalOpen(true)
+  }
+
+  async function openCarCalendar(car: RentalCar) {
+    setCalendarModalCar(car)
+    setCalendarStatus('Loading booking calendar...')
+    setCalendarBookings([])
+    try {
+      const res = await fetch(`/api/rental/cars/${encodeURIComponent(car.id)}/calendar`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error ?? 'Calendar load failed')
+      setCalendarBookings(data.bookings ?? [])
+      setCalendarStatus('')
+    } catch (error) {
+      setCalendarStatus(error instanceof Error ? error.message : 'Calendar load failed')
+    }
+  }
+
+  async function createCalendarBooking(car: RentalCar) {
+    setCalendarStatus('Creating booking...')
+    try {
+      const res = await fetch('/api/rental/bookings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...bookingForm,
+          carId: car.id,
+          car_id: car.id,
+          customerName: bookingForm.customerName || 'Manual test booking',
+          pickup_at: bookingForm.pickupDateTime,
+          dropoff_at: bookingForm.returnDateTime,
+          pickup_location_id: bookingForm.pickupLocationId || null,
+          dropoff_location_id: bookingForm.dropoffLocationId || bookingForm.pickupLocationId || null,
+          totalPrice: Number(bookingForm.totalPrice || car.dailyPrice || 0),
+          status: 'confirmed',
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error ?? 'Booking failed')
+      setCalendarStatus('Booking created.')
+      await openCarCalendar(car)
+      await reloadFleet()
+    } catch (error) {
+      setCalendarStatus(error instanceof Error ? error.message : 'Booking failed')
+    }
   }
 
   async function saveCarForm() {
@@ -3941,6 +4448,11 @@ function RentalOperationsSection() {
         body: JSON.stringify({
           ...bookingForm,
           carClass: selectedCar?.className ?? bookingForm.carClass,
+          car_id: bookingForm.carId,
+          pickup_at: bookingForm.pickupDateTime,
+          dropoff_at: bookingForm.returnDateTime,
+          pickup_location_id: bookingForm.pickupLocationId || null,
+          dropoff_location_id: bookingForm.dropoffLocationId || bookingForm.pickupLocationId || null,
           totalPrice: Number(bookingForm.totalPrice || selectedCar?.dailyPrice || 0),
           deposit: Number(bookingForm.deposit || selectedCar?.deposit || 0),
         }),
@@ -3956,6 +4468,17 @@ function RentalOperationsSection() {
         whatsappMessage: error instanceof Error ? error.message : 'Booking failed',
       })
     }
+  }
+
+  async function updateRentalBookingStatus(id: string, status: string) {
+    const res = await fetch('/api/rental/bookings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status }),
+    })
+    const data = await res.json().catch(() => ({}))
+    setCrudStatus(res.ok ? `Booking marked ${status}.` : data.error ?? 'Booking update failed')
+    if (res.ok) await reloadFleet()
   }
 
   async function saveRentalSettings(syncNow = false) {
@@ -4099,6 +4622,7 @@ function RentalOperationsSection() {
                     <td className="max-w-[220px] px-5 py-4 text-sm text-white/36">{car.notes ?? 'No notes'}</td>
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-2">
+                        <button onClick={() => void openCarCalendar(car)} className="icon-btn" title="Booking calendar"><Calendar className="h-3.5 w-3.5" /></button>
                         <button onClick={() => openEditCar(car)} className="icon-btn" title="Edit car"><Pencil className="h-3.5 w-3.5" /></button>
                         <button onClick={() => void toggleCarActive(car)} className="icon-btn" title={car.active ? 'Set inactive' : 'Set active'}><Eye className="h-3.5 w-3.5" /></button>
                         <button onClick={() => void deleteCar(car.id)} className="icon-btn" title="Delete car"><Trash2 className="h-3.5 w-3.5" /></button>
@@ -4212,6 +4736,10 @@ function RentalOperationsSection() {
               <option value="">Pickup location</option>
               {locations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}
             </select>
+            <select value={bookingForm.dropoffLocationId} onChange={e => setBookingForm(prev => ({ ...prev, dropoffLocationId: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
+              <option value="">Drop-off location</option>
+              {locations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}
+            </select>
             <input placeholder="Extras" value={bookingForm.extras} onChange={e => setBookingForm(prev => ({ ...prev, extras: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
             <input placeholder="Total price" value={bookingForm.totalPrice} onChange={e => setBookingForm(prev => ({ ...prev, totalPrice: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
           </div>
@@ -4223,6 +4751,36 @@ function RentalOperationsSection() {
               <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-white/48">{createdBooking.whatsappMessage}</p>
             </div>
           )}
+          <div className="mt-6 overflow-hidden rounded-2xl border border-white/8">
+            <div className="flex items-center justify-between bg-white/[0.025] px-4 py-3">
+              <h4 className="text-sm font-black text-white">All bookings</h4>
+              <span className="text-xs font-semibold text-white/34">{bookings.length} total</span>
+            </div>
+            <div className="divide-y divide-white/8">
+              {bookings.length === 0 ? (
+                <p className="px-4 py-5 text-sm text-white/42">No bookings yet.</p>
+              ) : bookings.map(booking => (
+                <div key={booking.id} className="grid gap-3 px-4 py-4 lg:grid-cols-[1.2fr_1fr_auto] lg:items-center">
+                  <div>
+                    <p className="text-sm font-black text-white">{booking.customerName}</p>
+                    <p className="mt-1 text-xs text-white/38">{booking.carName ?? cars.find(car => car.id === booking.carId)?.name ?? 'Unassigned car'} · {booking.customerPhone ?? 'No phone'}</p>
+                    <p className="mt-1 text-xs text-white/34">{booking.pickupLocation ?? 'Pickup'} → {booking.dropoffLocation ?? 'Drop-off'}</p>
+                  </div>
+                  <div className="text-xs leading-5 text-white/48">
+                    <div>Pickup: {fmtDateTime(booking.pickupAt)}</div>
+                    <div>Drop-off: {fmtDateTime(booking.dropoffAt ?? booking.returnAt)}</div>
+                    {booking.bufferUntil && <div className="text-[#f8a36d]">Buffer until {fmtDateTime(booking.bufferUntil)}</div>}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <RentalStatusBadge status={booking.status} />
+                    <select value={booking.status} onChange={e => void updateRentalBookingStatus(booking.id, e.target.value)} className="h-9 rounded-xl border border-white/10 bg-black/25 px-2 text-xs text-white outline-none">
+                      {['pending', 'confirmed', 'active', 'completed', 'cancelled'].map(status => <option key={status} value={status}>{RENTAL_STATUS_CFG[status]?.label ?? status}</option>)}
+                    </select>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </Card>
       )}
 
@@ -4347,6 +4905,78 @@ function RentalOperationsSection() {
       )}
 
       <AnimatePresence>
+        {calendarModalCar && (
+          <motion.div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-4 backdrop-blur-xl" initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}>
+            <motion.div className="max-h-[92vh] w-full max-w-6xl overflow-y-auto rounded-3xl border border-white/10 bg-[#0d0d0c] p-6 shadow-2xl" initial={{ y:16, scale:0.98 }} animate={{ y:0, scale:1 }} exit={{ y:12, scale:0.98 }}>
+              <div className="flex flex-col gap-4 border-b border-white/8 pb-5 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <div className="flex items-center gap-3">
+                    <Calendar className="h-5 w-5 text-[#f8a36d]" />
+                    <h3 className="text-xl font-black text-white">Booking Calendar</h3>
+                  </div>
+                  <p className="mt-2 text-sm text-white/46">{calendarModalCar.name} · {calendarModalCar.licensePlate ?? 'No plate'} · {calendarModalCar.status}</p>
+                  <p className="mt-1 text-xs text-white/34">Exact pickup/drop-off intervals include the {settings.cleaningBufferMinutes ?? 120} minute turnaround buffer.</p>
+                </div>
+                <button onClick={() => setCalendarModalCar(null)} className="icon-btn self-start"><X className="h-4 w-4" /></button>
+              </div>
+              {calendarStatus && <p className="mt-4 rounded-xl border border-[#f8a36d]/20 bg-[#f8a36d]/10 px-4 py-3 text-sm font-semibold text-[#f8a36d]">{calendarStatus}</p>}
+              <div className="mt-5 grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+                <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+                  <div className="grid grid-cols-7 gap-2 text-center text-[11px] font-black uppercase tracking-[0.14em] text-white/30">
+                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => <div key={day}>{day}</div>)}
+                  </div>
+                  <div className="mt-3 grid grid-cols-7 gap-2">
+                    {calendarMonthDays.map(day => {
+                      const dayBookings = calendarBookings.filter(booking => bookingTouchesDay(booking, day))
+                      return (
+                        <div key={day.toISOString()} className={`min-h-24 rounded-xl border p-2 ${dayBookings.length ? 'border-[#f8a36d]/30 bg-[#f8a36d]/10' : 'border-white/8 bg-black/18'}`}>
+                          <div className="text-xs font-bold text-white/62">{day.getDate()}</div>
+                          {dayBookings.slice(0, 2).map(booking => (
+                            <div key={booking.id} className="mt-2 rounded-lg px-2 py-1 text-[10px] font-bold" style={{ background: RENTAL_STATUS_CFG[booking.status]?.bg ?? 'rgba(255,255,255,0.06)', color: RENTAL_STATUS_CFG[booking.status]?.color ?? 'rgba(255,255,255,0.7)' }}>
+                              {booking.customerName}
+                            </div>
+                          ))}
+                          {dayBookings.length > 2 && <div className="mt-1 text-[10px] text-white/35">+{dayBookings.length - 2} more</div>}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+                <div className="grid gap-4">
+                  <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+                    <h4 className="text-sm font-black text-white">Booked intervals</h4>
+                    <div className="mt-3 max-h-80 space-y-3 overflow-y-auto pr-1">
+                      {calendarBookings.length === 0 ? (
+                        <p className="text-sm text-white/42">No bookings for this car.</p>
+                      ) : calendarBookings.map(booking => (
+                        <div key={booking.id} className="rounded-xl border border-white/8 bg-black/20 p-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-sm font-black text-white">{booking.customerName}</p>
+                            <RentalStatusBadge status={booking.status} />
+                          </div>
+                          <p className="mt-2 text-xs leading-5 text-white/48">Booked: {fmtDateTime(booking.pickupAt)} → {fmtDateTime(booking.dropoffAt ?? booking.returnAt)}</p>
+                          <p className="text-xs leading-5 text-[#f8a36d]">Buffer until {fmtDateTime(booking.bufferUntil)}</p>
+                          <p className="mt-2 text-xs text-white/36">{booking.customerPhone ?? 'No phone'} · {booking.pickupLocation ?? 'Pickup'} → {booking.dropoffLocation ?? 'Drop-off'}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+                    <h4 className="text-sm font-black text-white">Add manual booking</h4>
+                    <div className="mt-3 grid gap-2">
+                      <input placeholder="Customer name" value={bookingForm.customerName} onChange={e => setBookingForm(prev => ({ ...prev, customerName: e.target.value }))} className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none" />
+                      <input placeholder="Phone" value={bookingForm.phone} onChange={e => setBookingForm(prev => ({ ...prev, phone: e.target.value }))} className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none" />
+                      <input type="datetime-local" value={bookingForm.pickupDateTime} onChange={e => setBookingForm(prev => ({ ...prev, pickupDateTime: e.target.value }))} className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none" />
+                      <input type="datetime-local" value={bookingForm.returnDateTime} onChange={e => setBookingForm(prev => ({ ...prev, returnDateTime: e.target.value }))} className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none" />
+                    </div>
+                    <button onClick={() => void createCalendarBooking(calendarModalCar)} className="btn-primary mt-3"><CalendarPlus className="h-4 w-4" />Add booking</button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
         {carModalOpen && (
           <motion.div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-4 backdrop-blur-xl" initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}>
             <motion.div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-3xl border border-white/10 bg-[#0d0d0c] p-6 shadow-2xl" initial={{ y:16, scale:0.98 }} animate={{ y:0, scale:1 }} exit={{ y:12, scale:0.98 }}>
@@ -4436,7 +5066,7 @@ function RentalOperationsSection() {
 /* ─── Hash persistence helpers ───────────────────────────────── */
 
 const VALID_SECTIONS = new Set<string>([
-  'overview','analytics','pipeline','live_chat','activity','appointments','rental_ops','log','team','automation','settings',
+  'overview','analytics','pipeline','live_chat','deploy','integrations','activity','appointments','rental_ops','log','team','automation','settings',
   'ai_overview','ai_instructions','ai_knowledge','ai_qualification','ai_test',
 ])
 
@@ -4750,6 +5380,24 @@ export default function ClientDashboard({
     soundEnabledRef.current = false
     localStorage.setItem('sound_alerts', 'false')
     console.log('[SOUND] disabled')
+  }, [])
+
+  const openLiveChatSettings = useCallback((target?: EventTarget | null) => {
+    const rect = target instanceof HTMLElement ? target.getBoundingClientRect() : null
+    window.dispatchEvent(new CustomEvent('instantdesk-live-chat-settings', { detail: rect ? {
+      left: rect.left,
+      right: rect.right,
+      bottom: rect.bottom,
+    } : null }))
+  }, [])
+
+  const openLiveChatAnalytics = useCallback((target?: EventTarget | null) => {
+    const rect = target instanceof HTMLElement ? target.getBoundingClientRect() : null
+    window.dispatchEvent(new CustomEvent('instantdesk-live-chat-analytics', { detail: rect ? {
+      left: rect.left,
+      right: rect.right,
+      bottom: rect.bottom,
+    } : null }))
   }, [])
 
   // ── Global gesture listener — unlock AudioContext on ANY interaction ──
@@ -5138,15 +5786,14 @@ export default function ClientDashboard({
         <div
           ref={scrollContainerRef}
           data-testid="dashboard-content"
-          className="flex-1 w-full max-w-full overflow-y-auto overflow-x-hidden min-w-0"
+          className={`flex-1 w-full max-w-full overflow-x-hidden min-w-0 ${section === 'live_chat' ? 'overflow-hidden' : 'overflow-y-auto'}`}
         >
         {/* Sticky header */}
         <div className="sticky top-0 z-20 px-4 sm:px-8 py-4"
           style={{
-            background:'rgba(7,8,9,0.64)',
-            backdropFilter:'blur(24px)',
+            background:'rgba(7,8,9,0.94)',
             borderBottom:'1px solid rgba(217,133,90,0.08)',
-            boxShadow:'0 18px 52px rgba(0,0,0,0.16)',
+            boxShadow:'0 10px 28px rgba(0,0,0,0.14)',
           }}>
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
@@ -5162,11 +5809,33 @@ export default function ClientDashboard({
               </div>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
-              <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold"
-                style={{ background:'rgba(52,211,153,0.08)', border:'1px solid rgba(52,211,153,0.2)', color:'#34d399' }}>
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                All systems live
-              </div>
+              {section === 'live_chat' ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={event => openLiveChatSettings(event.currentTarget)}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white/72 transition-colors hover:text-white sm:px-3"
+                    style={{ background:'rgba(255,255,255,0.045)', border:'1px solid rgba(255,255,255,0.08)' }}>
+                    <SlidersHorizontal className="w-3.5 h-3.5" />
+                    Live Chat Settings
+                  </button>
+                  <button
+                    type="button"
+                    onMouseEnter={event => openLiveChatAnalytics(event.currentTarget)}
+                    onFocus={event => openLiveChatAnalytics(event.currentTarget)}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white/72 transition-colors hover:text-white sm:px-3"
+                    style={{ background:'rgba(255,255,255,0.045)', border:'1px solid rgba(255,255,255,0.08)' }}>
+                    <LineChart className="w-3.5 h-3.5" />
+                    Analytics
+                  </button>
+                </>
+              ) : (
+                <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold"
+                  style={{ background:'rgba(52,211,153,0.08)', border:'1px solid rgba(52,211,153,0.2)', color:'#34d399' }}>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  All systems live
+                </div>
+              )}
               {!hasRealSession && (
                 <ViewAsSelector currentUser={currentUser} teamMembers={teamMembers} onChange={handleUserChange} />
               )}
@@ -5190,17 +5859,19 @@ export default function ClientDashboard({
         </div>
 
         {/* Content — pb-28 clears the floating chat widget (≈80px) on every section */}
-        <div className="w-full max-w-none px-4 sm:px-8 py-6 pb-28">
+        <div className={`w-full max-w-none ${section === 'live_chat' ? 'h-[calc(100dvh-73px)] px-4 sm:px-8 py-0 pb-0 overflow-hidden' : 'px-4 sm:px-8 py-6 pb-28'}`}>
           <AnimatePresence mode="wait">
             {section && (
               <motion.div key={section}
-                className="w-full max-w-none"
+                className={`w-full max-w-none ${section === 'live_chat' ? 'h-full min-h-0' : ''}`}
                 initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-8 }}
                 transition={{ duration:0.22 }}>
                 {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={visibleLeads} appointments={appointments} activity={activityFeed} overviewMetrics={overviewMetrics} />}
                 {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} liveAnalytics={liveAnalytics} />}
                 {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={visibleLeads} newLeadIds={newLeadIds} onAddLead={can.canAddLead ? () => setShowAddLead(true) : undefined} teamMembers={teamMembers} />}
                 {section==='live_chat'    && <LiveChatSection businessId={businessIdProp ?? '0616a47a-2c01-49ce-a798-385f8276b92b'} />}
+                {section==='deploy'       && <DeploySection businessId={businessIdProp ?? '0616a47a-2c01-49ce-a798-385f8276b92b'} />}
+                {section==='integrations' && <IntegrationsSection businessId={businessIdProp ?? '0616a47a-2c01-49ce-a798-385f8276b92b'} onOpenDeploy={() => handleNav('deploy')} />}
                 {section==='activity'     && <ActivitySection feed={activityFeed} />}
                 {section==='appointments' && <AppointmentsSection appointments={appointments} leads={visibleLeads} onSelectLead={handleSelectLead} onApptUpdated={handleApptUpdated} onAddAppointment={can.canAddAppt ? () => openAddAppt() : undefined} actorName={currentUser.name} />}
                 {section==='rental_ops'   && <RentalOperationsSection />}

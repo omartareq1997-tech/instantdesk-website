@@ -1,6 +1,23 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 export type ConversationStatus = 'ai_active' | 'handover_requested' | 'live_chat' | 'resolved'
+export type ConversationChannel = 'website' | 'whatsapp' | 'messenger' | 'instagram' | 'email'
+export type MessageDeliveryStatus = 'sent' | 'delivered' | 'seen' | 'failed'
+
+export const CONVERSATION_CHANNELS: ConversationChannel[] = [
+  'website',
+  'whatsapp',
+  'messenger',
+  'instagram',
+  'email',
+]
+
+export const MESSAGE_DELIVERY_STATUSES: MessageDeliveryStatus[] = [
+  'sent',
+  'delivered',
+  'seen',
+  'failed',
+]
 
 export interface LiveChatSettings {
   business_id: string
@@ -40,9 +57,38 @@ export function defaultLiveChatSettings(businessId: string): LiveChatSettings {
   }
 }
 
+export function normalizeLiveChatSettings(settings: LiveChatSettings): LiveChatSettings {
+  if (settings.ai_auto_replies_enabled) return settings
+  return {
+    ...settings,
+    trigger_ai_cannot_answer: false,
+    trigger_customer_asks_human: false,
+  }
+}
+
 export function normalizeConversationStatus(status?: string | null): ConversationStatus {
   if (status === 'handover_requested' || status === 'live_chat' || status === 'resolved') return status
   return 'ai_active'
+}
+
+export function normalizeConversationChannel(channel?: string | null): ConversationChannel {
+  if (channel === 'whatsapp' || channel === 'messenger' || channel === 'instagram' || channel === 'email') return channel
+  return 'website'
+}
+
+export function conversationChannelLabel(channel?: string | null): string {
+  switch (normalizeConversationChannel(channel)) {
+    case 'whatsapp': return 'WhatsApp'
+    case 'messenger': return 'Messenger'
+    case 'instagram': return 'Instagram'
+    case 'email': return 'Email'
+    default: return 'Website'
+  }
+}
+
+export function normalizeMessageDeliveryStatus(status?: string | null): MessageDeliveryStatus {
+  if (status === 'sent' || status === 'seen' || status === 'failed') return status
+  return 'delivered'
 }
 
 export function liveChatStatusLabel(status?: string | null): string {
@@ -93,14 +139,30 @@ export async function getLiveChatSettings(
     if (error || !data) return defaults
 
     const row = data as Partial<LiveChatSettings>
-    return {
+    const merged = normalizeLiveChatSettings({
       ...defaults,
       ...row,
       business_id: businessId,
       trigger_phrases: Array.isArray(row.trigger_phrases) && row.trigger_phrases.length
         ? row.trigger_phrases
         : defaults.trigger_phrases,
+    })
+
+    if (
+      !merged.ai_auto_replies_enabled &&
+      (row.trigger_ai_cannot_answer || row.trigger_customer_asks_human)
+    ) {
+      await sb
+        .from('live_chat_settings')
+        .update({
+          trigger_ai_cannot_answer: false,
+          trigger_customer_asks_human: false,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('business_id', businessId)
     }
+
+    return merged
   } catch {
     return defaults
   }
@@ -111,23 +173,30 @@ export async function markConversationStatus(
   conversationId: string,
   businessId: string,
   status: ConversationStatus,
+  assignedTo?: string | null,
 ): Promise<void> {
+  const patch = {
+    status,
+    ...(assignedTo !== undefined ? { assigned_to: assignedTo } : {}),
+    handover_requested_at: status === 'handover_requested' ? new Date().toISOString() : null,
+    human_takeover_at: status === 'live_chat' ? new Date().toISOString() : null,
+    resolved_at: status === 'resolved' ? new Date().toISOString() : null,
+    last_message_at: new Date().toISOString(),
+  }
   try {
     await sb
       .from('conversations')
-      .update({
-        status,
-        handover_requested_at: status === 'handover_requested' ? new Date().toISOString() : null,
-        human_takeover_at: status === 'live_chat' ? new Date().toISOString() : null,
-        resolved_at: status === 'resolved' ? new Date().toISOString() : null,
-        last_message_at: new Date().toISOString(),
-      })
+      .update(patch)
       .eq('id', conversationId)
       .eq('business_id', businessId)
   } catch {
     await sb
       .from('conversations')
-      .update({ status, last_message_at: new Date().toISOString() })
+      .update({
+        status,
+        ...(assignedTo !== undefined ? { assigned_to: assignedTo } : {}),
+        last_message_at: new Date().toISOString(),
+      })
       .eq('id', conversationId)
       .eq('business_id', businessId)
   }
@@ -155,6 +224,17 @@ export async function insertStatusEvent(
       role: 'system',
       content,
     })
+  }
+
+  try {
+    await sb.from('handover_events').insert({
+      conversation_id: conversationId,
+      business_id: businessId,
+      event_type: eventType,
+      note: content,
+    })
+  } catch {
+    // Older deployments may not have the optional audit table yet.
   }
 }
 

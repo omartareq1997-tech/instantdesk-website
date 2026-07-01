@@ -51,6 +51,29 @@ body {
 .dashboard-premium-bg {
   position: relative;
   overflow: hidden;
+  scrollbar-color: rgba(148, 163, 184, 0.28) transparent;
+}
+
+.dashboard-premium-bg * {
+  scrollbar-color: rgba(148, 163, 184, 0.28) transparent;
+}
+
+.dashboard-premium-bg ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dashboard-premium-bg ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dashboard-premium-bg ::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.24);
+  border-radius: 999px;
+}
+
+.dashboard-premium-bg ::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.36);
 }
 
 .auth-premium-bg > *,

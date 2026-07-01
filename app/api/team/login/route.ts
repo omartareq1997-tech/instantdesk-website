@@ -8,8 +8,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../../lib/supabase-server'
 import { verifyPassword, signMemberToken, MEMBER_COOKIE_NAME } from '../../../lib/auth'
 
-const CLIENT_ID = process.env.DEMO_CLIENT_ID ?? '00000000-0000-0000-0000-000000000001'
-
 export async function POST(req: NextRequest) {
   try {
     const body     = await req.json()
@@ -22,17 +20,21 @@ export async function POST(req: NextRequest) {
 
     const sb = createAdminClient()
 
-    const { data: member, error: fetchErr } = await sb
+    const { data: members, error: fetchErr } = await sb
       .from('team_members')
       .select('id, name, email, role, status, password_hash')
-      .eq('client_id', CLIENT_ID)
       .eq('email', email)
-      .maybeSingle()
+      .limit(2)
 
     if (fetchErr) throw fetchErr
 
+    const member = members?.[0] ?? null
     if (!member) {
       return NextResponse.json({ error: 'No account found for this email address' }, { status: 404 })
+    }
+
+    if ((members?.length ?? 0) > 1) {
+      return NextResponse.json({ error: 'Multiple team accounts use this email. Please contact support.' }, { status: 409 })
     }
 
     if (member.status === 'invited') {

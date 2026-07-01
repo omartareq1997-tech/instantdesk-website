@@ -7,6 +7,7 @@ export const dynamic = 'force-dynamic'
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const conversationId = searchParams.get('conversation_id')
+  const since = searchParams.get('since')
   if (!conversationId) return NextResponse.json({ error: 'conversation_id is required' }, { status: 400 })
 
   const sb = createAdminClient()
@@ -19,26 +20,37 @@ export async function GET(request: NextRequest) {
   if (convError) return NextResponse.json({ error: convError.message }, { status: 500 })
   if (!conversation) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
 
-  let messagesResult: { data: unknown; error: { code?: string; message: string } | null } = await sb
+  await sb
     .from('messages')
-    .select('id,role,content,created_at,metadata')
+    .update({ read_at: new Date().toISOString() })
     .eq('conversation_id', conversationId)
     .eq('business_id', conversation.business_id)
-    .order('created_at', { ascending: true })
+    .in('role', ['assistant', 'human'])
+    .is('read_at', null)
 
-  if (messagesResult.error?.code === '42703') {
-    messagesResult = await sb
+  let query = sb
+    .from('messages')
+    .select('id,role,content,created_at,read_at,delivery_status,delivered_at,external_message_id,attachment_metadata,metadata')
+    .eq('conversation_id', conversationId)
+    .eq('business_id', conversation.business_id)
+  if (since) query = query.gt('created_at', since)
+  let messagesResult: { data: unknown; error: { code?: string; message: string } | null } = await query.order('created_at', { ascending: true })
+
+  if (messagesResult.error?.code === '42703' || messagesResult.error?.code === 'PGRST204') {
+    let fallbackQuery = sb
       .from('messages')
-      .select('id,role,content,created_at')
+      .select('id,role,content,created_at,read_at,metadata')
       .eq('conversation_id', conversationId)
       .eq('business_id', conversation.business_id)
-      .order('created_at', { ascending: true })
+    if (since) fallbackQuery = fallbackQuery.gt('created_at', since)
+    messagesResult = await fallbackQuery.order('created_at', { ascending: true })
   }
 
   const { data, error } = messagesResult
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({
     status: normalizeConversationStatus(conversation.status),
-    messages: data ?? [],
+    messages: ((data ?? []) as { metadata?: { internal_note?: boolean } | null }[])
+      .filter(message => !message.metadata?.internal_note),
   })
 }

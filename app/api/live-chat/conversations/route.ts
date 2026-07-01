@@ -1,15 +1,24 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '../../../lib/supabase-server'
 import { getSessionBusinessId } from '../../../lib/getSessionBusinessId'
-import { normalizeConversationStatus } from '../../../lib/live-chat'
+import { normalizeConversationChannel, normalizeConversationStatus } from '../../../lib/live-chat'
 
 export const dynamic = 'force-dynamic'
+
+function unauthorized() {
+  return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+}
 
 interface ConversationRow {
   id: string
   business_id: string
+  customer_id?: string | null
+  contact_id?: string | null
+  channel_id?: string | null
   channel?: string | null
+  external_thread_id?: string | null
   status?: string | null
+  assigned_to?: string | null
   last_message_at?: string | null
   unread_count?: number | null
   created_at?: string | null
@@ -20,6 +29,7 @@ interface MessageRow {
   role?: string | null
   content?: string | null
   created_at?: string | null
+  metadata?: Record<string, unknown> | null
 }
 
 interface LeadRow {
@@ -34,21 +44,44 @@ interface LeadRow {
   metadata?: Record<string, unknown> | null
 }
 
+interface CustomerRow {
+  id: string
+  display_name?: string | null
+  primary_email?: string | null
+  primary_phone?: string | null
+  avatar?: string | null
+  company?: string | null
+  country?: string | null
+  language?: string | null
+  timezone?: string | null
+  lead_score?: number | null
+  lifetime_value?: number | null
+  first_seen_at?: string | null
+  last_seen_at?: string | null
+}
+
 export async function GET() {
-  const { businessId } = await getSessionBusinessId()
+  const session = await getSessionBusinessId()
+  if (!session.fromSession) return unauthorized()
+  const { businessId } = session
   const sb = createAdminClient()
+  console.log('[LiveChatDebug] dashboard conversations query', {
+    business_id: businessId,
+    from_session: session.fromSession,
+    user_email: session.userEmail || null,
+  })
 
   let conversationsResult: { data: unknown; error: { code?: string; message: string } | null } = await sb
     .from('conversations')
-    .select('id,business_id,channel,status,last_message_at,unread_count,created_at')
+    .select('id,business_id,customer_id,contact_id,channel_id,channel,external_thread_id,status,assigned_to,last_message_at,unread_count,created_at')
     .eq('business_id', businessId)
     .order('last_message_at', { ascending: false })
     .limit(100)
 
-  if (conversationsResult.error?.code === '42703') {
+  if (conversationsResult.error?.code === '42703' || conversationsResult.error?.code === 'PGRST204') {
     conversationsResult = await sb
       .from('conversations')
-      .select('id,business_id,channel,status,last_message_at,created_at')
+      .select('id,business_id,customer_id,channel,status,assigned_to,last_message_at,unread_count,created_at')
       .eq('business_id', businessId)
       .order('last_message_at', { ascending: false })
       .limit(100)
@@ -59,10 +92,11 @@ export async function GET() {
 
   const rows = (conversations ?? []) as ConversationRow[]
   const ids = rows.map(c => c.id)
+  const customerIds = Array.from(new Set(rows.map(c => c.customer_id).filter(Boolean))) as string[]
 
   const messagesPromise = ids.length
     ? sb.from('messages')
-        .select('conversation_id,role,content,created_at')
+        .select('conversation_id,role,content,created_at,metadata')
         .in('conversation_id', ids)
         .order('created_at', { ascending: false })
     : Promise.resolve({ data: [], error: null })
@@ -93,8 +127,22 @@ export async function GET() {
   if (leadsResult.error) return NextResponse.json({ error: leadsResult.error.message }, { status: 500 })
 
   const latestMessage = new Map<string, MessageRow>()
+  const latestNonSystemMessage = new Map<string, MessageRow>()
+  const latestVisitorContext = new Map<string, Record<string, unknown>>()
   for (const msg of (messagesResult.data ?? []) as MessageRow[]) {
     if (!latestMessage.has(msg.conversation_id)) latestMessage.set(msg.conversation_id, msg)
+    if (msg.role !== 'system' && !latestNonSystemMessage.has(msg.conversation_id)) {
+      latestNonSystemMessage.set(msg.conversation_id, msg)
+    }
+    if (
+      msg.role === 'user' &&
+      !latestVisitorContext.has(msg.conversation_id) &&
+      msg.metadata &&
+      typeof msg.metadata.visitor_context === 'object' &&
+      msg.metadata.visitor_context
+    ) {
+      latestVisitorContext.set(msg.conversation_id, msg.metadata.visitor_context as Record<string, unknown>)
+    }
   }
 
   const leadByConversation = new Map<string, LeadRow>()
@@ -102,17 +150,74 @@ export async function GET() {
     if (lead.conversation_id) leadByConversation.set(lead.conversation_id, lead)
   }
 
+  const customersById = new Map<string, CustomerRow>()
+  const customerConversationStats = new Map<string, { conversation_count: number; channels: Set<string> }>()
+  if (customerIds.length) {
+    const [customersResult, customerConversationsResult] = await Promise.all([
+      sb.from('customers')
+        .select('id,display_name,primary_email,primary_phone,avatar,company,country,language,timezone,lead_score,lifetime_value,first_seen_at,last_seen_at')
+        .eq('business_id', businessId)
+        .in('id', customerIds),
+      sb.from('conversations')
+        .select('customer_id,channel')
+        .eq('business_id', businessId)
+        .in('customer_id', customerIds),
+    ])
+    if (!customersResult.error) {
+      for (const customer of (customersResult.data ?? []) as CustomerRow[]) customersById.set(customer.id, customer)
+    }
+    if (!customerConversationsResult.error) {
+      for (const row of (customerConversationsResult.data ?? []) as Array<{ customer_id?: string | null; channel?: string | null }>) {
+        if (!row.customer_id) continue
+        const current = customerConversationStats.get(row.customer_id) ?? { conversation_count: 0, channels: new Set<string>() }
+        current.conversation_count += 1
+        current.channels.add(normalizeConversationChannel(row.channel))
+        customerConversationStats.set(row.customer_id, current)
+      }
+    }
+  }
+
   const items = rows.map((conversation) => {
     const lead = leadByConversation.get(conversation.id)
-    const last = latestMessage.get(conversation.id)
+    const last = latestNonSystemMessage.get(conversation.id) ?? latestMessage.get(conversation.id)
+    const visitorContext = latestVisitorContext.get(conversation.id) ?? null
     return {
       id: conversation.id,
-      channel: conversation.channel ?? 'website',
+      business_id: conversation.business_id,
+      customer_id: conversation.customer_id ?? null,
+      contact_id: conversation.contact_id ?? null,
+      channel_id: conversation.channel_id ?? null,
+      channel: normalizeConversationChannel(conversation.channel),
+      external_thread_id: conversation.external_thread_id ?? null,
       status: normalizeConversationStatus(conversation.status),
+      assigned_to: conversation.assigned_to ?? null,
       last_message_at: conversation.last_message_at ?? conversation.created_at,
       unread_count: conversation.unread_count ?? 0,
       last_message_preview: last?.content ?? '',
       last_message_role: last?.role ?? null,
+      visitor_context: visitorContext,
+      customer: conversation.customer_id && customersById.has(conversation.customer_id) ? (() => {
+        const customer = customersById.get(conversation.customer_id!)!
+        const stats = customerConversationStats.get(conversation.customer_id!) ?? { conversation_count: 1, channels: new Set([normalizeConversationChannel(conversation.channel)]) }
+        return {
+          id: customer.id,
+          display_name: customer.display_name,
+          primary_email: customer.primary_email,
+          primary_phone: customer.primary_phone,
+          avatar: customer.avatar,
+          company: customer.company,
+          country: customer.country,
+          language: customer.language,
+          timezone: customer.timezone,
+          lead_score: customer.lead_score,
+          lifetime_value: customer.lifetime_value,
+          first_seen_at: customer.first_seen_at,
+          last_seen_at: customer.last_seen_at,
+          conversation_count: stats.conversation_count,
+          channel_count: stats.channels.size,
+          channels: Array.from(stats.channels),
+        }
+      })() : null,
       lead: lead ? {
         id: lead.id,
         name: lead.name,

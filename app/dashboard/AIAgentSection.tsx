@@ -1426,7 +1426,7 @@ function TestAIPage({
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ business_id: businessId, conversation_id: convId, message: text, debug: true }),
+        body: JSON.stringify({ business_id: businessId, conversation_id: convId, message: text, debug: true, test_ai: true }),
       })
       const data = await res.json() as {
         reply?: string

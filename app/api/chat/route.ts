@@ -47,6 +47,7 @@ import {
   markConversationStatus,
   normalizeConversationStatus,
 } from '../../lib/live-chat'
+import { resolveCustomerIdentity } from '../../lib/customer-identity'
 
 /* ════════════════════════════════════════════════════════════════════════════
    TYPES
@@ -63,6 +64,9 @@ interface Slots {
   name:          string | null
   phone:         string | null
   email:         string | null
+  company:       string | null
+  notes:         string | null
+  service_interest: string | null
   city:          string | null
   area:          string | null   // district / neighbourhood within city
   budget:        string | null
@@ -82,6 +86,34 @@ interface Slots {
   extension_request: string | null
 }
 
+const MAX_MESSAGE_LENGTH = 4000
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+const RATE_LIMIT_WINDOW_MS = 60_000
+const RATE_LIMIT_MAX_REQUESTS = 20
+const ALLOWED_ATTACHMENT_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'application/pdf',
+  'text/plain',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+])
+
+type RateBucket = { count: number; resetAt: number }
+const rateBuckets = new Map<string, RateBucket>()
+
+const LEGACY_DEMO_BUSINESS_ID = '0616a47a-2c01-49ce-a798-385f8276b92b'
+const PUBLIC_SITE_BUSINESS_ID =
+  process.env.PUBLIC_SITE_BUSINESS_ID ||
+  process.env.NEXT_PUBLIC_SITE_BUSINESS_ID ||
+  'a7827a5c-8480-4cc9-a418-361ea962f50d'
+
 interface ExistingLead {
   id: string; name: string | null; phone: string | null; email: string | null
   interest: string | null; status: string | null; metadata: Record<string, unknown> | null
@@ -94,6 +126,13 @@ interface SlotDef {
   required:  boolean
 }
 
+interface AttachmentPayload {
+  name?: unknown
+  type?: unknown
+  size?: unknown
+  dataUrl?: unknown
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    GENERIC HELPERS
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -101,6 +140,65 @@ interface SlotDef {
 function strOrNull(v: unknown): string | null {
   if (typeof v === 'string' && v.trim() && v.toLowerCase() !== 'null') return v.trim()
   return null
+}
+
+function requesterIp(req: NextRequest): string {
+  const forwarded = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+  return forwarded || req.headers.get('x-real-ip') || 'unknown'
+}
+
+function rateLimitKey(req: NextRequest, businessId: string): string {
+  return `${businessId}:${requesterIp(req)}`
+}
+
+function requestHost(req: NextRequest): string {
+  return (req.headers.get('x-forwarded-host') || req.headers.get('host') || '').toLowerCase()
+}
+
+function parseAttachment(value: unknown) {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as AttachmentPayload
+  const name = typeof raw.name === 'string' ? raw.name.slice(0, 140) : 'attachment'
+  const type = typeof raw.type === 'string' ? raw.type : ''
+  const size = typeof raw.size === 'number' ? raw.size : 0
+  const dataUrl = typeof raw.dataUrl === 'string' ? raw.dataUrl : ''
+  if (!ALLOWED_ATTACHMENT_TYPES.has(type)) return { error: 'Unsupported file type' as const }
+  if (size <= 0 || size > MAX_ATTACHMENT_BYTES) return { error: 'File is too large' as const }
+  if (!dataUrl.startsWith(`data:${type};base64,`)) return { error: 'Invalid attachment data' as const }
+  return { attachment: { name, type, size, dataUrl, kind: type.startsWith('image/') ? 'image' : 'file' } }
+}
+
+function isInstantDeskPublicHost(host: string): boolean {
+  const hostname = host.split(':')[0]
+  return hostname === 'instantdesk.pl' || hostname === 'www.instantdesk.pl'
+}
+
+function resolvePublicWidgetBusinessId(req: NextRequest, requestedBusinessId: string): string {
+  const host = requestHost(req)
+  if (isInstantDeskPublicHost(host) && requestedBusinessId === LEGACY_DEMO_BUSINESS_ID) {
+    return PUBLIC_SITE_BUSINESS_ID
+  }
+  return requestedBusinessId
+}
+
+function checkRateLimit(key: string): { ok: true } | { ok: false; retryAfter: number } {
+  const now = Date.now()
+  const existing = rateBuckets.get(key)
+  if (!existing || existing.resetAt <= now) {
+    rateBuckets.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS })
+    return { ok: true }
+  }
+  if (existing.count >= RATE_LIMIT_MAX_REQUESTS) {
+    return { ok: false, retryAfter: Math.max(1, Math.ceil((existing.resetAt - now) / 1000)) }
+  }
+  existing.count += 1
+
+  if (rateBuckets.size > 10_000) {
+    for (const [bucketKey, bucket] of rateBuckets) {
+      if (bucket.resetAt <= now) rateBuckets.delete(bucketKey)
+    }
+  }
+  return { ok: true }
 }
 
 function hasAnySlot(s: Slots): boolean {
@@ -200,6 +298,7 @@ function extractRooms(text: string): string | null {
 /* ── Budget ────────────────────────────────────────────────────────────── */
 
 function extractBudget(text: string): string | null {
+  const withoutContactNumbers = text.replace(/(\+?\d[\d\s\-().]{8,18}\d)/g, ' ')
   const isMonthly = /\b(per month|\/month|\/mo|monthly|\bpm\b|miesięcznie)\b/i.test(text)
   const suffix    = isMonthly ? '/month' : ''
   // Symbol before number: £2500, €3000, $2000, AED 5000
@@ -209,7 +308,7 @@ function extractBudget(text: string): string | null {
   m = text.match(/([\d,]{3,7})\s*(PLN|zł|EUR|GBP|USD|AED)/i)
   if (m) return `${m[1].replace(/,/g,'')} ${m[2]}${suffix}`
   // Bare number ≥500 with month context, or "around 3000", "up to 4000"
-  m = text.match(/(?:around|about|up to|max(?:imum)?|upto|approx\.?)?\s*([\d,]{3,6})\b/i)
+  m = withoutContactNumbers.match(/(?:around|about|up to|max(?:imum)?|upto|approx\.?)?\s*([\d,]{3,6})\b/i)
   if (m) {
     const n = parseInt(m[1].replace(/,/g,''))
     if (n >= 400) return `${n}${suffix}`
@@ -241,9 +340,9 @@ function toTitleCase(s: string): string {
   return s.replace(/\b([a-zA-ZÀ-ž])/g, c => c.toUpperCase())
 }
 
-// Capture 1–2 alpha words after a trigger phrase (any capitalisation).
+// Capture 1-3 alpha words after a trigger phrase (any capitalisation).
 // Stops at punctuation, digits, or end of string.
-const NAME_AFTER_TRIGGER = /^([A-Za-zÀ-ž]+(?:\s+[A-Za-zÀ-ž]+)?)(?=[,.\s\d]|$)/
+const NAME_AFTER_TRIGGER = /^([A-Za-zÀ-ž]+(?:\s+[A-Za-zÀ-ž]+){0,2})(?=[,.\s\d]|$)/
 
 // Words that signal the end of a name — strip them if they appear as the second word.
 const NAME_STOP_WORDS = new Set([
@@ -251,10 +350,28 @@ const NAME_STOP_WORDS = new Set([
   'looking','viewing','appointment','tomorrow','today','at','on',
   'arrange','book','schedule','and','or','with','for',
 ])
+const NAME_CONTEXT_WORDS = new Set(['again'])
 function trimNameStop(raw: string): string {
   const words = raw.trim().split(/\s+/)
-  if (words.length === 2 && NAME_STOP_WORDS.has(words[1].toLowerCase())) return words[0]
-  return raw
+  const stopIndex = words.findIndex((word, index) => index > 0 && NAME_STOP_WORDS.has(word.toLowerCase()))
+  const trimmed = stopIndex > 0 ? words.slice(0, stopIndex) : words
+  while (trimmed.length > 1 && NAME_CONTEXT_WORDS.has(trimmed[trimmed.length - 1].toLowerCase())) {
+    trimmed.pop()
+  }
+  return trimmed.join(' ')
+}
+
+function cleanNameCandidate(raw: string): string | null {
+  const candidate = trimNameStop(raw)
+    .replace(/^\s*(?:sure|ok|okay|yes|yeah|yep|hi|hello|hey)[,\s]+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!candidate || VERB_GUARD.test(candidate)) return null
+  if (candidate.includes('@') || /\d/.test(candidate)) return null
+  const words = candidate.split(/\s+/)
+  if (!words.length || words.length > 3) return null
+  if (words.some(word => word.length < 2 || NAME_STOP_WORDS.has(word.toLowerCase()))) return null
+  return toTitleCase(candidate)
 }
 
 function extractName(text: string): string | null {
@@ -285,7 +402,7 @@ function extractName(text: string): string | null {
   }
 
   // "name is X" / "name's X" / "this is X"
-  ph = text.match(/\b(?:name(?:'s| is)|this is)\s+/i)
+  ph = text.match(/\b(?:name(?:'s| is)|this is|it(?:'s| is))\s+/i)
   if (ph?.index !== undefined) {
     const after = text.slice(ph.index + ph[0].length)
     if (!VERB_GUARD.test(after)) {
@@ -299,6 +416,27 @@ function extractName(text: string): string | null {
   if (ph) {
     const candidate = ph[1].trim()
     if (!VERB_GUARD.test(candidate)) return toTitleCase(candidate)
+  }
+
+  // "Tommy again" — short returning-visitor shorthand.
+  ph = text.match(/^\s*([A-Za-zÀ-ž]{2,}(?:\s+[A-Za-zÀ-ž]{2,}){0,2})\s+again\b/im)
+  if (ph) {
+    const candidate = trimNameStop(ph[1])
+    if (candidate && !VERB_GUARD.test(candidate)) return toTitleCase(candidate)
+  }
+
+  // "sure, Mike mike@example.com, 510 998 000" / "Mike, email, phone"
+  const withoutMailto = text.replace(/\[([^\]]+)\]\(mailto:[^)]+\)/gi, '$1')
+  const contactIndex = withoutMailto.search(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\+?\d[\d\s().-]{5,}\d/i)
+  if (contactIndex > 0) {
+    const beforeContact = withoutMailto
+      .slice(0, contactIndex)
+      .replace(/\b(?:email|mail|phone|mobile|number|whatsapp)\b/gi, ' ')
+      .replace(/[()[\]<>]/g, ' ')
+      .trim()
+    const pieces = beforeContact.split(/[,;.!?]+/).map(piece => piece.trim()).filter(Boolean)
+    const candidate = cleanNameCandidate(pieces.at(-1) ?? beforeContact)
+    if (candidate) return candidate
   }
 
   return null
@@ -336,6 +474,28 @@ function extractEmail(text: string): string | null {
   return m ? m[0] : null
 }
 
+function extractCompany(text: string): string | null {
+  const patterns = [
+    /\b(?:company|business|organisation|organization)\s*(?:is|:)\s*([^.\n,]{2,80})/i,
+    /\b(?:from|at|with)\s+([A-Z][A-Za-z0-9&'. -]{2,80}?)(?:\s+(?:company|team|business|organisation|organization))?(?:[.\n,]|$)/,
+  ]
+  for (const pattern of patterns) {
+    const value = text.match(pattern)?.[1]?.trim()
+    if (value && !VERB_GUARD.test(value) && !/^(the|a|an|my|our|your)$/i.test(value)) return value
+  }
+  return null
+}
+
+function extractNotes(text: string): string | null {
+  const match = text.match(/\b(?:notes?|additional info|anything else)\s*(?:are|is|:|-)\s*([\s\S]{2,500})/i)
+  return match?.[1]?.trim() ?? null
+}
+
+function extractServiceInterest(text: string): string | null {
+  const match = text.match(/\b(?:interested in|need help with|looking for|service is|service:)\s+([^.\n,]{2,120})/i)
+  return match?.[1]?.trim() ?? null
+}
+
 /* ── Combined extractor ────────────────────────────────────────────────── */
 
 function extractFromText(text: string): Partial<Slots> {
@@ -351,6 +511,9 @@ function extractFromText(text: string): Partial<Slots> {
     name:          extractName(text)         ?? undefined,
     phone:         extractPhone(text)        ?? undefined,
     email:         extractEmail(text)        ?? undefined,
+    company:       extractCompany(text)      ?? undefined,
+    notes:         extractNotes(text)        ?? undefined,
+    service_interest: extractServiceInterest(text) ?? undefined,
     city:          extractCity(text)         ?? undefined,
     area:          undefined,   // derived later from context if needed
     budget:        extractBudget(text)       ?? undefined,
@@ -391,6 +554,9 @@ function buildConfirmedSlots(
     name:          strOrNull(existingLead?.name),
     phone:         strOrNull(existingLead?.phone),
     email:         strOrNull(existingLead?.email),
+    company:       strOrNull(meta.company),
+    notes:         strOrNull(meta.notes),
+    service_interest: strOrNull(meta.service_interest),
     city:          strOrNull(meta.city),
     area:          strOrNull(meta.area),
     budget:        strOrNull(meta.budget),
@@ -423,6 +589,9 @@ function buildConfirmedSlots(
     name:          fromDB.name          ?? extracted.name          ?? null,
     phone:         fromDB.phone         ?? extracted.phone         ?? null,
     email:         fromDB.email         ?? extracted.email         ?? null,
+    company:       fromDB.company       ?? extracted.company       ?? null,
+    notes:         fromDB.notes         ?? extracted.notes         ?? null,
+    service_interest: fromDB.service_interest ?? extracted.service_interest ?? null,
     city:          fromDB.city          ?? extracted.city          ?? null,
     area:          fromDB.area          ?? null,
     budget:        fromDB.budget        ?? extracted.budget        ?? null,
@@ -523,6 +692,8 @@ function buildSystemPrompt(
   if (confirmed.name)          confirmedLines.push(`Name: ${confirmed.name}`)
   if (confirmed.phone)         confirmedLines.push(`Phone: ${confirmed.phone}`)
   if (confirmed.email)         confirmedLines.push(`Email: ${confirmed.email}`)
+  if (confirmed.company)       confirmedLines.push(`Company: ${confirmed.company}`)
+  if (confirmed.service_interest) confirmedLines.push(`Service interest: ${confirmed.service_interest}`)
   if (confirmed.city)          confirmedLines.push(`City/location: ${confirmed.city}`)
   if (confirmed.area)          confirmedLines.push(`Area/district: ${confirmed.area}`)
   if (confirmed.budget)        confirmedLines.push(`Budget: ${confirmed.budget}`)
@@ -540,6 +711,7 @@ function buildSystemPrompt(
   if (confirmed.extras) confirmedLines.push(`Extras: ${confirmed.extras}`)
   if (confirmed.booking_number) confirmedLines.push(`Booking number: ${confirmed.booking_number}`)
   if (confirmed.extension_request) confirmedLines.push(`Extension request: ${confirmed.extension_request}`)
+  if (confirmed.notes)         confirmedLines.push(`Notes: ${confirmed.notes}`)
 
   return buildAgentSystemPrompt({
     config: agent,
@@ -641,17 +813,41 @@ async function callOpenAI(
 
 export async function POST(req: NextRequest) {
   /* 1. Parse ─────────────────────────────────────────────────────────────── */
-  let body: { business_id?: unknown; conversation_id?: unknown; message?: unknown; debug?: unknown }
+  let body: { business_id?: unknown; conversation_id?: unknown; message?: unknown; attachment?: unknown; visitor_context?: unknown; debug?: unknown; test_ai?: unknown }
   try { body = await req.json() }
   catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }) }
 
-  const business_id     = typeof body.business_id     === 'string' ? body.business_id.trim()     : null
+  const requestedBusinessId = typeof body.business_id === 'string' ? body.business_id.trim() : null
   const conversation_id = typeof body.conversation_id === 'string' ? body.conversation_id.trim() : null
   const message         = typeof body.message         === 'string' ? body.message.trim()         : null
+  const attachmentResult = parseAttachment(body.attachment)
   const debugMode       = body.debug === true
+  const testAiMode      = body.test_ai === true
 
-  if (!business_id) return NextResponse.json({ error: 'business_id is required' }, { status: 400 })
-  if (!message)     return NextResponse.json({ error: 'message is required' },     { status: 400 })
+  if (!requestedBusinessId) return NextResponse.json({ error: 'business_id is required' }, { status: 400 })
+  if (attachmentResult && 'error' in attachmentResult) return NextResponse.json({ error: attachmentResult.error }, { status: 400 })
+  if (!message && !attachmentResult?.attachment) return NextResponse.json({ error: 'message is required' }, { status: 400 })
+  const business_id = resolvePublicWidgetBusinessId(req, requestedBusinessId)
+  if ((message ?? '').length > MAX_MESSAGE_LENGTH) {
+    return NextResponse.json({ error: `message must be ${MAX_MESSAGE_LENGTH} characters or fewer` }, { status: 413 })
+  }
+  const messageText = message ?? attachmentResult?.attachment?.name ?? ''
+  const visitorContext = body.visitor_context && typeof body.visitor_context === 'object' && !Array.isArray(body.visitor_context)
+    ? body.visitor_context as Record<string, unknown>
+    : null
+  const customerMessageMetadata = {
+    sender_type: 'customer',
+    delivery_status: 'delivered',
+    attachment: attachmentResult?.attachment ?? null,
+    visitor_context: visitorContext,
+  }
+  const rate = checkRateLimit(rateLimitKey(req, business_id))
+  if (!rate.ok) {
+    return NextResponse.json(
+      { error: 'Too many chat messages. Please wait a moment and try again.' },
+      { status: 429, headers: { 'Retry-After': String(rate.retryAfter) } },
+    )
+  }
 
   /* 2. Resolve session IDs ────────────────────────────────────────────────── */
   let clientId:     string  = business_id
@@ -665,12 +861,27 @@ export async function POST(req: NextRequest) {
       fallbackUsed = false
     }
   } catch { /* no session — use body business_id */ }
-  console.log('CHAT SESSION IDS', { clientId, businessId, fallbackUsed })
+  console.log('[LiveChatDebug] chat request resolved', {
+    host: requestHost(req),
+    requested_business_id: requestedBusinessId,
+    effective_business_id: businessId,
+    client_id: clientId,
+    fallback_used: fallbackUsed,
+    conversation_id: conversation_id ?? null,
+    test_ai: testAiMode,
+  })
 
   /* 3. Supabase ───────────────────────────────────────────────────────────── */
   const sb = createAdminClient()
 
   const liveChatSettings = await getLiveChatSettings(sb, businessId)
+  console.log('[LiveChatDebug] settings resolved', {
+    host: requestHost(req),
+    business_id: businessId,
+    ai_auto_replies_enabled: liveChatSettings.ai_auto_replies_enabled,
+    live_chat_enabled: liveChatSettings.live_chat_enabled,
+    human_handover_enabled: liveChatSettings.human_handover_enabled,
+  })
 
   let resolvedConversation: { convId: string; status: string | null; isNewConv: boolean } | null = null
   async function resolveConversation() {
@@ -681,9 +892,20 @@ export async function POST(req: NextRequest) {
 
     if (conversation_id) {
       const { data: existing } = await sb
-        .from('conversations').select('id, status').eq('id', conversation_id).maybeSingle()
-      convId = existing?.id ?? crypto.randomUUID()
-      status = typeof existing?.status === 'string' ? existing.status : null
+        .from('conversations').select('id, business_id, status').eq('id', conversation_id).maybeSingle()
+      if (existing?.id && existing.business_id === businessId) {
+        convId = existing.id
+        status = typeof existing.status === 'string' ? existing.status : null
+      } else {
+        convId = crypto.randomUUID()
+        if (existing?.id) {
+          console.warn('[LiveChatDebug] ignored mismatched conversation_id', {
+            requested_conversation_id: conversation_id,
+            conversation_business_id: existing.business_id,
+            effective_business_id: businessId,
+          })
+        }
+      }
     } else {
       convId = crypto.randomUUID()
     }
@@ -720,6 +942,12 @@ export async function POST(req: NextRequest) {
     }
 
     resolvedConversation = { convId, status, isNewConv }
+    console.log('[LiveChatDebug] conversation resolved', {
+      business_id: businessId,
+      conversation_id: convId,
+      status,
+      is_new_conversation: isNewConv,
+    })
     return resolvedConversation
   }
 
@@ -731,7 +959,46 @@ export async function POST(req: NextRequest) {
     } catch { /* unread counter is best-effort */ }
   }
 
-  if (!liveChatSettings.ai_auto_replies_enabled && liveChatSettings.live_chat_enabled) {
+  async function linkCustomerIdentity(convId: string, confirmed: Slots, leadId: string | null) {
+    try {
+      const result = await resolveCustomerIdentity(sb, {
+        businessId,
+        conversationId: convId,
+        channel: 'website',
+        externalIdentifier: `website:${convId}`,
+        email: confirmed.email,
+        phone: confirmed.phone,
+        displayName: confirmed.name,
+        company: confirmed.company,
+        country: typeof visitorContext?.country === 'string' ? visitorContext.country : null,
+        language: typeof visitorContext?.language === 'string' ? visitorContext.language : null,
+        timezone: typeof visitorContext?.timezone === 'string' ? visitorContext.timezone : null,
+        metadata: {
+          lead_id: leadId,
+          source: 'website_chat',
+          visitor_context: visitorContext,
+        },
+      })
+      console.log('[CustomerIdentity] website conversation linked', {
+        business_id: businessId,
+        conversation_id: convId,
+        customer_id: result.customer_id,
+        matched_by: result.matched_by,
+        confidence_score: result.confidence_score,
+      })
+      return result.customer_id
+    } catch (err) {
+      console.warn('[CustomerIdentity] link failed', err instanceof Error ? err.message : err)
+      return null
+    }
+  }
+
+  if (!testAiMode && !liveChatSettings.ai_auto_replies_enabled && liveChatSettings.live_chat_enabled) {
+    console.log('[LiveChatDebug] entering human-only branch', {
+      business_id: businessId,
+      ai_auto_replies_enabled: liveChatSettings.ai_auto_replies_enabled,
+      live_chat_enabled: liveChatSettings.live_chat_enabled,
+    })
     let convId: string
     try {
       ;({ convId } = await resolveConversation())
@@ -740,23 +1007,52 @@ export async function POST(req: NextRequest) {
     }
 
     const { error: userMsgErr } = await sb.from('messages').insert({
-      conversation_id: convId, business_id: businessId, role: 'user', content: message,
+      conversation_id: convId, business_id: businessId, role: 'user', content: messageText, metadata: customerMessageMetadata,
     })
     if (userMsgErr) console.error('[POST /api/chat] live-chat user message insert failed:', JSON.stringify(userMsgErr))
-    const { error: assistantMsgErr } = await sb.from('messages').insert({
-      conversation_id: convId, business_id: businessId, role: 'assistant', content: HANDOVER_REPLY,
-    })
-    if (assistantMsgErr) console.error('[POST /api/chat] live-chat assistant message insert failed:', JSON.stringify(assistantMsgErr))
     await incrementUnread(convId)
-    await markConversationStatus(sb, convId, businessId, 'live_chat')
-    await insertStatusEvent(sb, convId, businessId, 'Live chat active. AI auto-replies are off.', 'live_chat_active')
+    await markConversationStatus(sb, convId, businessId, 'handover_requested')
+    if ((await resolveConversation()).isNewConv) {
+      await insertStatusEvent(sb, convId, businessId, 'Waiting for a human reply.', 'handover_requested')
+    }
+    const { data: existingLiveLead } = await sb.from('leads').select('id, name, phone, email, interest, status, metadata')
+      .eq('conversation_id', convId).maybeSingle()
+    const confirmed = buildConfirmedSlots(existingLiveLead as ExistingLead | null, [], messageText)
+    const missing = computeMissingSlots(confirmed, defaultSlotDefsForBusinessType(null))
+    const qualificationStage = computeQualificationStage(confirmed, missing)
+    const liveChatPersist = await persistLead(
+      sb,
+      existingLiveLead as ExistingLead | null,
+      convId,
+      clientId,
+      businessId,
+      confirmed,
+      missing,
+      confirmed.name && (confirmed.phone || confirmed.email) ? 'contacted' : 'new',
+      qualificationStage,
+      '',
+      messageText,
+      null,
+    )
+    console.log('[LiveChatDebug] human-only persisted', {
+      business_id: businessId,
+      conversation_id: convId,
+      lead_id: liveChatPersist.lead_id,
+      lead_insert_error: liveChatPersist.insert_error,
+      message_insert_error: userMsgErr?.message ?? null,
+    })
+    const customerId = await linkCustomerIdentity(convId, confirmed, liveChatPersist.lead_id)
 
     return NextResponse.json({
-      reply: HANDOVER_REPLY,
+      reply: null,
       conversation_id: convId,
-      status: 'live_chat',
+      customer_id: customerId,
+      status: 'handover_requested',
       handover: true,
       ai_reply_skipped: true,
+      waiting_for_human: true,
+      lead_id: liveChatPersist.lead_id,
+      lead_insert_error: liveChatPersist.insert_error,
       message_insert_error: userMsgErr?.message ?? null,
     })
   }
@@ -779,6 +1075,15 @@ export async function POST(req: NextRequest) {
   // Try session businessId first; if not found, fall back to the widget's body business_id.
   // This handles the case where an authenticated owner tests the widget from their browser
   // (session overrides businessId) but the agent row is keyed on the widget's configured ID.
+  console.log('[LiveChatDebug] entering AI branch', {
+    business_id: businessId,
+    requested_business_id: requestedBusinessId,
+    body_business_id: business_id,
+    ai_auto_replies_enabled: liveChatSettings.ai_auto_replies_enabled,
+    live_chat_enabled: liveChatSettings.live_chat_enabled,
+    human_handover_enabled: liveChatSettings.human_handover_enabled,
+    test_ai: testAiMode,
+  })
   console.log('[POST /api/chat] agent lookup — session businessId:', businessId, '| body business_id:', business_id)
 
   let agentRow: AgentRow | null = null
@@ -857,7 +1162,7 @@ export async function POST(req: NextRequest) {
   let ragCount = 0
   let ragTitles = 'none'
   try {
-    const ragChunks = await retrieveRelevantChunks(sb, businessId, message, 6)
+    const ragChunks = await retrieveRelevantChunks(sb, businessId, messageText, 6)
     ragCount  = ragChunks.length
     ragTitles = [...new Set(ragChunks.map(c => c.title))].join(', ') || 'none'
     if (ragChunks.length > 0) {
@@ -911,7 +1216,7 @@ export async function POST(req: NextRequest) {
   const normalizedStatus = normalizeConversationStatus(conversationStatus)
   if (normalizedStatus === 'live_chat' || normalizedStatus === 'handover_requested' || normalizedStatus === 'resolved') {
     const { error: userMsgErr } = await sb.from('messages').insert({
-      conversation_id: convId, business_id: businessId, role: 'user', content: message,
+      conversation_id: convId, business_id: businessId, role: 'user', content: messageText, metadata: customerMessageMetadata,
     })
     if (userMsgErr) console.error('[POST /api/chat] handover user message insert failed:', JSON.stringify(userMsgErr))
     await incrementUnread(convId)
@@ -919,12 +1224,36 @@ export async function POST(req: NextRequest) {
       await markConversationStatus(sb, convId, businessId, 'handover_requested')
       await insertStatusEvent(sb, convId, businessId, 'Conversation reopened by customer message.', 'conversation_reopened')
     }
+    const { data: activeLead } = await sb.from('leads').select('id, name, phone, email, interest, status, metadata')
+      .eq('conversation_id', convId).maybeSingle()
+    const confirmed = buildConfirmedSlots(activeLead as ExistingLead | null, [], messageText)
+    const missing = computeMissingSlots(confirmed, defaultSlotDefsForBusinessType(null))
+    const qualificationStage = computeQualificationStage(confirmed, missing)
+    const handoverPersist = await persistLead(
+      sb,
+      activeLead as ExistingLead | null,
+      convId,
+      clientId,
+      businessId,
+      confirmed,
+      missing,
+      confirmed.name && (confirmed.phone || confirmed.email) ? 'contacted' : 'new',
+      qualificationStage,
+      '',
+      messageText,
+      null,
+    )
+    const customerId = await linkCustomerIdentity(convId, confirmed, handoverPersist.lead_id)
     return NextResponse.json({
-      reply: HANDOVER_REPLY,
+      reply: null,
       conversation_id: convId,
+      customer_id: customerId,
       status: normalizedStatus === 'resolved' ? 'handover_requested' : normalizedStatus,
       handover: true,
       ai_reply_skipped: true,
+      waiting_for_human: true,
+      lead_id: handoverPersist.lead_id,
+      lead_insert_error: handoverPersist.insert_error,
       message_insert_error: userMsgErr?.message ?? null,
     })
   }
@@ -963,7 +1292,7 @@ export async function POST(req: NextRequest) {
     : defaultSlotDefsForBusinessType(businessType)
 
   /* 7. Build confirmedSlots deterministically ─────────────────────────────── */
-  const confirmed          = buildConfirmedSlots(existingLead, history, message)
+  const confirmed          = buildConfirmedSlots(existingLead, history, messageText)
   const missing            = computeMissingSlots(confirmed, slotDefs)
   const qualificationStage = computeQualificationStage(confirmed, missing)
 
@@ -981,9 +1310,9 @@ export async function POST(req: NextRequest) {
   console.log('[SLOTS] qualificationStage:', qualificationStage)
 
   /* 8. Check booking intent → short-circuit if ready ─────────────────────── */
-  if (customerRequestedHuman(message, liveChatSettings) && liveChatSettings.live_chat_enabled) {
+  if (!testAiMode && customerRequestedHuman(messageText, liveChatSettings) && liveChatSettings.live_chat_enabled) {
     const { error: userMsgErr } = await sb.from('messages').insert({
-      conversation_id: convId, business_id: businessId, role: 'user', content: message,
+      conversation_id: convId, business_id: businessId, role: 'user', content: messageText, metadata: customerMessageMetadata,
     })
     if (userMsgErr) console.error('[POST /api/chat] handover-request user message insert failed:', JSON.stringify(userMsgErr))
     const { error: assistantMsgErr } = await sb.from('messages').insert({
@@ -993,16 +1322,34 @@ export async function POST(req: NextRequest) {
     await incrementUnread(convId)
     await markConversationStatus(sb, convId, businessId, 'handover_requested')
     await insertStatusEvent(sb, convId, businessId, 'Customer requested a human handover.', 'handover_requested')
+    const handoverPersist = await persistLead(
+      sb,
+      existingLead,
+      convId,
+      clientId,
+      businessId,
+      confirmed,
+      missing,
+      confirmed.name && (confirmed.phone || confirmed.email) ? 'contacted' : 'new',
+      qualificationStage,
+      HANDOVER_REPLY,
+      messageText,
+      businessType,
+    )
+    const customerId = await linkCustomerIdentity(convId, confirmed, handoverPersist.lead_id)
     return NextResponse.json({
       reply: HANDOVER_REPLY,
       conversation_id: convId,
+      customer_id: customerId,
       status: 'handover_requested',
       handover: true,
+      lead_id: handoverPersist.lead_id,
+      lead_insert_error: handoverPersist.insert_error,
       message_insert_error: userMsgErr?.message ?? null,
     })
   }
 
-  if (detectBookingIntent(message) && hasEnoughForBooking(confirmed, businessType)) {
+  if (detectBookingIntent(messageText) && hasEnoughForBooking(confirmed, businessType)) {
     const stillNeedContact = !confirmed.phone && !confirmed.email
     const bookingReply = stillNeedContact
       ? `I'd love to arrange a viewing! Could I get your phone number or email so our team can confirm the available times?`
@@ -1010,14 +1357,15 @@ export async function POST(req: NextRequest) {
 
     // Persist user message first, then assistant — sequential so user always gets an earlier
     // created_at timestamp (parallel inserts can produce same or reversed timestamps).
-    const uMsgR = await sb.from('messages').insert({ conversation_id: convId, business_id: businessId, role: 'user', content: message })
+    const uMsgR = await sb.from('messages').insert({ conversation_id: convId, business_id: businessId, role: 'user', content: messageText, metadata: customerMessageMetadata })
     if (uMsgR.error) console.error('[POST /api/chat] booking user-msg insert:', JSON.stringify(uMsgR.error))
     const aMsgR = await sb.from('messages').insert({ conversation_id: convId, business_id: businessId, role: 'assistant', content: bookingReply })
     if (aMsgR.error) console.error('[POST /api/chat] booking ai-msg insert:', JSON.stringify(aMsgR.error))
 
     console.log('[GUARD] blockedRepeatedQuestion: false (booking short-circuit)')
     console.log('PERSIST IDS', { resolvedClientId: clientId, resolvedBusinessId: businessId, bodyBusinessId: business_id, fallbackUsed })
-    const bResult = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, 'qualified', qualificationStage, bookingReply, message, businessType)
+    const bResult = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, 'qualified', qualificationStage, bookingReply, messageText, businessType)
+    const customerId = await linkCustomerIdentity(convId, confirmed, bResult.lead_id)
 
     if (bResult.lead_id) {
       void scheduleFollowUps(sb, {
@@ -1035,6 +1383,7 @@ export async function POST(req: NextRequest) {
     const bookingBody: Record<string, unknown> = {
       reply:                    bookingReply,
       conversation_id:          convId,
+      customer_id:              customerId,
       intent:                   'booking',
       lead_ready:               true,
       lead_id:                  bResult.lead_id,
@@ -1056,14 +1405,18 @@ export async function POST(req: NextRequest) {
 
   /* 9. Persist user message ──────────────────────────────────────────────── */
   const { error: userMsgErr } = await sb.from('messages').insert({
-    conversation_id: convId, business_id: businessId, role: 'user', content: message,
+    conversation_id: convId, business_id: businessId, role: 'user', content: messageText, metadata: customerMessageMetadata,
   })
   if (userMsgErr) console.error('[POST /api/chat] user message insert failed:', JSON.stringify(userMsgErr))
   await incrementUnread(convId)
 
   /* 10. Build prompt + call OpenAI ───────────────────────────────────────── */
   const openaiKey = process.env.OPENAI_API_KEY
-  if (!openaiKey) return NextResponse.json({ error: 'OPENAI_API_KEY is not configured' }, { status: 500 })
+  if (!openaiKey) {
+    return NextResponse.json({
+      error: 'OPENAI_API_KEY is missing. Add it in Vercel Environment Variables and redeploy.',
+    }, { status: 500 })
+  }
 
   const openai       = new OpenAI({ apiKey: openaiKey })
   const systemPrompt = buildSystemPrompt(agent, knowledge, confirmed, missing, qualificationStage, leadMemoryStr, businessType)
@@ -1083,7 +1436,7 @@ export async function POST(req: NextRequest) {
 
   let rawReply: string
   try {
-    rawReply = await callOpenAI(openai, agent.model, agent.temperature, systemPrompt, historyForLLM, message)
+    rawReply = await callOpenAI(openai, agent.model, agent.temperature, systemPrompt, historyForLLM, messageText)
   } catch (err) {
     console.error('[POST /api/chat] OpenAI error:', err)
     return NextResponse.json({ error: 'Failed to get AI response' }, { status: 502 })
@@ -1093,7 +1446,7 @@ export async function POST(req: NextRequest) {
   const { reply: finalReply, blocked } = guardReply(rawReply, confirmed, missing)
   console.log('[GUARD] blockedRepeatedQuestion:', blocked)
 
-  if (aiCannotAnswer(finalReply, liveChatSettings, agent.fallback_msg) && liveChatSettings.live_chat_enabled) {
+  if (!testAiMode && aiCannotAnswer(finalReply, liveChatSettings, agent.fallback_msg) && liveChatSettings.live_chat_enabled) {
     const { error: assistantMsgErr } = await sb.from('messages').insert({
       conversation_id: convId, business_id: businessId, role: 'assistant', content: HANDOVER_REPLY,
     })
@@ -1123,8 +1476,9 @@ export async function POST(req: NextRequest) {
     fallbackUsed,
   })
   const isQualified = !!(confirmed.name && confirmed.phone && confirmed.email)
-  const intent      = detectDealType(message) ? 'inquiry' : 'greeting'
-  const persist = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, isQualified ? 'contacted' : 'new', qualificationStage, finalReply, message, businessType)
+  const intent      = detectDealType(messageText) ? 'inquiry' : 'greeting'
+  const persist = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, isQualified ? 'contacted' : 'new', qualificationStage, finalReply, messageText, businessType)
+  const customerId = await linkCustomerIdentity(convId, confirmed, persist.lead_id ?? existingLead?.id ?? null)
 
   /* 14. Update lead memory (fire-and-forget) ──────────────────────────────── */
   const resolvedLeadId = persist.lead_id ?? existingLead?.id
@@ -1136,7 +1490,7 @@ export async function POST(req: NextRequest) {
       confirmed,
       stage:          qualificationStage,
       messages:       history,
-      userMessage:    message,
+      userMessage:    messageText,
     })
   }
 
@@ -1167,6 +1521,7 @@ export async function POST(req: NextRequest) {
   const response: Record<string, unknown> = {
     reply:                    finalReply,
     conversation_id:          convId,
+    customer_id:              customerId,
     intent,
     lead_ready:               isQualified,
     lead_id:                  persist.lead_id,
@@ -1325,7 +1680,7 @@ async function persistLead(
     name:          confirmed.name  ?? (existing?.name === 'Website Visitor' ? null : existing?.name) ?? null,
     phone:         confirmed.phone ?? existing?.phone ?? null,
     email:         confirmed.email ?? existing?.email ?? null,
-    interest:      confirmed.car_class ?? confirmed.property_type ?? confirmed.deal_type ?? existing?.interest ?? null,
+    interest:      confirmed.service_interest ?? confirmed.car_class ?? confirmed.property_type ?? confirmed.deal_type ?? existing?.interest ?? null,
     // Direct columns on leads table
     ai_summary:    summary || null,
     intent:        confirmed.deal_type ?? null,
@@ -1340,6 +1695,9 @@ async function persistLead(
     metadata:      {
       ...(existing?.metadata as Record<string, unknown> ?? {}),
       ...(confirmed.name          && { name:          confirmed.name          }),
+      ...(confirmed.company       && { company:       confirmed.company       }),
+      ...(confirmed.service_interest && { service_interest: confirmed.service_interest }),
+      ...(confirmed.notes         && { notes:         confirmed.notes         }),
       ...(confirmed.city          && { city:          confirmed.city          }),
       ...(confirmed.area          && { area:          confirmed.area          }),
       ...(confirmed.budget        && { budget:        confirmed.budget        }),

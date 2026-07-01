@@ -145,9 +145,11 @@ function splitRentalWindow(message: string, slots: RentalDateWindowSlots) {
   const returnMatches = Array.from(text.matchAll(/\b(?:return|drop(?:off|-off)?)\s+(?!location\b)(?:on\s+)?(.+)$/gi))
   const pickupMatch = pickupMatches.at(-1)
   const returnMatch = returnMatches.at(-1)
+  const pickupText = pickupMatch?.[1] ?? slots.pickup_datetime ?? text
+  const returnText = returnMatch?.[1] ?? slots.return_datetime ?? text
   return {
-    pickupText: pickupMatch?.[1] ?? slots.pickup_datetime ?? text,
-    returnText: returnMatch?.[1] ?? slots.return_datetime ?? text,
+    pickupText: /\bsame location\b/i.test(pickupText) && slots.pickup_datetime ? slots.pickup_datetime : pickupText,
+    returnText: /\bsame location\b/i.test(returnText) && slots.return_datetime ? slots.return_datetime : returnText,
   }
 }
 

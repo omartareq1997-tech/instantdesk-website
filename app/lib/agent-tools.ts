@@ -101,7 +101,7 @@ function wantsCancellation(text: string) {
 function carMatches(row: RentalCarRow, text: string) {
   if (!text) return true
   const haystack = `${row.name ?? ''} ${row.model ?? ''} ${row.car_classes?.name ?? ''}`.toLowerCase()
-  return text.split(/\s+/).filter(Boolean).every(word => haystack.includes(word))
+  return text.toLowerCase().split(/\s+/).filter(Boolean).every(word => haystack.includes(word))
 }
 
 export function planOperationalTools(context: AgentToolContext): AgentToolName[] {

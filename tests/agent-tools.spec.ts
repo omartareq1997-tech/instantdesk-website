@@ -111,6 +111,15 @@ test.describe('agent operational tool planner', () => {
     expect(parsed.dropoffAt).toBe('2026-07-09T22:00:00+02:00')
   })
 
+  test('keeps stored dates when user confirms drop off same location', () => {
+    const parsed = parseRentalDateWindow('drop off same location', {
+      pickup_datetime: '2026-07-02T10:00:00+02:00',
+      return_datetime: '2026-07-09T22:00:00+02:00',
+    })
+    expect(parsed.pickupAt).toBe('2026-07-02T10:00:00+02:00')
+    expect(parsed.dropoffAt).toBe('2026-07-09T22:00:00+02:00')
+  })
+
   test('ignores pickup/drop-off location labels when parsing complete booking dates', () => {
     const parsed = parseRentalDateWindow(
       'Please book Toyota Corolla. Pickup location Kraków Bocheńska 2a. Drop-off location Kraków Bocheńska 2a. Pick up 16 July at 9am and return 18 July at 10pm.',

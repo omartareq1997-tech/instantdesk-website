@@ -957,8 +957,20 @@ function rentalToolReplyOverride(
   confirmed: Slots,
   missing: SlotDef[],
   businessType?: string | null,
+  userMessage = '',
 ): string | null {
-  if (normalizeBusinessType(businessType) !== 'car_rental' || toolResults.length === 0) return null
+  if (normalizeBusinessType(businessType) !== 'car_rental') return null
+  const missingDropoff = missing.some(field => field.key === 'dropoff_location')
+  if (missingDropoff && /\b(?:return|date|time|automatic|manual|correct|wrong|preferred)\b/i.test(userMessage)) {
+    const pieces = ['Thanks, I updated the rental details.']
+    if (confirmed.selected_vehicle) pieces.push(`Vehicle: ${confirmed.selected_vehicle}.`)
+    if (confirmed.pickup_datetime) pieces.push(`Pickup: ${confirmed.pickup_datetime}.`)
+    if (confirmed.return_datetime) pieces.push(`Return: ${confirmed.return_datetime}.`)
+    if (confirmed.transmission) pieces.push(`Transmission: ${confirmed.transmission}.`)
+    pieces.push('I still need the drop-off location before I can check final availability and create the booking.')
+    return pieces.join(' ')
+  }
+  if (toolResults.length === 0) return null
   const create = toolResults.find(result => result.tool === 'createBooking')
   const availability = toolResults.find(result => result.tool === 'checkAvailability')
   const price = toolResults.find(result => result.tool === 'calculatePrice')
@@ -1762,7 +1774,7 @@ export async function POST(req: NextRequest) {
   }
 
   /* 11. Guard reply — block stale/holding answers and repeated questions ─── */
-  const operationalReply = rentalToolReplyOverride(operationalToolResults, confirmed, missing, businessType)
+  const operationalReply = rentalToolReplyOverride(operationalToolResults, confirmed, missing, businessType, messageText)
   const { reply: finalReply, blocked } = guardReply(operationalReply ?? rawReply, confirmed, missing)
   console.log('[GUARD] blockedRepeatedQuestion:', blocked)
 

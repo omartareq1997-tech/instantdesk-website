@@ -633,6 +633,7 @@ function extractServiceInterest(text: string): string | null {
 /* ── Combined extractor ────────────────────────────────────────────────── */
 
 function extractFromText(text: string): Partial<Slots> {
+  const carRentalIntent = /\b(car|vehicle|fleet|pickup|pick-up|drop[-\s]?off|return|corolla|camry|x5|bmw|mercedes|skoda|suv|automatic|manual)\b/i.test(text)
   const returnOnlyCorrection =
     /\b(?:return|drop(?:off|-off)?)\b/i.test(text) &&
     /\b(?:wrong|preferred|correct|change|update)\b/i.test(text) &&
@@ -660,8 +661,8 @@ function extractFromText(text: string): Partial<Slots> {
     budget:        extractBudget(text)       ?? undefined,
     property_type: extractPropertyType(text) ?? undefined,
     rooms:         extractRooms(text)        ?? undefined,
-    deal_type:     extractDealType(text)     ?? undefined,
-    viewing_time:  extractViewingTime(text)  ?? undefined,
+    deal_type:     carRentalIntent ? undefined : extractDealType(text)     ?? undefined,
+    viewing_time:  carRentalIntent ? undefined : extractViewingTime(text)  ?? undefined,
     pickup_location: pickupLocation?.trim() ?? (airportMention ? 'Airport' : undefined),
     dropoff_location: dropoffLocation?.trim() ?? undefined,
     pickup_datetime: returnOnlyCorrection ? undefined : rentalWindow.pickupAt ?? undefined,
@@ -781,9 +782,9 @@ function buildConfirmedSlots(
     return_datetime: extracted.return_datetime ?? fromDB.return_datetime ?? null,
     selected_vehicle: extracted.selected_vehicle ?? fromDB.selected_vehicle ?? null,
     car_class: extracted.car_class ?? fromDB.car_class ?? null,
-    transmission: fromDB.transmission ?? extracted.transmission ?? null,
-    seats: fromDB.seats ?? extracted.seats ?? null,
-    extras: fromDB.extras ?? extracted.extras ?? null,
+    transmission: extracted.transmission ?? fromDB.transmission ?? null,
+    seats: extracted.seats ?? fromDB.seats ?? null,
+    extras: extracted.extras ?? fromDB.extras ?? null,
     booking_number: fromDB.booking_number ?? extracted.booking_number ?? null,
     extension_request: fromDB.extension_request ?? extracted.extension_request ?? null,
   }
@@ -843,8 +844,8 @@ function detectBookingIntent(text: string): boolean {
 function hasEnoughForBooking(confirmed: Slots, businessType?: string | null): boolean {
   const type = normalizeBusinessType(businessType)
   if (type === 'car_rental') {
-    const hasContact = !!(confirmed.name || confirmed.phone || confirmed.email)
-    return !!(confirmed.pickup_location && confirmed.dropoff_location && confirmed.pickup_datetime && confirmed.return_datetime && (confirmed.selected_vehicle || confirmed.car_class) && hasContact)
+    const hasContact = !!(confirmed.name && confirmed.phone && confirmed.email)
+    return !!(confirmed.pickup_location && confirmed.dropoff_location && confirmed.pickup_datetime && confirmed.return_datetime && confirmed.selected_vehicle && hasContact)
   }
   const hasLocation = !!(confirmed.city)
   const hasProperty = !!(confirmed.property_type || confirmed.deal_type)
@@ -975,16 +976,18 @@ function rentalToolReplyOverride(
   const availability = toolResults.find(result => result.tool === 'checkAvailability')
   const price = toolResults.find(result => result.tool === 'calculatePrice')
   const fleet = toolResults.find(result => result.tool === 'searchFleet')
+  const locations = toolResults.find(result => result.tool === 'getLocations')
   const selected = confirmed.selected_vehicle ?? confirmed.car_class ?? 'the selected car'
 
   if (create?.ok) {
     const data = create.data as { bookingNumber?: string; status?: string } | undefined
+    if (!data?.bookingNumber) return 'Booking creation failed because no booking reference was returned. I can connect you with the team to finish this safely.'
     return [
-      `Your booking has been created for ${selected}.`,
+      `Your booking request has been created for ${selected}.`,
       data?.bookingNumber ? `Reference: ${data.bookingNumber}.` : null,
       data?.status ? `Status: ${data.status}.` : null,
       confirmed.pickup_datetime && confirmed.return_datetime ? `Rental window: ${confirmed.pickup_datetime} to ${confirmed.return_datetime}.` : null,
-      'The team will contact you to confirm final pickup details. Payment/deposit is handled at pickup unless the business has enabled online payment links.',
+      'Payment and deposit will be handled at pickup.',
     ].filter(Boolean).join(' ')
   }
 
@@ -1009,11 +1012,57 @@ function rentalToolReplyOverride(
     return pieces.join(' ')
   }
 
+  if (locations?.ok) {
+    const data = locations.data as { locations?: { name?: string | null; address?: string | null }[] } | undefined
+    const list = data?.locations ?? []
+    if (list.length === 1) {
+      const location = list[0]
+      const label = [location.name, location.address].filter(Boolean).join(', ')
+      return `Our pickup location is ${label}.`
+    }
+    if (list.length > 1) {
+      return `Our pickup locations are: ${list.map(location => [location.name, location.address].filter(Boolean).join(', ')).join('; ')}.`
+    }
+    return 'No active pickup locations are configured yet. I can connect you with the team to confirm pickup options.'
+  }
+
   if (fleet?.ok && !availability && !price) {
-    return null
+    const data = fleet.data as { cars?: { name?: string | null; className?: string | null; transmission?: string | null; dailyPrice?: number | null }[] } | undefined
+    const cars = data?.cars ?? []
+    if (cars.length === 0) return 'I do not see any matching cars currently listed in the live fleet.'
+    const listed = cars.slice(0, 8).map(car => {
+      const details = [car.className, car.transmission, car.dailyPrice ? `${car.dailyPrice} per day` : null].filter(Boolean).join(', ')
+      return details ? `${car.name} (${details})` : String(car.name)
+    }).join('; ')
+    return `Here are the matching cars from the live fleet: ${listed}. Which one would you like?`
   }
 
   return null
+}
+
+function rentalClarificationReply(
+  confirmed: Slots,
+  missing: SlotDef[],
+  businessType?: string | null,
+  userMessage = '',
+): string | null {
+  if (normalizeBusinessType(businessType) !== 'car_rental') return null
+  const text = userMessage.toLowerCase()
+  const hasRentalIntent = /\b(rent|rental|car|vehicle|tomorrow|today|economy|economical|suv|automatic|manual|corolla|camry|x5|bmw|mercedes|skoda)\b/.test(text)
+  if (!hasRentalIntent) return null
+  const missingKeys = new Set(missing.map(field => field.key))
+  const hasOnlyDateIntent = /\b(today|tomorrow)\b/.test(text) && !confirmed.pickup_datetime && !confirmed.return_datetime
+  if (hasOnlyDateIntent) {
+    return 'Sure — what time would you like to pick it up, and when would you like to return it?'
+  }
+  if (missingKeys.has('pickup_datetime') || missingKeys.has('return_datetime')) {
+    return 'Sure — what pickup date and time should I use, and what return date and time should I use?'
+  }
+  if (!confirmed.selected_vehicle && confirmed.car_class) {
+    return `I can help with ${confirmed.car_class} cars. Which specific vehicle would you like?`
+  }
+  const nextMissing = missing.find(field => ['selected_vehicle', 'car_class', 'pickup_location', 'dropoff_location', 'name', 'phone', 'email'].includes(String(field.key)))
+  return nextMissing ? nextMissing.question : null
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -1740,6 +1789,53 @@ export async function POST(req: NextRequest) {
   })
   if (userMsgErr) console.error('[POST /api/chat] user message insert failed:', JSON.stringify(userMsgErr))
   await incrementUnread(convId)
+
+  const deterministicRentalReply =
+    rentalToolReplyOverride(operationalToolResults, confirmed, missing, businessType, messageText) ??
+    rentalClarificationReply(confirmed, missing, businessType, messageText)
+
+  if (deterministicRentalReply) {
+    const { reply: finalReply, blocked } = guardReply(deterministicRentalReply, confirmed, missing)
+    const { error: aiMsgErr } = await sb.from('messages').insert({
+      conversation_id: convId, business_id: businessId, role: 'assistant', content: finalReply,
+    })
+    if (aiMsgErr) console.error('[POST /api/chat] deterministic rental ai-msg insert failed:', JSON.stringify(aiMsgErr))
+
+    const isQualified = !!(confirmed.name && confirmed.phone && confirmed.email)
+    const intent      = detectDealType(messageText) ? 'inquiry' : 'greeting'
+    const persist = await persistLead(sb, existingLead, convId, clientId, businessId, confirmed, missing, isQualified ? 'contacted' : 'new', qualificationStage, finalReply, messageText, businessType)
+    const customerId = await linkCustomerIdentity(convId, confirmed, persist.lead_id ?? existingLead?.id ?? null)
+
+    const response: Record<string, unknown> = {
+      reply:                    finalReply,
+      conversation_id:          convId,
+      customer_id:              customerId,
+      intent,
+      lead_ready:               isQualified,
+      lead_id:                  persist.lead_id,
+      lead_insert_error:        persist.insert_error,
+      appointment_id:           persist.appointment_id,
+      appointment_insert_error: persist.appointment_insert_error,
+      message_insert_error:     userMsgErr?.message ?? null,
+    }
+    if (debugMode) {
+      response.debug = {
+        confirmedSlots: confirmed,
+        missingSlots:   missing.map(d => d.key),
+        isQualified,
+        ai_summary:     finalReply,
+        blocked,
+        businessType,
+        operationalTools: operationalToolResults.map(result => ({
+          tool: result.tool,
+          ok: result.ok,
+          summary: result.summary,
+          error: result.error ?? null,
+        })),
+      }
+    }
+    return NextResponse.json(response)
+  }
 
   /* 10. Build prompt + call OpenAI ───────────────────────────────────────── */
   const openaiKey = process.env.OPENAI_API_KEY

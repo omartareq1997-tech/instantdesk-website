@@ -22,6 +22,13 @@ test.describe('agent operational tool planner', () => {
   test('plans live availability check for exact rental windows', () => {
     const tools = planOperationalTools({
       ...baseContext,
+      slots: {
+        selected_vehicle: 'Toyota Corolla',
+        pickup_location: 'Kraków Bocheńska 2a',
+        dropoff_location: 'Kraków Bocheńska 2a',
+        pickup_datetime: '2026-07-02T10:00:00+02:00',
+        return_datetime: '2026-07-03T18:00:00+02:00',
+      },
       message: 'Is Toyota Corolla available from tomorrow 10:00 until Friday 18:00?',
     })
     expect(tools).toContain('searchFleet')
@@ -31,6 +38,13 @@ test.describe('agent operational tool planner', () => {
   test('keeps exact car requests stable when location and dates follow the model name', () => {
     const tools = planOperationalTools({
       ...baseContext,
+      slots: {
+        selected_vehicle: 'Toyota Corolla',
+        pickup_location: 'Kraków Bocheńska 2a',
+        dropoff_location: 'Kraków Bocheńska 2a',
+        pickup_datetime: '2026-07-02T10:00:00+02:00',
+        return_datetime: '2026-07-03T18:00:00+02:00',
+      },
       message: 'Please book Toyota Corolla in Krakow from tomorrow 10:00 until Friday 18:00.',
     })
     expect(tools).toContain('searchFleet')
@@ -40,6 +54,7 @@ test.describe('agent operational tool planner', () => {
   test('plans policy and location lookups separately', () => {
     expect(planOperationalTools({ ...baseContext, message: 'What documents and deposit do I need?' })).toContain('getBusinessPolicies')
     expect(planOperationalTools({ ...baseContext, message: 'Can I pick up at the airport?' })).toContain('getLocations')
+    expect(planOperationalTools({ ...baseContext, message: 'what is your pickup location?' })).toContain('getLocations')
   })
 
   test('does not plan rental tools for other verticals', () => {
@@ -54,6 +69,16 @@ test.describe('agent operational tool planner', () => {
   test('plans booking creation only through fleet and availability checks first', () => {
     const tools = planOperationalTools({
       ...baseContext,
+      slots: {
+        name: 'Alex',
+        phone: '510880999',
+        email: 'alex@example.com',
+        selected_vehicle: 'Toyota Corolla',
+        pickup_location: 'Kraków Bocheńska 2a',
+        dropoff_location: 'Kraków Bocheńska 2a',
+        pickup_datetime: '2026-07-02T10:00:00+02:00',
+        return_datetime: '2026-07-03T18:00:00+02:00',
+      },
       message: 'Please book the Toyota Corolla from tomorrow 10:00 until Friday 18:00.',
     })
     expect(tools.indexOf('searchFleet')).toBeLessThan(tools.indexOf('checkAvailability'))
@@ -75,6 +100,75 @@ test.describe('agent operational tool planner', () => {
     expect(parsed.pickupAt).toBeTruthy()
     expect(parsed.dropoffAt).toBeTruthy()
     expect(new Date(parsed.dropoffAt!).getTime()).toBeGreaterThan(new Date(parsed.pickupAt!).getTime())
+  })
+
+  test('does not invent a vehicle or rental window from a bare tomorrow rental intent', () => {
+    const parsed = parseRentalDateWindow(
+      'I want to rent a car tomorrow',
+      {},
+      new Date('2026-07-01T12:00:00+02:00'),
+    )
+    expect(parsed.pickupAt).toBeNull()
+    expect(parsed.dropoffAt).toBeNull()
+    const tools = planOperationalTools({
+      ...baseContext,
+      message: 'I want to rent a car tomorrow',
+    })
+    expect(tools).not.toContain('checkAvailability')
+    expect(tools).not.toContain('createBooking')
+  })
+
+  test('requires locations before checking availability', () => {
+    const tools = planOperationalTools({
+      ...baseContext,
+      slots: {
+        selected_vehicle: 'Toyota Corolla',
+        pickup_datetime: '2026-07-02T10:00:00+02:00',
+        return_datetime: '2026-07-09T22:00:00+02:00',
+      },
+      message: 'Is Toyota Corolla available from tomorrow 10:00 until 09/07/2026 22:00?',
+    })
+    expect(tools).toContain('searchFleet')
+    expect(tools).not.toContain('checkAvailability')
+  })
+
+  test('does not create a booking when the final location is provided without explicit booking confirmation', () => {
+    const tools = planOperationalTools({
+      ...baseContext,
+      slots: {
+        name: 'Alex',
+        phone: '510880999',
+        email: 'alex@example.com',
+        selected_vehicle: 'BMW X5',
+        pickup_location: 'Kraków Bocheńska 2a',
+        dropoff_location: 'Kraków Bocheńska 2a',
+        pickup_datetime: '2026-07-02T10:00:00+02:00',
+        return_datetime: '2026-07-09T22:00:00+02:00',
+      },
+      message: 'drop off same location',
+    })
+    expect(tools).toContain('checkAvailability')
+    expect(tools).not.toContain('createBooking')
+  })
+
+  test('plans booking creation only after explicit confirmation with complete required state', () => {
+    const tools = planOperationalTools({
+      ...baseContext,
+      slots: {
+        name: 'Alex',
+        phone: '510880999',
+        email: 'alex@example.com',
+        selected_vehicle: 'BMW X5',
+        pickup_location: 'Kraków Bocheńska 2a',
+        dropoff_location: 'Kraków Bocheńska 2a',
+        pickup_datetime: '2026-07-02T10:00:00+02:00',
+        return_datetime: '2026-07-09T22:00:00+02:00',
+      },
+      message: 'please book it',
+    })
+    expect(tools).toContain('searchFleet')
+    expect(tools).toContain('checkAvailability')
+    expect(tools).toContain('createBooking')
   })
 
   test('parses tomorrow and explicit July return dates as business-time ISO values', () => {
@@ -100,6 +194,17 @@ test.describe('agent operational tool planner', () => {
   test('extracts selected rental vehicle models from customer messages', () => {
     expect(extractRentalVehicleName('I want the BMW X5 please')).toBe('BMW X5')
     expect(extractRentalVehicleName('Please reserve Corolla for me')).toBe('Toyota Corolla')
+    expect(extractRentalVehicleName("I'll go with the X5")).toBe('BMW X5')
+  })
+
+  test('economy intent searches fleet without selecting BMW X5 or checking availability', () => {
+    const tools = planOperationalTools({
+      ...baseContext,
+      message: 'I want an economical car',
+    })
+    expect(tools).toContain('searchFleet')
+    expect(tools).not.toContain('checkAvailability')
+    expect(tools).not.toContain('createBooking')
   })
 
   test('reuses previously stored ISO pickup and return slot values', () => {

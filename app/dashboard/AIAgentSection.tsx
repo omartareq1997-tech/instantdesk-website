@@ -353,7 +353,7 @@ function AIInstructionsPage() {
   const [loading,  setLoading]  = useState(true)
   const [saving,   setSaving]   = useState(false)
   const [saved,    setSaved]    = useState(false)
-  const [showPrev, setShowPrev] = useState(true)
+  const [showPrev, setShowPrev] = useState(false)
   const [showPromptModal, setShowPromptModal] = useState(false)
   const [copied, setCopied] = useState(false)
   const [error,    setError]    = useState<string | null>(null)
@@ -442,12 +442,139 @@ function AIInstructionsPage() {
 
   return (
     <div className="flex flex-col gap-5">
+      {agent && (
+        <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl w-fit"
+          style={{ background:'rgba(244,122,99,0.10)', border:'1px solid rgba(244,122,99,0.2)' }}>
+          <Bot className="w-3.5 h-3.5 text-orange-400" />
+          <span className="text-xs font-semibold text-orange-300">{agent?.name}</span>
+          <span className="text-[10px] text-orange-400/50">· Tune AI</span>
+        </div>
+      )}
+
+      {error && (
+        <div className="flex items-center gap-2 px-4 py-3 rounded-xl text-xs text-red-300"
+          style={{ background:'rgba(248,113,113,0.08)', border:'1px solid rgba(248,113,113,0.2)' }}>
+          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />{error}
+        </div>
+      )}
+
+      <PageCard>
+        <div className="grid gap-4 lg:grid-cols-[1fr_1fr_1fr]">
+          <div>
+            <label className="block text-xs font-semibold text-white/50 uppercase tracking-widest mb-2">AI Model</label>
+            <select value={form.model} onChange={e => set('model')(e.target.value)}
+              className="h-11 w-full rounded-xl border border-white/10 bg-black/25 px-3 text-sm font-semibold text-white outline-none">
+              {MODELS.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-white/50 uppercase tracking-widest mb-2">Tone</label>
+            <select value={form.tone} onChange={e => set('tone')(e.target.value)}
+              className="h-11 w-full rounded-xl border border-white/10 bg-black/25 px-3 text-sm font-semibold text-white outline-none">
+              {TONES.map(tone => <option key={tone.id} value={tone.id}>{tone.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-white/50 uppercase tracking-widest mb-2">Creativity — {Math.round(form.temperature * 100)}</label>
+            <input type="range" min="0" max="1" step="0.01" value={form.temperature}
+              onChange={e => set('temperature')(parseFloat(e.target.value))}
+              className="mt-3 w-full accent-orange-500" />
+          </div>
+        </div>
+      </PageCard>
+
+      <PageCard>
+        <label className="block text-xs font-semibold text-white/50 uppercase tracking-widest mb-3">Instruction Prompt</label>
+        <textarea value={form.persona} onChange={e => set('persona')(e.target.value)} rows={14}
+          placeholder={businessConfig.defaultPersona}
+          className="w-full rounded-xl border border-white/10 bg-black/22 px-4 py-4 text-sm leading-6 text-white/82 outline-none placeholder:text-white/22" />
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-white/8 pt-3">
+          <p className="text-xs text-white/32">{form.persona.length} chars · Active module: {activeModule}</p>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setForm(prev => ({ ...prev, persona: businessConfig.defaultPersona, objective: businessConfig.defaultObjective }))} className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.035] px-4 py-2 text-xs font-bold text-white/66 hover:text-white">
+              <RotateCcw className="h-3.5 w-3.5" />Reset Prompt
+            </button>
+            <button onClick={() => { window.location.hash = 'ai_test' }} className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.035] px-4 py-2 text-xs font-bold text-white/66 hover:text-white">
+              <Play className="h-3.5 w-3.5" />Test Bot
+            </button>
+            <SaveBtn onClick={handleSave} loading={saving} saved={saved} />
+          </div>
+        </div>
+      </PageCard>
+
+      <PageCard>
+        <label className="block text-xs font-semibold text-white/50 uppercase tracking-widest mb-3">Fallback Message</label>
+        <input value={form.fallback_msg} onChange={e => set('fallback_msg')(e.target.value)}
+          placeholder="I don't have that information right now — let me connect you with a specialist who can help."
+          className="h-11 w-full rounded-xl border border-white/10 bg-black/22 px-4 text-sm text-white/82 outline-none placeholder:text-white/22" />
+      </PageCard>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <PageCard>
+          <SectionHeader icon={BookOpen} title="Training Data" sub="Manage the sources the AI can use" />
+          <div className="grid gap-2 sm:grid-cols-2">
+            {['Text', 'Q&A', 'Links / Docs', 'Knowledge Base'].map(item => (
+              <button key={item} onClick={() => { window.location.hash = 'ai_knowledge' }}
+                className="rounded-xl border border-white/8 bg-white/[0.03] px-4 py-3 text-left text-sm font-semibold text-white/68 transition-colors hover:bg-white/[0.055] hover:text-white">
+                {item}
+              </button>
+            ))}
+          </div>
+        </PageCard>
+
+        <PageCard>
+          <SectionHeader icon={Sliders} title="Answer Source Settings" sub="Control how the agent chooses answers" />
+          <div className="grid gap-3">
+            {[
+              'Use business knowledge',
+              'Use live operational data',
+              'Allow general AI knowledge',
+              'Escalate when unsure',
+            ].map((item, index) => (
+              <div key={item} className="flex items-center justify-between rounded-xl border border-white/8 bg-white/[0.03] px-4 py-3">
+                <span className="text-sm font-semibold text-white/68">{item}</span>
+                <Toggle on={index !== 2} onChange={() => {}} />
+              </div>
+            ))}
+          </div>
+        </PageCard>
+      </div>
+
+      <PageCard>
+        <button onClick={() => setShowPrev(v => !v)} className="flex w-full items-center justify-between text-left">
+          <div>
+            <h3 className="text-sm font-black text-white">Advanced</h3>
+            <p className="mt-1 text-xs text-white/34">Live prompt preview, debug prompt components, and tool settings</p>
+          </div>
+          {showPrev ? <ChevronUp className="h-4 w-4 text-white/32" /> : <ChevronDown className="h-4 w-4 text-white/32" />}
+        </button>
+        <AnimatePresence>
+          {showPrev && (
+            <motion.div initial={{ height:0, opacity:0 }} animate={{ height:'auto', opacity:1 }} exit={{ height:0, opacity:0 }} className="overflow-hidden">
+              <div className="mt-4 rounded-xl border border-white/8 bg-black/24 p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <span className="text-xs font-bold text-white/70">Live Prompt Preview · ~{tokenCount} tokens · {lengthStatus.label}</span>
+                  <button onClick={copyPrompt} className="inline-flex items-center gap-2 rounded-lg border border-white/8 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-white/66 hover:text-white">
+                    <Copy className="h-3.5 w-3.5" />{copied ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-black/35 p-4 text-[11px] leading-5 text-white/64">{promptPreview}</pre>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </PageCard>
+    </div>
+  )
+
+  return (
+    <div className="flex flex-col gap-5">
       {/* Agent name badge */}
       {agent && (
         <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl w-fit"
           style={{ background:'rgba(244,122,99,0.10)', border:'1px solid rgba(244,122,99,0.2)' }}>
           <Bot className="w-3.5 h-3.5 text-orange-400" />
-          <span className="text-xs font-semibold text-orange-300">{agent.name}</span>
+          <span className="text-xs font-semibold text-orange-300">{agent?.name}</span>
           <span className="text-[10px] text-orange-400/50">· editing instructions</span>
         </div>
       )}

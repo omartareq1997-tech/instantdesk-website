@@ -46,12 +46,12 @@ function pad(value: number) {
   return String(value).padStart(2, '0')
 }
 
-function parseTime(text: string, fallbackHour: number) {
+function parseTime(text: string) {
   const explicitAt = text.match(/\bat\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i)
   const meridiem = Array.from(text.matchAll(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/gi)).at(-1)
   const clock = Array.from(text.matchAll(/\b(\d{1,2}):(\d{2})\b/g)).at(-1)
   const match = explicitAt ?? meridiem ?? clock
-  if (!match) return { hour: fallbackHour, minute: 0 }
+  if (!match) return null
   let hour = Number(match[1])
   const minute = Number(match[2] ?? 0)
   const suffix = match[3]?.toLowerCase()
@@ -93,10 +93,11 @@ function isoWithBusinessOffset(year: number, month: number, day: number, hour: n
   return `${year}-${pad(month + 1)}-${pad(day)}T${pad(hour)}:${pad(minute)}:00${offset}`
 }
 
-function parseDatePhrase(text: string, fallbackHour: number, now = new Date(), timeZone = DEFAULT_RENTAL_TIME_ZONE): string | null {
+function parseDatePhrase(text: string, now = new Date(), timeZone = DEFAULT_RENTAL_TIME_ZONE): string | null {
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text.trim())) return text.trim()
   const lower = text.toLowerCase()
-  const time = parseTime(text, fallbackHour)
+  const time = parseTime(text)
+  if (!time) return null
   let base: Date | null = null
 
   if (/\btomorrow\b/.test(lower)) {
@@ -145,8 +146,9 @@ function splitRentalWindow(message: string, slots: RentalDateWindowSlots) {
   const returnMatches = Array.from(text.matchAll(/\b(?:return|drop(?:off|-off)?)\s+(?!location\b)(?:on\s+)?(.+)$/gi))
   const pickupMatch = pickupMatches.at(-1)
   const returnMatch = returnMatches.at(-1)
-  const pickupText = pickupMatch?.[1] ?? slots.pickup_datetime ?? text
-  const returnText = returnMatch?.[1] ?? slots.return_datetime ?? text
+  const hasDateIntent = /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}[./-]\d{1,2}|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|\d{4}-\d{2}-\d{2}T)\b/i.test(text)
+  const pickupText = pickupMatch?.[1] ?? (hasDateIntent ? text : slots.pickup_datetime ?? text)
+  const returnText = returnMatch?.[1] ?? slots.return_datetime ?? ''
   return {
     pickupText: /\bsame location\b/i.test(pickupText) && slots.pickup_datetime ? slots.pickup_datetime : pickupText,
     returnText: /\bsame location\b/i.test(returnText) && slots.return_datetime ? slots.return_datetime : returnText,
@@ -161,7 +163,7 @@ export function parseRentalDateWindow(
 ) {
   const { pickupText, returnText } = splitRentalWindow(message, slots)
   return {
-    pickupAt: parseDatePhrase(pickupText, 10, now, timeZone),
-    dropoffAt: parseDatePhrase(returnText, 18, now, timeZone),
+    pickupAt: parseDatePhrase(pickupText, now, timeZone),
+    dropoffAt: parseDatePhrase(returnText, now, timeZone),
   }
 }

@@ -53,10 +53,12 @@ test('prompt preview includes car rental module when businessType is car_rental'
   })
 
   await page.goto('/dashboard#ai_instructions')
-  await expect(page.getByText('Active module:')).toBeVisible()
+  await expect(page.getByText('Instruction Prompt').first()).toBeVisible()
   await expect(page.getByText('Car Rental Operations Assistant').first()).toBeVisible()
-  await expect(page.getByText('CAR RENTAL OPERATIONS MODULE').first()).toBeVisible()
-  await expect(page.getByText('Always call the availability checker before offering a car.').first()).toBeVisible()
+  await expect(page.getByText('AI Model').first()).toBeVisible()
+  await expect(page.getByText('Training Data').first()).toBeVisible()
+  await expect(page.getByText('Answer Source Settings').first()).toBeVisible()
+  await expect(page.getByText('Advanced').first()).toBeVisible()
 })
 
 test('businessType persists after refresh on settings page', async ({ checkedPage: page, baseURL }) => {
@@ -121,11 +123,11 @@ test('car_rental selection loads rental AI instructions without real estate labe
   })
 
   await page.goto('/dashboard#ai_instructions')
-  await expect(page.getByText('Active module:')).toBeVisible()
+  await expect(page.getByText('Instruction Prompt').first()).toBeVisible()
   await expect(page.getByText('Car Rental Operations Assistant').first()).toBeVisible()
   const visibleText = await page.locator('body').innerText()
-  expect(visibleText).toContain('CAR RENTAL OPERATIONS MODULE')
-  expect(visibleText).toMatch(/pickup location/i)
+  expect(visibleText).toContain('Use live operational data')
+  expect(visibleText).toContain('Knowledge Base')
   expect(visibleText).not.toContain('Rent or Buy')
   expect(visibleText).not.toContain('Number of Rooms')
   expect(visibleText).not.toContain('2-bedroom flat')

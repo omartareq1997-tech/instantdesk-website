@@ -104,13 +104,27 @@ function carMatches(row: RentalCarRow, text: string) {
   return text.toLowerCase().split(/\s+/).filter(Boolean).every(word => haystack.includes(word))
 }
 
-export function planOperationalTools(context: AgentToolContext): AgentToolName[] {
-  const businessType = context.businessType
-  if (businessType !== 'car_rental') return []
-  const text = norm(context.message)
-  const tools: AgentToolName[] = []
-  const hasCompleteBookingData = Boolean(
-    (context.slots.selected_vehicle || context.slots.car_class) &&
+function hasVehicleOrClass(context: AgentToolContext) {
+  return Boolean(context.slots.selected_vehicle || context.slots.car_class || extractRentalVehicleName(context.message))
+}
+
+function hasExactRentalWindow(context: AgentToolContext) {
+  const { pickupAt, dropoffAt } = parseRentalDateWindow(context.message, context.slots)
+  return Boolean(pickupAt && dropoffAt)
+}
+
+function hasAvailabilityInputs(context: AgentToolContext) {
+  return Boolean(
+    hasVehicleOrClass(context) &&
+    context.slots.pickup_location &&
+    context.slots.dropoff_location &&
+    hasExactRentalWindow(context),
+  )
+}
+
+function hasBookingInputs(context: AgentToolContext) {
+  return Boolean(
+    context.slots.selected_vehicle &&
     context.slots.pickup_location &&
     context.slots.dropoff_location &&
     context.slots.pickup_datetime &&
@@ -119,13 +133,22 @@ export function planOperationalTools(context: AgentToolContext): AgentToolName[]
     context.slots.phone &&
     context.slots.email,
   )
+}
+
+export function planOperationalTools(context: AgentToolContext): AgentToolName[] {
+  const businessType = context.businessType
+  if (businessType !== 'car_rental') return []
+  const text = norm(context.message)
+  const tools: AgentToolName[] = []
+  const hasCompleteBookingData = hasBookingInputs(context)
+  const canCheckAvailability = hasAvailabilityInputs(context)
   if (includesAny(text, ['policy', 'deposit', 'documents', 'license', 'insurance', 'mileage', 'late fee', 'cancel', 'cancellation', 'age requirement'])) {
     tools.push('getBusinessPolicies')
   }
-  if (includesAny(text, ['where can i pick', 'pickup location', 'pick up location', 'drop off', 'airport', 'deliver', 'delivery area', 'locations'])) {
+  if (includesAny(text, ['where can i pick', 'where is your location', "what's your location", 'what is your location', 'pickup location', 'pick up location', 'drop off', 'airport', 'deliver', 'delivery area', 'locations'])) {
     tools.push('getLocations')
   }
-  if (includesAny(text, ['what cars', 'which cars', 'do you have', 'available cars', 'automatic cars', 'suv', 'fleet', 'corolla', 'camry', 'toyota', 'bmw', 'x5', 'mercedes', 'glc', 'skoda', 'superb'])) {
+  if (includesAny(text, ['what cars', 'which cars', 'do you have', 'available cars', 'automatic cars', 'economy', 'economical', 'cheap', 'budget', 'suv', 'fleet', 'corolla', 'camry', 'toyota', 'bmw', 'x5', 'mercedes', 'glc', 'skoda', 'superb'])) {
     tools.push('searchFleet')
   }
   if (wantsCancellation(text)) {
@@ -136,11 +159,11 @@ export function planOperationalTools(context: AgentToolContext): AgentToolName[]
   } else if (wantsBookingUpdate(text)) {
     tools.push('updateBooking')
   }
-  if (includesAny(text, ['available', 'free', 'rent', 'from ', 'until ', 'tomorrow', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'])) {
+  if (canCheckAvailability && includesAny(text, ['available', 'free', 'rent', 'from ', 'until ', 'tomorrow', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'same location', 'drop off', 'drop-off', 'return location', 'automatic', 'manual', 'correct'])) {
     if (!tools.includes('searchFleet')) tools.push('searchFleet')
     tools.push('checkAvailability')
   }
-  if (wantsBookingCreation(text)) {
+  if (hasCompleteBookingData && wantsBookingCreation(text)) {
     if (!tools.includes('searchFleet')) tools.push('searchFleet')
     if (!tools.includes('checkAvailability')) tools.push('checkAvailability')
     tools.push('createBooking')
@@ -148,7 +171,6 @@ export function planOperationalTools(context: AgentToolContext): AgentToolName[]
   if (hasCompleteBookingData && includesAny(text, ['same location', 'drop off', 'drop-off', 'return location', 'automatic', 'manual', 'correct'])) {
     if (!tools.includes('searchFleet')) tools.push('searchFleet')
     if (!tools.includes('checkAvailability')) tools.push('checkAvailability')
-    if (!tools.includes('createBooking')) tools.push('createBooking')
   }
   if (includesAny(text, ['how much', 'cost', 'price', 'total', 'deposit', 'fee'])) {
     if (!tools.includes('searchFleet')) tools.push('searchFleet')
@@ -185,7 +207,8 @@ async function searchFleet(sb: SupabaseClient, context: AgentToolContext): Promi
     .order('name')
   if (error) return { tool: 'searchFleet', ok: false, summary: 'Fleet search failed.', error: error.message }
   const carText = requestedCarText(context.message, context.slots.selected_vehicle)
-  const wantedClass = norm(context.slots.car_class)
+  const classFromText = /\b(economy|economical|cheap|budget|compact|suv|van|minivan|premium|luxury|standard)\b/i.exec(context.message)?.[1]?.toLowerCase()
+  const wantedClass = norm(context.slots.car_class) || (classFromText === 'economical' || classFromText === 'cheap' || classFromText === 'budget' ? 'economy' : classFromText ?? '')
   const wantedTransmission = norm(context.slots.transmission) || (/\bautomatic\b/i.test(context.message) ? 'automatic' : /\bmanual\b/i.test(context.message) ? 'manual' : '')
   const wantedLocation = norm(context.slots.pickup_location) || (/\bkrakow|kraków\b/i.test(context.message) ? 'krakow' : '')
   const cars = ((data ?? []) as RentalCarRow[])
@@ -242,6 +265,9 @@ function firstCar(toolResults: AgentToolResult[]) {
 async function checkAvailability(context: AgentToolContext, toolResults: AgentToolResult[]): Promise<AgentToolResult> {
   const car = firstCar(toolResults)
   const { pickupAt, dropoffAt } = parseRentalDateWindow(context.message, context.slots)
+  if (!context.slots.pickup_location || !context.slots.dropoff_location) {
+    return { tool: 'checkAvailability', ok: false, summary: 'Availability needs pickup and drop-off locations before checking the live calendar.' }
+  }
   if (!pickupAt || !dropoffAt) {
     return { tool: 'checkAvailability', ok: false, summary: 'Availability needs exact pickup and return date/time before checking the live calendar.' }
   }
@@ -309,6 +335,9 @@ async function createBooking(sb: SupabaseClient, context: AgentToolContext, tool
   const car = firstCar(toolResults)
   const availability = toolResults.find(result => result.tool === 'checkAvailability')?.data as RentalAvailabilityResult | undefined
   const { pickupAt, dropoffAt } = parseRentalDateWindow(context.message, context.slots)
+  if (!wantsBookingCreation(context.message)) {
+    return { tool: 'createBooking', ok: false, summary: 'Booking creation needs explicit customer confirmation first.' }
+  }
   if (!car?.id) return { tool: 'createBooking', ok: false, summary: 'Booking creation needs a selected car from the live fleet.' }
   if (!pickupAt || !dropoffAt) return { tool: 'createBooking', ok: false, summary: 'Booking creation needs exact pickup and return date/time.' }
   if (!availability?.available) return { tool: 'createBooking', ok: false, summary: 'Booking was not created because availability has not been confirmed for this car and time window.' }

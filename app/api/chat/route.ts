@@ -37,6 +37,8 @@ import { retrieveRelevantChunks } from '../../lib/knowledgeChunks'
 import { getLimits, checkMonthlyMessageLimit } from '../../lib/usageLimits'
 import { loadLeadMemory, upsertLeadMemory, formatMemoryForPrompt } from '../../lib/leadMemory'
 import { buildAgentSystemPrompt } from '../../lib/agentPrompt'
+import { formatToolResultsForPrompt, runOperationalTools, type AgentToolResult } from '../../lib/agent-tools'
+import { parseRentalDateWindow } from '../../lib/rentalDateTime'
 import { getBusinessTypeConfig, normalizeBusinessType } from '../../lib/businessTypes'
 import {
   HANDOVER_REPLY,
@@ -634,8 +636,11 @@ function extractFromText(text: string): Partial<Slots> {
   const seats = text.match(/\b(\d+)\s*(?:seats?|people|passengers)\b/i)?.[1]
   const bookingNumber = text.match(/\b(?:CR|ID|BK)-?\d{4,8}\b/i)?.[0]
   const airportMention = /\bairport|terminal\b/i.test(text)
-  const pickupLocation = text.match(/\bpick(?:up|-up)?\s+(?:at|from)\s+([^,.]+?)(?:\s+(?:tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at)|[,.]|$)/i)?.[1]
-  const dropoffLocation = text.match(/\b(?:drop(?:off|-off)?|return)\s+(?:at|to)\s+([^,.]+?)(?:\s+(?:tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at)|[,.]|$)/i)?.[1]
+  const pickupLocation = text.match(/\bpick(?:up|-up)?\s+location\s+([^.\n,]+?)(?:[.\n,]|$)/i)?.[1]
+    ?? text.match(/\bpick(?:up|-up)?\s+(?:at|from)\s+([^,.]+?)(?:\s+(?:tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at)|[,.]|$)/i)?.[1]
+  const dropoffLocation = text.match(/\b(?:drop(?:off|-off)?)\s+location\s+([^.\n,]+?)(?:[.\n,]|$)/i)?.[1]
+    ?? text.match(/\b(?:drop(?:off|-off)?|return)\s+(?:at|to)\s+([^,.]+?)(?:\s+(?:tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at)|[,.]|$)/i)?.[1]
+  const rentalWindow = parseRentalDateWindow(text)
 
   return {
     name:          extractName(text)         ?? undefined,
@@ -653,8 +658,8 @@ function extractFromText(text: string): Partial<Slots> {
     viewing_time:  extractViewingTime(text)  ?? undefined,
     pickup_location: pickupLocation?.trim() ?? (airportMention ? 'Airport' : undefined),
     dropoff_location: dropoffLocation?.trim() ?? undefined,
-    pickup_datetime: extractViewingTime(text) ?? undefined,
-    return_datetime: /\b(?:return|drop(?:off|-off)?)\b/i.test(text) ? extractViewingTime(text) ?? undefined : undefined,
+    pickup_datetime: rentalWindow.pickupAt ?? extractViewingTime(text) ?? undefined,
+    return_datetime: rentalWindow.dropoffAt ?? (/\b(?:return|drop(?:off|-off)?)\b/i.test(text) ? extractViewingTime(text) ?? undefined : undefined),
     car_class: carClass ? carClass.toLowerCase() : undefined,
     transmission: transmission ? transmission.toLowerCase() : undefined,
     seats: seats ?? undefined,
@@ -813,10 +818,12 @@ function buildSystemPrompt(
   stage:     string,
   memory:    string,
   businessType?: string | null,
+  toolResults: AgentToolResult[] = [],
 ): string {
   const knowledgeBlock = knowledge.length > 0
     ? knowledge.map(k => `### ${k.title}\n${k.content}`).join('\n\n')
     : '(No knowledge configured for this client.)'
+  const toolBlock = formatToolResultsForPrompt(toolResults)
 
   const confirmedLines: string[] = []
   if (confirmed.name)          confirmedLines.push(`Name: ${confirmed.name}`)
@@ -846,7 +853,7 @@ function buildSystemPrompt(
   return buildAgentSystemPrompt({
     config: agent,
     businessType,
-    knowledgeText: knowledgeBlock,
+    knowledgeText: `${knowledgeBlock}${toolBlock ? `\n\nLIVE OPERATIONAL TOOL RESULTS\n${toolBlock}\n\nUse these tool results as authoritative for fleet inventory, availability, pricing, policies, and locations. Do not contradict tool results. If a required tool failed, explain that the live check could not be completed and offer human support.` : ''}`,
     collectedData: confirmedLines,
     missingFields: missing.map(field => ({ label: field.label, required: field.required })),
     stage,
@@ -1494,6 +1501,22 @@ export async function POST(req: NextRequest) {
   console.log('[SLOTS] missingSlots:',  missing.map(d => d.key).join(', ') || 'none')
   console.log('[SLOTS] qualificationStage:', qualificationStage)
 
+  const operationalToolResults = await runOperationalTools(sb, {
+    businessId,
+    businessType,
+    conversationId: convId,
+    message: messageText,
+    slots: confirmed,
+  })
+  if (operationalToolResults.length > 0) {
+    console.log('[AGENT TOOLS] executed', operationalToolResults.map(result => ({
+      tool: result.tool,
+      ok: result.ok,
+      summary: result.summary,
+      error: result.error ?? null,
+    })))
+  }
+
   /* 8. Check booking intent → short-circuit if ready ─────────────────────── */
   if (!testAiMode && customerRequestedHuman(messageText, liveChatSettings) && liveChatSettings.live_chat_enabled) {
     const { error: userMsgErr } = await sb.from('messages').insert({
@@ -1590,7 +1613,19 @@ export async function POST(req: NextRequest) {
 
   /* 9. Persist user message ──────────────────────────────────────────────── */
   const { error: userMsgErr } = await sb.from('messages').insert({
-    conversation_id: convId, business_id: businessId, role: 'user', content: messageText, metadata: customerMessageMetadata,
+    conversation_id: convId,
+    business_id: businessId,
+    role: 'user',
+    content: messageText,
+    metadata: {
+      ...customerMessageMetadata,
+      operational_tools: operationalToolResults.map(result => ({
+        tool: result.tool,
+        ok: result.ok,
+        summary: result.summary,
+        error: result.error ?? null,
+      })),
+    },
   })
   if (userMsgErr) console.error('[POST /api/chat] user message insert failed:', JSON.stringify(userMsgErr))
   await incrementUnread(convId)
@@ -1604,7 +1639,7 @@ export async function POST(req: NextRequest) {
   }
 
   const openai       = new OpenAI({ apiKey: openaiKey })
-  const systemPrompt = buildSystemPrompt(agent, knowledge, confirmed, missing, qualificationStage, leadMemoryStr, businessType)
+  const systemPrompt = buildSystemPrompt(agent, knowledge, confirmed, missing, qualificationStage, leadMemoryStr, businessType, operationalToolResults)
 
   console.log('[PROMPT] qualificationStage:', qualificationStage, '| nextField:', missing[0]?.label ?? 'none')
   if (process.env.DEBUG_PROMPT === 'true') {
@@ -1724,6 +1759,7 @@ export async function POST(req: NextRequest) {
       ai_summary:     typeof meta.ai_summary === 'string' ? meta.ai_summary : null,
       blocked,
       businessType,
+      operationalTools: operationalToolResults,
       finalSystemPrompt: systemPrompt,
     }
   }

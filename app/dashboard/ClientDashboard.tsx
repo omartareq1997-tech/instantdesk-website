@@ -4046,12 +4046,46 @@ function toInputDateTime(value: Date) {
   return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`
 }
 
+function startOfMonth(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), 1)
+}
+
+function addMonths(value: Date, amount: number) {
+  return new Date(value.getFullYear(), value.getMonth() + amount, 1)
+}
+
+function monthDays(value: Date) {
+  const first = startOfMonth(value)
+  const daysInMonth = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate()
+  return Array.from({ length: daysInMonth }, (_, index) => new Date(first.getFullYear(), first.getMonth(), index + 1))
+}
+
+function monthLabel(value: Date) {
+  return value.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+}
+
+function bookingEnd(booking: RentalBooking) {
+  return booking.dropoffAt ?? booking.returnAt
+}
+
 function bookingTouchesDay(booking: RentalBooking, day: Date) {
   const start = new Date(day)
   start.setHours(0, 0, 0, 0)
   const end = new Date(start)
   end.setDate(end.getDate() + 1)
-  return new Date(booking.pickupAt) < end && new Date(booking.returnAt) > start
+  return new Date(booking.pickupAt) < end && new Date(bookingEnd(booking)) > start
+}
+
+function bookingRangePosition(booking: RentalBooking, day: Date) {
+  const dayStart = new Date(day)
+  dayStart.setHours(0, 0, 0, 0)
+  const dayEnd = new Date(dayStart)
+  dayEnd.setDate(dayEnd.getDate() + 1)
+  const pickup = new Date(booking.pickupAt)
+  const dropoff = new Date(bookingEnd(booking))
+  const starts = pickup >= dayStart && pickup < dayEnd
+  const ends = dropoff > dayStart && dropoff <= dayEnd
+  return { starts, ends, middle: !starts && !ends }
 }
 
 function fmtDateTime(iso?: string | null) {
@@ -4118,23 +4152,14 @@ function RentalOperationsSection() {
   const [calendarModalCar, setCalendarModalCar] = useState<RentalCar | null>(null)
   const [calendarBookings, setCalendarBookings] = useState<RentalBooking[]>([])
   const [calendarStatus, setCalendarStatus] = useState('')
+  const [calendarCursor, setCalendarCursor] = useState(() => startOfMonth(new Date()))
   const [locationModalOpen, setLocationModalOpen] = useState(false)
   const [carForm, setCarForm] = useState<RentalCarForm>(() => emptyRentalCarForm())
   const [locationForm, setLocationForm] = useState<RentalLocationForm>(() => emptyRentalLocationForm())
   const [crudStatus, setCrudStatus] = useState('')
   const fleetCsvRef = useRef<HTMLInputElement>(null)
 
-  const calendarMonthDays = useMemo(() => {
-    const now = new Date()
-    const first = new Date(now.getFullYear(), now.getMonth(), 1)
-    const start = new Date(first)
-    start.setDate(start.getDate() - start.getDay())
-    return Array.from({ length: 42 }, (_, index) => {
-      const day = new Date(start)
-      day.setDate(start.getDate() + index)
-      return day
-    })
-  }, [])
+  const calendarMonths = useMemo(() => [calendarCursor, addMonths(calendarCursor, 1)], [calendarCursor])
 
   const reloadFleet = useCallback(async () => {
     setLoading(true)
@@ -4159,11 +4184,7 @@ function RentalOperationsSection() {
 
   useEffect(() => { void reloadFleet() }, [reloadFleet])
 
-  const days = useMemo(() => Array.from({ length: 7 }, (_, index) => {
-    const day = new Date()
-    day.setDate(day.getDate() + index)
-    return day
-  }), [])
+  const fleetCalendarDays = useMemo(() => monthDays(calendarCursor), [calendarCursor])
 
   async function runAvailabilityCheck() {
     setAvailabilityStatus('Checking fleet availability...')
@@ -4640,32 +4661,41 @@ function RentalOperationsSection() {
 
       {!loading && tab === 'calendar' && (
         <Card className="overflow-hidden">
-          <div className="border-b border-white/8 p-5">
-            <h3 className="text-base font-black text-white">Fleet booking calendar</h3>
-            <p className="mt-1 text-sm text-white/40">Rows are cars, columns are dates. Maintenance and unavailable periods block the same availability checker used by the bot.</p>
+          <div className="flex flex-col gap-3 border-b border-white/8 p-5 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="text-base font-black text-white">Fleet booking calendar</h3>
+              <p className="mt-1 text-sm text-white/40">Rows are cars, columns are real days in {monthLabel(calendarCursor)}. Blocked ranges use the same availability checker as the bot.</p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setCalendarCursor(prev => addMonths(prev, -1))} className="btn-muted">Previous</button>
+              <button onClick={() => setCalendarCursor(startOfMonth(new Date()))} className="btn-muted">Today</button>
+              <button onClick={() => setCalendarCursor(prev => addMonths(prev, 1))} className="btn-muted">Next</button>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <div className="min-w-[980px]">
-              <div className="grid grid-cols-[220px_repeat(7,1fr)] border-b border-white/8 bg-white/[0.025]">
+              <div className="grid border-b border-white/8 bg-white/[0.025]" style={{ gridTemplateColumns: `220px repeat(${fleetCalendarDays.length}, minmax(42px, 1fr))` }}>
                 <div className="p-4 text-xs font-black uppercase tracking-[0.14em] text-white/34">Car</div>
-                {days.map(day => <div key={day.toISOString()} className="p-4 text-xs font-black uppercase tracking-[0.14em] text-white/34">{fmtDate(day.toISOString())}</div>)}
+                {fleetCalendarDays.map(day => <div key={day.toISOString()} className="p-3 text-center text-[10px] font-black uppercase tracking-[0.08em] text-white/34">{day.getDate()}</div>)}
               </div>
               {cars.map(car => (
-                <div key={car.id} className="grid grid-cols-[220px_repeat(7,1fr)] border-b border-white/8 last:border-b-0">
+                <div key={car.id} className="grid border-b border-white/8 last:border-b-0" style={{ gridTemplateColumns: `220px repeat(${fleetCalendarDays.length}, minmax(42px, 1fr))` }}>
                   <div className="p-4">
                     <p className="text-sm font-semibold text-white">{car.name}</p>
                     <p className="mt-1 text-xs text-white/34">{car.className}</p>
                   </div>
-                  {days.map(day => {
+                  {fleetCalendarDays.map(day => {
                     const dayBookings = bookings.filter(booking => booking.carId === car.id && bookingTouchesDay(booking, day))
+                    const primary = dayBookings[0]
+                    const pos = primary ? bookingRangePosition(primary, day) : null
                     return (
-                      <div key={`${car.id}-${day.toISOString()}`} className="min-h-24 border-l border-white/8 p-2">
-                        {dayBookings.map(booking => (
-                          <div key={booking.id} className="mb-2 rounded-lg px-2 py-2 text-xs font-semibold" style={{ background: RENTAL_STATUS_CFG[booking.status]?.bg ?? 'rgba(255,255,255,0.06)', color: RENTAL_STATUS_CFG[booking.status]?.color ?? 'rgba(255,255,255,0.7)' }}>
-                            <div>{booking.bookingNumber}</div>
-                            <div className="mt-1 opacity-75">{RENTAL_STATUS_CFG[booking.status]?.label ?? booking.status}</div>
+                      <div key={`${car.id}-${day.toISOString()}`} title={primary ? `${primary.bookingNumber}: ${fmtDateTime(primary.pickupAt)} → ${fmtDateTime(bookingEnd(primary))}${primary.bufferUntil ? ` · buffer until ${fmtDateTime(primary.bufferUntil)}` : ''}` : 'Free'} className={`relative min-h-16 border-l border-white/8 p-1 ${dayBookings.length ? 'bg-[#f8a36d]/5' : ''}`}>
+                        {primary && (
+                          <div className={`absolute inset-x-0 top-1/2 h-5 -translate-y-1/2 border-y border-[#f8a36d]/30 bg-[#f8a36d]/18 ${pos?.starts ? 'left-1 rounded-l-full border-l' : ''} ${pos?.ends ? 'right-1 rounded-r-full border-r' : ''}`}>
+                            <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_45%,rgba(248,163,109,0.45)_46%,rgba(248,163,109,0.45)_54%,transparent_55%)] bg-[length:8px_8px]" />
                           </div>
-                        ))}
+                        )}
+                        {dayBookings.length > 1 && <span className="absolute right-1 top-1 rounded-full bg-white/10 px-1.5 text-[9px] font-bold text-white/55">+{dayBookings.length - 1}</span>}
                       </div>
                     )
                   })}
@@ -4922,24 +4952,34 @@ function RentalOperationsSection() {
               {calendarStatus && <p className="mt-4 rounded-xl border border-[#f8a36d]/20 bg-[#f8a36d]/10 px-4 py-3 text-sm font-semibold text-[#f8a36d]">{calendarStatus}</p>}
               <div className="mt-5 grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
                 <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
-                  <div className="grid grid-cols-7 gap-2 text-center text-[11px] font-black uppercase tracking-[0.14em] text-white/30">
-                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => <div key={day}>{day}</div>)}
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <button onClick={() => setCalendarCursor(prev => addMonths(prev, -1))} className="btn-muted">Previous</button>
+                    <p className="text-sm font-black text-white">{monthLabel(calendarCursor)} - {monthLabel(addMonths(calendarCursor, 1))}</p>
+                    <button onClick={() => setCalendarCursor(prev => addMonths(prev, 1))} className="btn-muted">Next</button>
                   </div>
-                  <div className="mt-3 grid grid-cols-7 gap-2">
-                    {calendarMonthDays.map(day => {
-                      const dayBookings = calendarBookings.filter(booking => bookingTouchesDay(booking, day))
-                      return (
-                        <div key={day.toISOString()} className={`min-h-24 rounded-xl border p-2 ${dayBookings.length ? 'border-[#f8a36d]/30 bg-[#f8a36d]/10' : 'border-white/8 bg-black/18'}`}>
-                          <div className="text-xs font-bold text-white/62">{day.getDate()}</div>
-                          {dayBookings.slice(0, 2).map(booking => (
-                            <div key={booking.id} className="mt-2 rounded-lg px-2 py-1 text-[10px] font-bold" style={{ background: RENTAL_STATUS_CFG[booking.status]?.bg ?? 'rgba(255,255,255,0.06)', color: RENTAL_STATUS_CFG[booking.status]?.color ?? 'rgba(255,255,255,0.7)' }}>
-                              {booking.customerName}
-                            </div>
-                          ))}
-                          {dayBookings.length > 2 && <div className="mt-1 text-[10px] text-white/35">+{dayBookings.length - 2} more</div>}
+                  <div className="grid gap-5 lg:grid-cols-2">
+                    {calendarMonths.map(month => (
+                      <div key={month.toISOString()}>
+                        <p className="mb-3 text-sm font-black text-white">{monthLabel(month)}</p>
+                        <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-black uppercase tracking-[0.12em] text-white/28">
+                          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => <div key={day}>{day.slice(0, 2)}</div>)}
                         </div>
-                      )
-                    })}
+                        <div className="mt-2 grid grid-cols-7 gap-y-2">
+                          {monthDays(month).map(day => {
+                            const dayBookings = calendarBookings.filter(booking => bookingTouchesDay(booking, day))
+                            const primary = dayBookings[0]
+                            const pos = primary ? bookingRangePosition(primary, day) : null
+                            return (
+                              <div key={day.toISOString()} title={primary ? `${primary.customerName}: ${fmtDateTime(primary.pickupAt)} → ${fmtDateTime(bookingEnd(primary))}${primary.bufferUntil ? ` · buffer until ${fmtDateTime(primary.bufferUntil)}` : ''}` : 'Free'} className={`relative min-h-14 border-y border-white/8 bg-black/18 p-1.5 ${dayBookings.length ? 'border-[#f8a36d]/30 bg-[#f8a36d]/10 text-[#f8a36d]' : 'text-white/60'} ${pos?.starts ? 'rounded-l-xl border-l' : ''} ${pos?.ends ? 'rounded-r-xl border-r' : ''}`}>
+                                <div className="relative z-10 text-xs font-bold">{day.getDate()}</div>
+                                {primary && <div className="absolute inset-1 rounded-lg bg-[linear-gradient(135deg,transparent_45%,rgba(248,163,109,0.4)_46%,rgba(248,163,109,0.4)_54%,transparent_55%)] bg-[length:8px_8px]" />}
+                                {dayBookings.length > 1 && <span className="absolute bottom-1 right-1 z-10 rounded-full bg-black/35 px-1 text-[9px] font-bold text-white/70">+{dayBookings.length - 1}</span>}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
                 <div className="grid gap-4">

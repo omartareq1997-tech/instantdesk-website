@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { checkRentalAvailability, type RentalAvailabilityResult } from './rentalAvailability'
 import { parseRentalDateWindow } from './rentalDateTime'
+import { extractRentalVehicleName } from './rentalVehicle'
 
 export type AgentToolName =
   | 'searchFleet'
@@ -36,6 +37,7 @@ export type AgentToolContext = {
     dropoff_location?: string | null
     pickup_datetime?: string | null
     return_datetime?: string | null
+    selected_vehicle?: string | null
     car_class?: string | null
     transmission?: string | null
     seats?: string | null
@@ -70,23 +72,8 @@ function includesAny(text: string, words: string[]) {
   return words.some(word => text.includes(word))
 }
 
-function requestedCarText(message: string) {
-  const lower = message.toLowerCase()
-  const knownModels = [
-    'toyota corolla',
-    'toyota camry',
-    'toyota yaris',
-    'bmw x5',
-    'mercedes glc',
-    'skoda superb',
-    'corolla',
-    'camry',
-    'yaris',
-    'x5',
-    'glc',
-    'superb',
-  ]
-  return knownModels.find(model => new RegExp(`\\b${model.replace(/\s+/g, '\\s+')}\\b`, 'i').test(lower)) ?? ''
+function requestedCarText(message: string, selectedVehicle?: string | null) {
+  return selectedVehicle?.trim() || extractRentalVehicleName(message) || ''
 }
 
 function bookingReference(context: AgentToolContext) {
@@ -128,7 +115,7 @@ export function planOperationalTools(context: AgentToolContext): AgentToolName[]
   if (includesAny(text, ['where can i pick', 'pickup location', 'pick up location', 'drop off', 'airport', 'deliver', 'delivery area', 'locations'])) {
     tools.push('getLocations')
   }
-  if (includesAny(text, ['what cars', 'which cars', 'do you have', 'available cars', 'automatic cars', 'suv', 'fleet', 'corolla', 'toyota'])) {
+  if (includesAny(text, ['what cars', 'which cars', 'do you have', 'available cars', 'automatic cars', 'suv', 'fleet', 'corolla', 'camry', 'toyota', 'bmw', 'x5', 'mercedes', 'glc', 'skoda', 'superb'])) {
     tools.push('searchFleet')
   }
   if (wantsCancellation(text)) {
@@ -182,7 +169,7 @@ async function searchFleet(sb: SupabaseClient, context: AgentToolContext): Promi
     .eq('active', true)
     .order('name')
   if (error) return { tool: 'searchFleet', ok: false, summary: 'Fleet search failed.', error: error.message }
-  const carText = requestedCarText(context.message)
+  const carText = requestedCarText(context.message, context.slots.selected_vehicle)
   const wantedClass = norm(context.slots.car_class)
   const wantedTransmission = norm(context.slots.transmission) || (/\bautomatic\b/i.test(context.message) ? 'automatic' : /\bmanual\b/i.test(context.message) ? 'manual' : '')
   const wantedLocation = norm(context.slots.pickup_location) || (/\bkrakow|kraków\b/i.test(context.message) ? 'krakow' : '')
@@ -314,7 +301,7 @@ async function createBooking(sb: SupabaseClient, context: AgentToolContext, tool
     return { tool: 'createBooking', ok: false, summary: 'Booking creation needs customer name, phone number, and email first.' }
   }
   const pickupLocationId = await resolveLocationId(sb, context.businessId, context.slots.pickup_location)
-  const dropoffLocationId = await resolveLocationId(sb, context.businessId, context.slots.dropoff_location ?? context.slots.pickup_location)
+  const dropoffLocationId = await resolveLocationId(sb, context.businessId, context.slots.dropoff_location)
   if (!pickupLocationId || !dropoffLocationId) {
     return { tool: 'createBooking', ok: false, summary: 'Booking creation needs valid pickup and drop-off locations first.' }
   }

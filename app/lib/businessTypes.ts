@@ -65,6 +65,7 @@ Booking behavior:
 - Always call the availability checker before offering a car.
 - Respect the configured cleaning/turnaround buffer.
 - Do not show a car as available until the previous booking return time + buffer has passed.
+- For first bookings, do not send or promise a payment link by default. Confirm the booking and explain that payment/deposit is handled at pickup unless business settings explicitly enable online payment links.
 - If exact car is unavailable, offer same-class alternatives first.
 - If same class is unavailable, offer nearest class alternatives with clear price difference.
 - If no suitable option exists, trigger human handover.
@@ -135,6 +136,7 @@ export const BUSINESS_TYPE_CONFIG: Record<BusinessType, BusinessTypeConfig> = {
       'Drop-off location',
       'Pickup date/time',
       'Return date/time',
+      'Selected vehicle',
       'Car class',
       'Transmission',
       'Seats',
@@ -150,7 +152,8 @@ export const BUSINESS_TYPE_CONFIG: Record<BusinessType, BusinessTypeConfig> = {
       { key: 'dropoff_location', label: 'Drop-off location', required: true, question: 'Where would you like to return the car?' },
       { key: 'pickup_datetime', label: 'Pickup date/time', required: true, question: 'When do you want to pick up the car?' },
       { key: 'return_datetime', label: 'Return date/time', required: true, question: 'When will you return the car?' },
-      { key: 'car_class', label: 'Car class', required: true, question: 'What car class do you prefer?' },
+      { key: 'selected_vehicle', label: 'Selected vehicle', required: true, question: 'Which car would you like to book?' },
+      { key: 'car_class', label: 'Car class', required: false, question: 'What car class do you prefer?' },
       { key: 'transmission', label: 'Transmission', required: false, question: 'Do you prefer automatic or manual transmission?' },
       { key: 'name', label: 'Customer name', required: true, question: 'What name should we put on the booking?' },
       { key: 'phone', label: 'Phone number', required: true, question: 'What phone number should we use for the booking?' },

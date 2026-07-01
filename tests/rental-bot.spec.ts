@@ -140,6 +140,7 @@ test('Test AI fields switch to car rental fields', async ({ checkedPage: page, b
   await page.goto('/dashboard#ai_test')
   await expect(page.getByText('Car Rental Operations Assistant').first()).toBeVisible()
   await expect(page.getByText('Pickup location').first()).toBeVisible()
+  await expect(page.getByText('Selected vehicle').first()).toBeVisible()
   await expect(page.getByText('Car class').first()).toBeVisible()
   await expect(page.getByText('Hi, I need an automatic economy car').first()).toBeVisible()
   const visibleText = await page.locator('body').innerText()
@@ -162,6 +163,7 @@ test('prompt builder includes car rental module only for car_rental business typ
 
   expect(rentalPrompt).toContain('CAR RENTAL OPERATIONS MODULE')
   expect(rentalPrompt).toContain('Always call the availability checker before offering a car.')
+  expect(rentalPrompt).toContain('For first bookings, do not send or promise a payment link by default.')
   expect(generalPrompt).not.toContain('CAR RENTAL OPERATIONS MODULE')
 })
 
@@ -330,4 +332,60 @@ test('car rental settings save/reload and buffer appears in Car Rental Ops', asy
 
   await page.goto('/dashboard#rental_ops')
   await expect(page.getByText('180m')).toBeVisible()
+})
+
+test('per-car booking calendar renders connected month date ranges', async ({ checkedPage: page, baseURL }) => {
+  await addMemberSessionCookie(page, baseURL)
+  const car = {
+    id: 'car-range-1',
+    name: 'BMW X5',
+    className: 'SUV',
+    transmission: 'automatic',
+    seats: 5,
+    fuelType: 'petrol',
+    dailyPrice: 420,
+    deposit: 1500,
+    status: 'available',
+    active: true,
+    licensePlate: 'KR X5',
+    locationName: 'Kraków Bocheńska 2a',
+  }
+  const booking = {
+    id: 'booking-range-1',
+    bookingNumber: 'RB-RANGE',
+    carId: car.id,
+    customerName: 'Calendar Tester',
+    customerPhone: '510998000',
+    pickupAt: '2026-07-12T10:00:00+02:00',
+    returnAt: '2026-07-15T18:00:00+02:00',
+    dropoffAt: '2026-07-15T18:00:00+02:00',
+    bufferUntil: '2026-07-15T20:00:00+02:00',
+    pickupLocation: 'Kraków Bocheńska 2a',
+    dropoffLocation: 'Kraków Bocheńska 2a',
+    status: 'confirmed',
+    totalPrice: 1260,
+    deposit: 1500,
+    paymentStatus: 'pending',
+  }
+  const settings = { cleaningBufferMinutes: 120, currency: 'PLN', syncDirection: 'none', externalSyncEnabled: false }
+
+  await page.route('**/api/business/settings', route => route.fulfill({ status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ businessType: 'car_rental' }) }))
+  await page.route('**/api/rental/fleet', route => route.fulfill({
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ migrationRequired: false, cars: [car], bookings: [booking], locations: [], settings }),
+  }))
+  await page.route('**/api/rental/cars/car-range-1/calendar', route => route.fulfill({
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ car, bookings: [booking] }),
+  }))
+
+  await page.goto('/dashboard#rental_ops')
+  await page.getByTitle('Booking calendar').click()
+  await expect(page.getByText('Booking Calendar')).toBeVisible()
+  await expect(page.getByText('July 2026', { exact: true })).toBeVisible()
+  await expect(page.getByText('August 2026', { exact: true })).toBeVisible()
+  await expect(page.getByText('Calendar Tester')).toBeVisible()
+  await expect(page.getByText(/Buffer until 15 Jul 2026, 20:00/)).toBeVisible()
 })

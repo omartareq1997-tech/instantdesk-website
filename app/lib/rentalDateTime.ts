@@ -115,6 +115,19 @@ function parseDatePhrase(text: string, fallbackHour: number, now = new Date(), t
       return isoWithBusinessOffset(year, month, day, time.hour, time.minute, timeZone)
     }
 
+    const numericMatch = lower.match(/\b(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\b/)
+    if (numericMatch) {
+      const day = Number(numericMatch[1])
+      const month = Number(numericMatch[2]) - 1
+      const rawYear = numericMatch[3]
+      let year = rawYear ? Number(rawYear.length === 2 ? `20${rawYear}` : rawYear) : now.getFullYear()
+      const candidate = new Date(year, month, day, time.hour, time.minute)
+      if (!rawYear && candidate.getTime() < now.getTime() - 24 * 60 * 60 * 1000) year += 1
+      if (day >= 1 && day <= 31 && month >= 0 && month <= 11) {
+        return isoWithBusinessOffset(year, month, day, time.hour, time.minute, timeZone)
+      }
+    }
+
     const weekday = Object.keys(WEEKDAY_INDEX).find(day => new RegExp(`\\b${day}\\b`, 'i').test(lower))
     if (weekday) base = nextWeekday(now, WEEKDAY_INDEX[weekday])
   }

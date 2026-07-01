@@ -37,6 +37,7 @@ interface MemorySlots {
   dropoff_location?: string | null
   pickup_datetime?: string | null
   return_datetime?: string | null
+  selected_vehicle?: string | null
   car_class?: string | null
   transmission?: string | null
   seats?: string | null
@@ -89,6 +90,7 @@ function detectViewedProperties(messages: { role: string; content: string }[]): 
 
 function buildPreferences(slots: MemorySlots): string | null {
   const parts: string[] = []
+  if (slots.selected_vehicle) parts.push(slots.selected_vehicle)
   if (slots.car_class)     parts.push(slots.car_class)
   if (slots.transmission)  parts.push(slots.transmission)
   if (slots.seats)         parts.push(`${slots.seats} seats`)
@@ -101,7 +103,8 @@ function buildPreferences(slots: MemorySlots): string | null {
 function buildSummary(slots: MemorySlots, stage: string): string | null {
   const parts: string[] = []
   if (slots.name)          parts.push(slots.name)
-  if (slots.car_class)     parts.push(`${slots.car_class} rental`)
+  if (slots.selected_vehicle) parts.push(`${slots.selected_vehicle} rental`)
+  else if (slots.car_class) parts.push(`${slots.car_class} rental`)
   if (slots.pickup_location) parts.push(`pickup ${slots.pickup_location}`)
   if (slots.pickup_datetime) parts.push(`from ${slots.pickup_datetime}`)
   if (slots.return_datetime) parts.push(`to ${slots.return_datetime}`)
@@ -115,7 +118,7 @@ function buildSummary(slots: MemorySlots, stage: string): string | null {
 }
 
 function buildNextBestAction(stage: string, slots: MemorySlots): string {
-  if (slots.car_class || slots.pickup_location || slots.pickup_datetime || slots.booking_number) {
+  if (slots.selected_vehicle || slots.car_class || slots.pickup_location || slots.pickup_datetime || slots.booking_number) {
     if (stage === 'booked') return 'Booking details captured — prepare confirmation and pickup instructions'
     if (slots.extension_request) return 'Extension requested — check same-car availability and hand over if unavailable'
     if (stage === 'ready_to_book') return 'Core rental details collected — check availability before offering a vehicle'
@@ -124,7 +127,7 @@ function buildNextBestAction(stage: string, slots: MemorySlots): string {
       if (!slots.pickup_location) missing.push('pickup location')
       if (!slots.pickup_datetime) missing.push('pickup date/time')
       if (!slots.return_datetime) missing.push('return date/time')
-      if (!slots.car_class) missing.push('car class')
+      if (!slots.selected_vehicle && !slots.car_class) missing.push('selected car or car class')
       if (!slots.name) missing.push('customer name')
       return missing.length ? `Still need: ${missing.slice(0, 3).join(', ')}` : 'Check availability and guide toward booking'
     }

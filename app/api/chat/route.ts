@@ -39,6 +39,7 @@ import { loadLeadMemory, upsertLeadMemory, formatMemoryForPrompt } from '../../l
 import { buildAgentSystemPrompt } from '../../lib/agentPrompt'
 import { formatToolResultsForPrompt, runOperationalTools, type AgentToolResult } from '../../lib/agent-tools'
 import { parseRentalDateWindow } from '../../lib/rentalDateTime'
+import { extractRentalVehicleName } from '../../lib/rentalVehicle'
 import { getBusinessTypeConfig, normalizeBusinessType } from '../../lib/businessTypes'
 import {
   HANDOVER_REPLY,
@@ -80,6 +81,7 @@ interface Slots {
   dropoff_location: string | null
   pickup_datetime: string | null
   return_datetime: string | null
+  selected_vehicle: string | null
   car_class: string | null
   transmission: string | null
   seats: string | null
@@ -660,6 +662,7 @@ function extractFromText(text: string): Partial<Slots> {
     dropoff_location: dropoffLocation?.trim() ?? undefined,
     pickup_datetime: rentalWindow.pickupAt ?? extractViewingTime(text) ?? undefined,
     return_datetime: rentalWindow.dropoffAt ?? (/\b(?:return|drop(?:off|-off)?)\b/i.test(text) ? extractViewingTime(text) ?? undefined : undefined),
+    selected_vehicle: extractRentalVehicleName(text) ?? undefined,
     car_class: carClass ? carClass.toLowerCase() : undefined,
     transmission: transmission ? transmission.toLowerCase() : undefined,
     seats: seats ?? undefined,
@@ -672,10 +675,35 @@ function extractFromText(text: string): Partial<Slots> {
    CONFIRMED SLOTS  —  single source of truth
 ═══════════════════════════════════════════════════════════════════════════ */
 
+function latestExtractedSlots(userTexts: string[]): Partial<Slots> {
+  return userTexts.reduce<Partial<Slots>>((acc, text) => {
+    const next = extractFromText(text)
+    for (const [key, value] of Object.entries(next) as [keyof Slots, string | undefined][]) {
+      if (value) acc[key] = value
+    }
+    return acc
+  }, {})
+}
+
+function isLocationAffirmation(text: string) {
+  return /\b(yes|yeah|yep|ok|okay|fine|correct|that location|same location|works|sounds good)\b/i.test(text)
+}
+
+function latestAssistantSuggestedLocation(history: { role: string; content: string }[]): string | null {
+  const assistantMessages = history.filter(message => message.role === 'assistant').map(message => message.content).reverse()
+  for (const content of assistantMessages) {
+    const known = content.match(/\bKrak[oó]w\s+Boche[ńn]ska\s+2a\b/i)?.[0]
+    if (known) return known
+    const labelled = content.match(/\b(?:pickup|pick-up)\s+location(?: is|:)?\s+([^.\n]+?)(?:[.\n]|$)/i)?.[1]?.trim()
+    if (labelled && labelled.length <= 90) return labelled
+  }
+  return null
+}
+
 /**
- * Merge existing lead row + ALL user messages + current message into one
- * authoritative Slots object.
- * Lead DB data always wins over extracted values (it was already verified).
+ * Merge existing lead row + latest user-confirmed values into one
+ * authoritative Slots object. Rental operational fields are newest-message-wins
+ * so corrected dates, cars, and locations do not stay stale in the Test AI UI.
  */
 function buildConfirmedSlots(
   existingLead:  ExistingLead | null,
@@ -703,6 +731,7 @@ function buildConfirmedSlots(
     dropoff_location: strOrNull(meta.dropoff_location),
     pickup_datetime: strOrNull(meta.pickup_datetime),
     return_datetime: strOrNull(meta.return_datetime),
+    selected_vehicle: strOrNull(meta.selected_vehicle),
     car_class: strOrNull(meta.car_class),
     transmission: strOrNull(meta.transmission),
     seats: strOrNull(meta.seats),
@@ -711,15 +740,19 @@ function buildConfirmedSlots(
     extension_request: strOrNull(meta.extension_request),
   }
 
-  // Extract from all user messages + current (concatenated for pattern matching)
   const userTexts = [
     ...history.filter(m => m.role === 'user').map(m => m.content),
     currentMsg,
   ]
-  const allUserText = userTexts.join('\n')
-  const extracted   = extractFromText(allUserText)
+  const extracted = latestExtractedSlots(userTexts)
+  const currentExtracted = extractFromText(currentMsg)
+  if (!currentExtracted.pickup_location && isLocationAffirmation(currentMsg)) {
+    const suggestedLocation = latestAssistantSuggestedLocation(history)
+    if (suggestedLocation) extracted.pickup_location = suggestedLocation
+  }
 
-  // Merge: DB wins over extracted, extracted fills in nulls
+  // Stable identity fields keep DB continuity; operational rental fields use
+  // latest confirmed values so corrections update immediately.
   return {
     name:          fromDB.name          ?? extracted.name          ?? null,
     phone:         fromDB.phone         ?? extracted.phone         ?? null,
@@ -734,11 +767,12 @@ function buildConfirmedSlots(
     rooms:         fromDB.rooms         ?? extracted.rooms         ?? null,
     deal_type:     fromDB.deal_type     ?? extracted.deal_type     ?? null,
     viewing_time:  fromDB.viewing_time  ?? extracted.viewing_time  ?? null,
-    pickup_location: fromDB.pickup_location ?? extracted.pickup_location ?? null,
-    dropoff_location: fromDB.dropoff_location ?? extracted.dropoff_location ?? null,
-    pickup_datetime: fromDB.pickup_datetime ?? extracted.pickup_datetime ?? null,
-    return_datetime: fromDB.return_datetime ?? extracted.return_datetime ?? null,
-    car_class: fromDB.car_class ?? extracted.car_class ?? null,
+    pickup_location: extracted.pickup_location ?? fromDB.pickup_location ?? null,
+    dropoff_location: extracted.dropoff_location ?? fromDB.dropoff_location ?? null,
+    pickup_datetime: extracted.pickup_datetime ?? fromDB.pickup_datetime ?? null,
+    return_datetime: extracted.return_datetime ?? fromDB.return_datetime ?? null,
+    selected_vehicle: extracted.selected_vehicle ?? fromDB.selected_vehicle ?? null,
+    car_class: extracted.car_class ?? fromDB.car_class ?? null,
     transmission: fromDB.transmission ?? extracted.transmission ?? null,
     seats: fromDB.seats ?? extracted.seats ?? null,
     extras: fromDB.extras ?? extracted.extras ?? null,
@@ -798,7 +832,7 @@ function hasEnoughForBooking(confirmed: Slots, businessType?: string | null): bo
   const type = normalizeBusinessType(businessType)
   if (type === 'car_rental') {
     const hasContact = !!(confirmed.name || confirmed.phone || confirmed.email)
-    return !!(confirmed.pickup_location && confirmed.pickup_datetime && confirmed.return_datetime && confirmed.car_class && hasContact)
+    return !!(confirmed.pickup_location && confirmed.dropoff_location && confirmed.pickup_datetime && confirmed.return_datetime && (confirmed.selected_vehicle || confirmed.car_class) && hasContact)
   }
   const hasLocation = !!(confirmed.city)
   const hasProperty = !!(confirmed.property_type || confirmed.deal_type)
@@ -842,6 +876,7 @@ function buildSystemPrompt(
   if (confirmed.dropoff_location) confirmedLines.push(`Drop-off location: ${confirmed.dropoff_location}`)
   if (confirmed.pickup_datetime) confirmedLines.push(`Pickup date/time: ${confirmed.pickup_datetime}`)
   if (confirmed.return_datetime) confirmedLines.push(`Return date/time: ${confirmed.return_datetime}`)
+  if (confirmed.selected_vehicle) confirmedLines.push(`Selected vehicle: ${confirmed.selected_vehicle}`)
   if (confirmed.car_class) confirmedLines.push(`Car class: ${confirmed.car_class}`)
   if (confirmed.transmission) confirmedLines.push(`Transmission: ${confirmed.transmission}`)
   if (confirmed.seats) confirmedLines.push(`Seats: ${confirmed.seats}`)
@@ -903,6 +938,58 @@ function guardReply(
     return { reply: `One more thing — could you share your ${missing[0].label.toLowerCase()}?`, blocked: true }
   }
   return { reply, blocked: false }
+}
+
+function rentalToolReplyOverride(
+  toolResults: AgentToolResult[],
+  confirmed: Slots,
+  missing: SlotDef[],
+  businessType?: string | null,
+): string | null {
+  if (normalizeBusinessType(businessType) !== 'car_rental' || toolResults.length === 0) return null
+  const create = toolResults.find(result => result.tool === 'createBooking')
+  const availability = toolResults.find(result => result.tool === 'checkAvailability')
+  const price = toolResults.find(result => result.tool === 'calculatePrice')
+  const fleet = toolResults.find(result => result.tool === 'searchFleet')
+  const selected = confirmed.selected_vehicle ?? confirmed.car_class ?? 'the selected car'
+
+  if (create?.ok) {
+    const data = create.data as { bookingNumber?: string; status?: string } | undefined
+    return [
+      `Your booking has been created for ${selected}.`,
+      data?.bookingNumber ? `Reference: ${data.bookingNumber}.` : null,
+      data?.status ? `Status: ${data.status}.` : null,
+      confirmed.pickup_datetime && confirmed.return_datetime ? `Rental window: ${confirmed.pickup_datetime} to ${confirmed.return_datetime}.` : null,
+      'The team will contact you to confirm final pickup details. Payment/deposit is handled at pickup unless the business has enabled online payment links.',
+    ].filter(Boolean).join(' ')
+  }
+
+  if (create && !create.ok) {
+    const requiredOrder = ['dropoff_location', 'pickup_location', 'pickup_datetime', 'return_datetime', 'selected_vehicle', 'car_class', 'name', 'phone', 'email']
+    const nextMissing = requiredOrder
+      .map(key => missing.find(field => field.key === key))
+      .find(Boolean)
+    if (nextMissing) return `${create.summary} ${nextMissing.question}`
+    return create.error ? `${create.summary} ${create.error}` : create.summary
+  }
+
+  if (availability) {
+    if (!availability.ok) {
+      const nextMissing = missing.find(field => ['dropoff_location', 'pickup_location', 'pickup_datetime', 'return_datetime', 'selected_vehicle', 'car_class'].includes(String(field.key)))
+      return nextMissing ? `${availability.summary} ${nextMissing.question}` : availability.summary
+    }
+    const nextMissing = missing.find(field => ['name', 'phone', 'email', 'dropoff_location', 'pickup_location'].includes(String(field.key)))
+    const pieces = [availability.summary]
+    if (price?.ok) pieces.push(price.summary)
+    if (nextMissing) pieces.push(nextMissing.question)
+    return pieces.join(' ')
+  }
+
+  if (fleet?.ok && !availability && !price) {
+    return null
+  }
+
+  return null
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -1557,7 +1644,7 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  if (detectBookingIntent(messageText) && hasEnoughForBooking(confirmed, businessType)) {
+  if (normalizeBusinessType(businessType) !== 'car_rental' && detectBookingIntent(messageText) && hasEnoughForBooking(confirmed, businessType)) {
     const stillNeedContact = !confirmed.phone && !confirmed.email
     const bookingReply = stillNeedContact
       ? `I'd love to arrange a viewing! Could I get your phone number or email so our team can confirm the available times?`
@@ -1662,8 +1749,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: classified.adminMessage }, { status: classified.responseStatus })
   }
 
-  /* 11. Guard reply — block any answer that re-asks confirmed slots ───────── */
-  const { reply: finalReply, blocked } = guardReply(rawReply, confirmed, missing)
+  /* 11. Guard reply — block stale/holding answers and repeated questions ─── */
+  const operationalReply = rentalToolReplyOverride(operationalToolResults, confirmed, missing, businessType)
+  const { reply: finalReply, blocked } = guardReply(operationalReply ?? rawReply, confirmed, missing)
   console.log('[GUARD] blockedRepeatedQuestion:', blocked)
 
   if (!testAiMode && aiCannotAnswer(finalReply, liveChatSettings, agent.fallback_msg) && liveChatSettings.live_chat_enabled) {
@@ -1873,7 +1961,7 @@ async function persistLead(
   const namePart = confirmed.name ? confirmed.name : null
   let summary = ''
   if (namePart && normalizedBusinessType === 'car_rental') {
-    const carPart = confirmed.car_class ? `${confirmed.car_class} car` : 'car rental'
+    const carPart = confirmed.selected_vehicle ?? (confirmed.car_class ? `${confirmed.car_class} car` : 'car rental')
     const pickupPart = confirmed.pickup_location ? ` from ${confirmed.pickup_location}` : ''
     const dropoffPart = confirmed.dropoff_location ? ` to ${confirmed.dropoff_location}` : ''
     const datesPart = confirmed.pickup_datetime || confirmed.return_datetime
@@ -1901,7 +1989,7 @@ async function persistLead(
     name:          confirmed.name  ?? (existing?.name === 'Website Visitor' ? null : existing?.name) ?? null,
     phone:         confirmed.phone ?? existing?.phone ?? null,
     email:         confirmed.email ?? existing?.email ?? null,
-    interest:      confirmed.service_interest ?? confirmed.car_class ?? confirmed.property_type ?? confirmed.deal_type ?? existing?.interest ?? null,
+    interest:      confirmed.service_interest ?? confirmed.selected_vehicle ?? confirmed.car_class ?? confirmed.property_type ?? confirmed.deal_type ?? existing?.interest ?? null,
     // Direct columns on leads table
     ai_summary:    summary || null,
     intent:        confirmed.deal_type ?? null,
@@ -1930,6 +2018,7 @@ async function persistLead(
       ...(confirmed.dropoff_location && { dropoff_location: confirmed.dropoff_location }),
       ...(confirmed.pickup_datetime && { pickup_datetime: confirmed.pickup_datetime }),
       ...(confirmed.return_datetime && { return_datetime: confirmed.return_datetime }),
+      ...(confirmed.selected_vehicle && { selected_vehicle: confirmed.selected_vehicle }),
       ...(confirmed.car_class && { car_class: confirmed.car_class }),
       ...(confirmed.transmission && { transmission: confirmed.transmission }),
       ...(confirmed.seats && { seats: confirmed.seats }),

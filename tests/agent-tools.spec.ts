@@ -1,6 +1,7 @@
 import { expect, test } from './fixtures'
 import { planOperationalTools } from '../app/lib/agent-tools'
 import { parseRentalDateWindow } from '../app/lib/rentalDateTime'
+import { extractRentalVehicleName } from '../app/lib/rentalVehicle'
 
 test.describe('agent operational tool planner', () => {
   const baseContext = {
@@ -84,6 +85,21 @@ test.describe('agent operational tool planner', () => {
     )
     expect(parsed.pickupAt).toContain('2026-07-02T09:00:00')
     expect(parsed.dropoffAt).toContain('2026-07-09T22:00:00')
+  })
+
+  test('parses corrected numeric return dates as business-time ISO values', () => {
+    const parsed = parseRentalDateWindow(
+      'Pickup tomorrow 10:00 and return 09/07/2026 22:00.',
+      {},
+      new Date('2026-07-01T12:00:00+02:00'),
+    )
+    expect(parsed.pickupAt).toContain('2026-07-02T10:00:00')
+    expect(parsed.dropoffAt).toContain('2026-07-09T22:00:00')
+  })
+
+  test('extracts selected rental vehicle models from customer messages', () => {
+    expect(extractRentalVehicleName('I want the BMW X5 please')).toBe('BMW X5')
+    expect(extractRentalVehicleName('Please reserve Corolla for me')).toBe('Toyota Corolla')
   })
 
   test('reuses previously stored ISO pickup and return slot values', () => {

@@ -103,6 +103,16 @@ interface ChatMessage {
     ai_summary:     string | null
     blocked:        boolean
     businessType?: string | null
+    bot?: {
+      id: string
+      name: string
+      businessId: string
+      businessType: string
+      model: string
+      resolution: string
+      toolsEnabled: string[]
+      instructionPreview: string
+    }
     finalSystemPrompt?: string
   }
 }
@@ -225,7 +235,7 @@ function useActiveBusinessType() {
    PAGE 1: AI OVERVIEW
 ══════════════════════════════════════════════════════════════ */
 
-function AIOverviewPage({ businessId }: { businessId: string }) {
+function AIOverviewPage({ businessId, selectedBotId }: { businessId: string; selectedBotId?: string | null }) {
   const [agent,     setAgent]     = useState<AgentConfig | null>(null)
   const [kCount,    setKCount]    = useState(0)
   const [convCount, setConvCount] = useState(0)
@@ -236,7 +246,7 @@ function AIOverviewPage({ businessId }: { businessId: string }) {
     async function load() {
       setLoading(true)
       const [agentRes, kRes, convRes, qualRes] = await Promise.all([
-        fetch('/api/ai-agent/agent'),
+        fetch(`/api/ai-agent/agent${botQuery(selectedBotId)}`),
         fetch('/api/ai-agent/knowledge'),
         supabase.from('conversations').select('id', { count:'exact', head:true }).eq('business_id', businessId),
         fetch('/api/ai-agent/qualification'),
@@ -251,7 +261,7 @@ function AIOverviewPage({ businessId }: { businessId: string }) {
       setLoading(false)
     }
     void load()
-  }, [businessId])
+  }, [businessId, selectedBotId])
 
   if (loading) return <Spinner />
 
@@ -346,11 +356,15 @@ function AIOverviewPage({ businessId }: { businessId: string }) {
   )
 }
 
+function botQuery(botId?: string | null) {
+  return botId ? `?bot_id=${encodeURIComponent(botId)}` : ''
+}
+
 /* ══════════════════════════════════════════════════════════════
    PAGE 2: AI INSTRUCTIONS
 ══════════════════════════════════════════════════════════════ */
 
-function AIInstructionsPage() {
+function AIInstructionsPage({ selectedBotId }: { selectedBotId?: string | null }) {
   const [agent,    setAgent]    = useState<AgentConfig | null>(null)
   const [loading,  setLoading]  = useState(true)
   const [saving,   setSaving]   = useState(false)
@@ -373,7 +387,7 @@ function AIInstructionsPage() {
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/ai-agent/agent').then(r => r.json()) as Promise<{ agent: AgentConfig | null }>,
+      fetch(`/api/ai-agent/agent${botQuery(selectedBotId)}`).then(r => r.json()) as Promise<{ agent: AgentConfig | null }>,
       Promise.resolve(null) as Promise<null>,
     ])
       .then(([agentData]) => {
@@ -391,12 +405,12 @@ function AIInstructionsPage() {
         }
       })
       .finally(() => setLoading(false))
-  }, [businessConfig.defaultObjective, businessConfig.defaultPersona])
+  }, [businessConfig.defaultObjective, businessConfig.defaultPersona, selectedBotId])
 
   const handleSave = async () => {
     setSaving(true); setError(null)
     try {
-      const res  = await fetch('/api/ai-agent/agent', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(form) })
+      const res  = await fetch('/api/ai-agent/agent', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ ...form, bot_id: selectedBotId ?? undefined }) })
       const data = await res.json() as { error?: string }
       if (!res.ok) { setError(data.error ?? 'Save failed'); return }
       setSaved(true); setTimeout(() => setSaved(false), 3000)
@@ -1509,10 +1523,12 @@ function LeadQualificationPage({ businessId }: { businessId: string }) {
 
 function TestAIPage({
   businessId,
+  selectedBotId,
   onLeadCreated,
   onAppointmentCreated,
 }: {
   businessId:           string
+  selectedBotId?:       string | null
   onLeadCreated?:       (leadId: string) => void
   onAppointmentCreated?:(apptId: string) => void
 }) {
@@ -1555,7 +1571,7 @@ function TestAIPage({
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ business_id: businessId, conversation_id: convId, message: text, debug: true, test_ai: true }),
+        body: JSON.stringify({ business_id: businessId, bot_id: selectedBotId ?? undefined, conversation_id: convId, message: text, debug: true, test_ai: true }),
       })
       const data = await res.json() as {
         reply?: string
@@ -1618,6 +1634,11 @@ function TestAIPage({
             </div>
             <span className="text-sm font-bold text-white">AI Simulator</span>
             <span className="text-[10px] text-orange-300/60 font-semibold">{businessConfig.moduleName}</span>
+            {lastDebug?.bot && (
+              <span className="hidden rounded-full px-2 py-0.5 font-mono text-[9px] text-white/36 sm:inline" style={{ background:'rgba(255,255,255,0.045)', border:'1px solid rgba(255,255,255,0.07)' }}>
+                {lastDebug.bot.name} · {lastDebug.bot.id.slice(0, 8)}
+              </span>
+            )}
             {convId && (
               <span className="text-[10px] text-white/25 font-mono truncate max-w-[120px]">{convId.slice(0,8)}…</span>
             )}
@@ -1738,6 +1759,20 @@ function TestAIPage({
           </div>
         </div>
 
+        {lastDebug?.bot && (
+          <div className="rounded-2xl p-4"
+            style={{ background:'rgba(52,211,153,0.045)', border:'1px solid rgba(52,211,153,0.16)' }}>
+            <div className="mb-3 text-[10px] font-bold uppercase tracking-widest text-emerald-300/65">Selected Bot</div>
+            <div className="space-y-1.5 text-[10px] text-white/44">
+              <div className="flex justify-between gap-3"><span>Name</span><span className="truncate text-emerald-200/80">{lastDebug.bot.name}</span></div>
+              <div className="flex justify-between gap-3"><span>Bot ID</span><span className="font-mono text-white/52">{lastDebug.bot.id.slice(0, 8)}...</span></div>
+              <div className="flex justify-between gap-3"><span>Model</span><span>{lastDebug.bot.model}</span></div>
+              <div className="flex justify-between gap-3"><span>Tools</span><span>{lastDebug.bot.toolsEnabled.length ? 'enabled' : 'disabled'}</span></div>
+              <div className="flex justify-between gap-3"><span>Resolution</span><span className="truncate">{lastDebug.bot.resolution}</span></div>
+            </div>
+          </div>
+        )}
+
         {/* Extracted slots */}
         <div className="rounded-2xl p-4"
           style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.07)' }}>
@@ -1824,24 +1859,27 @@ function TestAIPage({
 export default function AIAgentSection({
   section,
   businessId,
+  selectedBotId,
   onLeadCreated,
   onAppointmentCreated,
 }: {
   section:               string
   businessId:            string
+  selectedBotId?:        string | null
   onLeadCreated?:        (leadId: string) => void
   onAppointmentCreated?: (apptId: string) => void
 }) {
   return (
     <AnimatePresence mode="wait">
       <motion.div key={section} initial={{ opacity:0, y:8 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-6 }} transition={{ duration:0.18 }}>
-        {section === 'ai_overview'      && <AIOverviewPage     businessId={businessId} />}
-        {section === 'ai_instructions'  && <AIInstructionsPage />}
+        {section === 'ai_overview'      && <AIOverviewPage     businessId={businessId} selectedBotId={selectedBotId} />}
+        {section === 'ai_instructions'  && <AIInstructionsPage selectedBotId={selectedBotId} />}
         {section === 'ai_knowledge'     && <KnowledgeBasePage />}
         {section === 'ai_qualification' && <LeadQualificationPage businessId={businessId} />}
         {section === 'ai_test'          && (
           <TestAIPage
             businessId={businessId}
+            selectedBotId={selectedBotId}
             onLeadCreated={onLeadCreated}
             onAppointmentCreated={onAppointmentCreated}
           />

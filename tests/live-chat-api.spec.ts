@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { NextRequest } from 'next/server'
 import { expect, test } from './fixtures'
 import { POST as postChat } from '../app/api/chat/route'
+import { resolveBotContext } from '../app/lib/bot-context'
 
 const BUSINESS_ID = '0616a47a-2c01-49ce-a798-385f8276b92b'
 const MISSING_OPENAI_KEY_MESSAGE = 'OPENAI_API_KEY is missing. Add it in Vercel Environment Variables and redeploy.'
@@ -116,6 +117,36 @@ async function cleanupTestAiBusiness(sb: ReturnType<typeof adminClient>, busines
   await sb.from('businesses').delete().eq('id', businessId)
 }
 
+async function createBotIsolationBusiness(name: string, businessType: string) {
+  const sb = adminClient()
+  const businessId = crypto.randomUUID()
+  await sb.from('businesses').insert({ id: businessId, name, business_type: businessType })
+  return { sb, businessId }
+}
+
+async function insertIsolationBot(sb: ReturnType<typeof adminClient>, businessId: string, input: {
+  name: string
+  persona: string
+  objective: string
+  active?: boolean
+  model?: string
+}) {
+  const { data, error } = await sb.from('agents').insert({
+    business_id: businessId,
+    name: input.name,
+    active: input.active ?? true,
+    persona: input.persona,
+    objective: input.objective,
+    tone: 'professional',
+    fallback_msg: 'I do not know.',
+    model: input.model ?? 'gpt-4o-mini',
+    temperature: 0.1,
+  }).select('id').maybeSingle()
+  expect(error).toBeNull()
+  expect(data?.id).toBeTruthy()
+  return data!.id as string
+}
+
 async function postChatRouteWithMissingOpenAi(body: Record<string, unknown>) {
   const previousKey = process.env.OPENAI_API_KEY
   delete process.env.OPENAI_API_KEY
@@ -216,6 +247,117 @@ test.describe('Live Chat API production boundaries', () => {
         .eq('business_id', businessId)
       expect(error).toBeNull()
       expect(conversations?.map(row => row.status)).not.toContain('handover_requested')
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('bot resolver prefers the car rental bot over a stale Dubai real estate bot inside the same business', async () => {
+    const { sb, businessId } = await createBotIsolationBusiness('QA Bot Isolation Car Rental', 'car_rental')
+    try {
+      await insertIsolationBot(sb, businessId, {
+        name: 'Dubai Real Estate Assistant',
+        persona: 'You are a luxury real estate assistant in Dubai.',
+        objective: 'Sell premium villas and property viewings.',
+      })
+      const carBotId = await insertIsolationBot(sb, businessId, {
+        name: 'Car Rental Operations Assistant',
+        persona: 'You are a car rental operations assistant.',
+        objective: 'Help customers rent vehicles from the live fleet and booking calendar.',
+        model: 'gemini-2.5-pro',
+      })
+
+      const resolved = await resolveBotContext({
+        sb,
+        requestType: 'public_widget',
+        businessId,
+      })
+
+      expect(resolved.ok).toBe(true)
+      if (resolved.ok) {
+        expect(resolved.agent.id).toBe(carBotId)
+        expect(resolved.agent.name).toBe('Car Rental Operations Assistant')
+        expect(resolved.toolsEnabled).toContain('searchFleet')
+        expect(`${resolved.agent.persona} ${resolved.agent.objective}`).not.toMatch(/dubai|real estate/i)
+      }
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('public widget cannot resolve an explicit bot from another business', async () => {
+    const businessA = await createBotIsolationBusiness('QA Widget Business A', 'car_rental')
+    const businessB = await createBotIsolationBusiness('QA Widget Business B', 'real_estate')
+    try {
+      await insertIsolationBot(businessA.sb, businessA.businessId, {
+        name: 'Business A Car Rental Bot',
+        persona: 'You are a car rental assistant.',
+        objective: 'Rent cars only for business A.',
+      })
+      const foreignBotId = await insertIsolationBot(businessB.sb, businessB.businessId, {
+        name: 'Business B Real Estate Bot',
+        persona: 'You are a Dubai real estate assistant.',
+        objective: 'Sell property for business B.',
+      })
+
+      const resolved = await resolveBotContext({
+        sb: businessA.sb,
+        requestType: 'public_widget',
+        businessId: businessA.businessId,
+        botId: foreignBotId,
+      })
+
+      expect(resolved.ok).toBe(false)
+      if (!resolved.ok) {
+        expect(resolved.resolution).toBe('explicit_bot_not_found_in_business')
+        expect(resolved.publicMessage).toBe('This assistant is not configured yet.')
+      }
+    } finally {
+      await cleanupTestAiBusiness(businessA.sb, businessA.businessId)
+      await cleanupTestAiBusiness(businessB.sb, businessB.businessId)
+    }
+  })
+
+  test('real estate bots do not receive rental operational tools', async () => {
+    const { sb, businessId } = await createBotIsolationBusiness('QA Real Estate Isolation', 'real_estate')
+    try {
+      await insertIsolationBot(sb, businessId, {
+        name: 'Real Estate Assistant',
+        persona: 'You are a real estate assistant.',
+        objective: 'Qualify buyers and schedule property viewings.',
+      })
+
+      const resolved = await resolveBotContext({
+        sb,
+        requestType: 'test_ai',
+        businessId,
+      })
+
+      expect(resolved.ok).toBe(true)
+      if (resolved.ok) {
+        expect(resolved.businessType).toBe('real_estate')
+        expect(resolved.toolsEnabled).toEqual([])
+      }
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('public widget with no business bot returns a safe configuration fallback instead of global search', async () => {
+    const { sb, businessId } = await createBotIsolationBusiness('QA No Bot Public Widget', 'general_service')
+    try {
+      const resolved = await resolveBotContext({
+        sb,
+        requestType: 'public_widget',
+        businessId,
+      })
+
+      expect(resolved.ok).toBe(false)
+      if (!resolved.ok) {
+        expect(resolved.status).toBe(200)
+        expect(resolved.resolution).toBe('no_business_bot')
+        expect(resolved.publicMessage).toBe('This assistant is not configured yet.')
+      }
     } finally {
       await cleanupTestAiBusiness(sb, businessId)
     }

@@ -54,7 +54,14 @@ function isConversationUuid(value: string | null): value is string {
 function businessIdFromUrl(): string | null {
   if (typeof window === 'undefined') return null
   const params = new URLSearchParams(window.location.search)
-  const candidate = params.get('instantdesk_business_id') || params.get('business_id') || params.get('bot_id')
+  const candidate = params.get('instantdesk_business_id') || params.get('business_id')
+  return candidate && UUID_RE.test(candidate) ? candidate : null
+}
+
+function botIdFromUrl(): string | null {
+  if (typeof window === 'undefined') return null
+  const params = new URLSearchParams(window.location.search)
+  const candidate = params.get('bot_id') || params.get('instantdesk_bot_id')
   return candidate && UUID_RE.test(candidate) ? candidate : null
 }
 
@@ -227,6 +234,7 @@ export default function ChatWidget() {
   const [presenceLabel, setPresenceLabel] = useState('online')
   const [dragActive, setDragActive] = useState(false)
   const [businessId, setBusinessId] = useState(DEFAULT_BUSINESS_ID)
+  const [botId, setBotId] = useState<string | null>(() => botIdFromUrl())
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [aiAutoRepliesEnabled, setAiAutoRepliesEnabled] = useState(true)
 
@@ -278,6 +286,7 @@ export default function ChatWidget() {
   useEffect(() => {
     let cancelled = false
     const explicitBusinessId = businessIdFromUrl()
+    const explicitBotId = botIdFromUrl()
     if (explicitBusinessId) setBusinessId(explicitBusinessId)
     if (shouldOpenFromUrl()) {
       setIsOpen(true)
@@ -285,10 +294,14 @@ export default function ChatWidget() {
     }
     const loadConfig = async () => {
       try {
-        const res = await fetch(`/api/live-chat/widget/config${explicitBusinessId ? `?business_id=${encodeURIComponent(explicitBusinessId)}` : ''}`, { cache: 'no-store' })
+        const params = new URLSearchParams()
+        if (explicitBusinessId) params.set('business_id', explicitBusinessId)
+        if (explicitBotId) params.set('bot_id', explicitBotId)
+        const res = await fetch(`/api/live-chat/widget/config${params.toString() ? `?${params.toString()}` : ''}`, { cache: 'no-store' })
         if (!res.ok) return
-        const data = await res.json() as { business_id?: string; ai_auto_replies_enabled?: boolean }
+        const data = await res.json() as { business_id?: string; bot_id?: string; ai_auto_replies_enabled?: boolean }
         if (!cancelled && data.business_id) setBusinessId(data.business_id)
+        if (!cancelled && data.bot_id) setBotId(data.bot_id)
         if (!cancelled && typeof data.ai_auto_replies_enabled === 'boolean') {
           setAiAutoRepliesEnabled(data.ai_auto_replies_enabled)
         }
@@ -500,6 +513,7 @@ export default function ChatWidget() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           business_id:     businessId,
+          bot_id:          botId ?? undefined,
           conversation_id: conversationRef.current ?? undefined,
           message:         trimmed,
           attachment,

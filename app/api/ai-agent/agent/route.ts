@@ -1,19 +1,16 @@
 import { type NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../../lib/supabase-server'
 import { getSessionBusinessId } from '../../../lib/getSessionBusinessId'
+import { resolveBotContext } from '../../../lib/bot-context'
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const { clientId } = await getSessionBusinessId()
   const sb = createAdminClient()
+  const botId = req.nextUrl.searchParams.get('bot_id')?.trim() || null
 
-  const { data, error } = await sb
-    .from('agents').select('*')
-    .eq('business_id', clientId).eq('active', true)
-    .order('created_at', { ascending: true })
-    .limit(1).maybeSingle()
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ agent: data ?? null })
+  const resolved = await resolveBotContext({ sb, requestType: 'dashboard', businessId: clientId, botId })
+  if (!resolved.ok) return NextResponse.json({ agent: null, error: resolved.adminMessage }, { status: resolved.status })
+  return NextResponse.json({ agent: resolved.agent })
 }
 
 export async function PUT(req: NextRequest) {
@@ -30,24 +27,36 @@ export async function PUT(req: NextRequest) {
   if (body.fallback_msg !== undefined) patch.fallback_msg = body.fallback_msg
   if (body.model        !== undefined) patch.model        = body.model
   if (body.temperature  !== undefined) patch.temperature  = body.temperature
+  if (body.name         !== undefined) patch.name         = body.name
+  if (body.active       !== undefined) patch.active       = body.active
 
-  // Check if an agent already exists for this business
-  const { data: existing } = await sb
-    .from('agents').select('id, name')
-    .eq('business_id', clientId)
-    .limit(1).maybeSingle()
+  const requestedBotId = typeof body.bot_id === 'string' ? body.bot_id.trim() : null
+  const makeDefault = body.default_website_bot === true
 
-  if (existing?.id) {
-    // Update existing
+  const resolved = await resolveBotContext({ sb, requestType: 'dashboard', businessId: clientId, botId: requestedBotId })
+  if (resolved.ok) {
     const { data, error } = await sb
       .from('agents').update(patch)
-      .eq('id', existing.id)
+      .eq('business_id', clientId)
+      .eq('id', resolved.agent.id)
       .select().maybeSingle()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (makeDefault) {
+      const clear = await sb.from('agents').update({ is_default_website_bot: false }).eq('business_id', clientId)
+      if (clear.error && clear.error.code !== '42703') return NextResponse.json({ error: clear.error.message }, { status: 500 })
+      if (!clear.error) {
+        const set = await sb.from('agents').update({ is_default_website_bot: true, active: true }).eq('business_id', clientId).eq('id', resolved.agent.id)
+        if (set.error) return NextResponse.json({ error: set.error.message }, { status: 500 })
+      }
+    }
     return NextResponse.json({ agent: data })
   }
 
-  // No agent yet — insert one.
+  if (requestedBotId) {
+    return NextResponse.json({ error: resolved.ok ? 'Unknown bot error' : resolved.adminMessage }, { status: resolved.ok ? 500 : resolved.status })
+  }
+
+  // No agent yet — insert one for this business.
   const { data, error } = await sb
     .from('agents').insert({
       ...patch,

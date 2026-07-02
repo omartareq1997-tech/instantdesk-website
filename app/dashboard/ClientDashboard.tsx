@@ -30,7 +30,7 @@ import { BUSINESS_TYPE_CONFIG, CANONICAL_BUSINESS_TYPES, normalizeBusinessType }
 /* ─── Types ──────────────────────────────────────────────────── */
 
 type Section      = 'overview' | 'analytics' | 'pipeline' | 'activity' | 'appointments' | 'automation' | 'settings' | 'log' | 'team'
-                  | 'live_chat' | 'deploy' | 'integrations' | 'rental_ops' | 'ai_overview' | 'ai_instructions' | 'ai_knowledge' | 'ai_qualification' | 'ai_test'
+                  | 'bots' | 'live_chat' | 'deploy' | 'integrations' | 'rental_ops' | 'ai_overview' | 'ai_instructions' | 'ai_knowledge' | 'ai_qualification' | 'ai_test'
 type LeadStatus   = 'new' | 'contacted' | 'demo_booked' | 'won' | 'lost'
 type ScoreLabel   = 'hot' | 'warm' | 'cold'
 type ApptStatus   = 'confirmed' | 'pending' | 'completed' | 'cancelled'
@@ -62,6 +62,21 @@ interface ToastItem {
   badgeColor: string
   leadId?:    string
   duration?:  number  // ms — defaults to 5500
+}
+
+type DashboardBot = {
+  id: string
+  name: string
+  active?: boolean
+  persona?: string | null
+  objective?: string | null
+  tone?: string | null
+  fallback_msg?: string | null
+  model?: string | null
+  temperature?: number | null
+  business_type?: string | null
+  is_default_website_bot?: boolean | null
+  created_at?: string | null
 }
 
 /* ─── Mock Data ──────────────────────────────────────────────── */
@@ -138,6 +153,7 @@ const NAV_ITEMS: {id:Section; label:string; Icon:React.ComponentType<{className?
   { id:'overview',     label:'Overview',      Icon:LayoutDashboard          },
   { id:'analytics',    label:'Analytics',     Icon:LineChart                },
   { id:'pipeline',     label:'Lead Pipeline', Icon:Users,       badge:10    },
+  { id:'bots',         label:'Bots',          Icon:Bot                     },
   { id:'live_chat',    label:'Live Chat',     Icon:Headphones              },
   { id:'deploy',       label:'Deploy',        Icon:Rocket                  },
   { id:'integrations', label:'Integrations',  Icon:Link2                   },
@@ -162,6 +178,7 @@ const SECTION_META: Record<Section,{title:string;sub:string}> = {
   overview:     { title:'Overview',       sub:'Performance snapshot and live activity'                },
   analytics:    { title:'Analytics',      sub:'Conversation metrics and conversion data'              },
   pipeline:     { title:'Lead Pipeline',  sub:'Click any lead to view full details'                  },
+  bots:         { title:'Bots',           sub:'Manage bot workspaces, prompts, tests and website defaults' },
   live_chat:    { title:'Live Chat',      sub:'Human handover inbox and real-time customer messages' },
   deploy:       { title:'Deploy',         sub:'Share and embed your InstantDesk chat experience'     },
   integrations: { title:'Integrations',   sub:'Connect InstantDesk with channels, automation tools and websites' },
@@ -441,32 +458,6 @@ function Sidebar({ active, onNav, open, onClose, badges = {}, userName = 'Owner'
             )
           })}
 
-          {/* AI Agent group */}
-          <div className="mx-1 mt-3 mb-1 flex items-center gap-2">
-            <div className="flex-1 h-px" style={{ background:'rgba(255,255,255,0.08)' }} />
-            <span className="overflow-hidden whitespace-nowrap text-[9px] font-bold tracking-[0.15em] uppercase transition-[max-width,opacity] duration-150 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[80px] md:group-hover:opacity-100"
-              style={{ color:'rgba(148,163,184,0.72)' }}>AI Agent</span>
-            <div className="flex-1 h-px" style={{ background:'rgba(255,255,255,0.08)' }} />
-          </div>
-
-          {AI_NAV_ITEMS.map(item => {
-            const isActive = active === item.id
-            return (
-              <div key={item.id} className="relative">
-                {isActive && (
-                  <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full"
-                    style={{ background:'rgba(148,163,184,0.72)' }} />
-                )}
-                <button onClick={() => { onNav(item.id); onClose() }}
-                  title={item.label}
-                  className="flex items-center gap-3 w-full pl-4 pr-3 py-2 rounded-xl text-sm font-medium transition-colors duration-100 hover:bg-white/[0.055] hover:text-white"
-                  style={isActive ? { background:'rgba(148,163,184,0.12)', color:'rgba(255,255,255,0.88)' } : { color:'rgba(255,255,255,0.35)' }}>
-                  <item.Icon className="w-4 h-4 flex-shrink-0" />
-                  <span className="flex-1 overflow-hidden whitespace-nowrap text-left text-[13px] transition-[max-width,opacity] duration-150 ease-out md:max-w-0 md:opacity-0 md:group-hover:max-w-[150px] md:group-hover:opacity-100">{item.label}</span>
-                </button>
-              </div>
-            )
-          })}
         </nav>
 
         <div className="px-3 pb-5 pt-4" style={{ borderTop:'1px solid rgba(255,255,255,0.08)' }}>
@@ -2339,18 +2330,19 @@ function DeployCopyButton({ id, value, copied, onCopy }: { id: string; value: st
   )
 }
 
-function DeploySection({ businessId }: { businessId: string }) {
+function DeploySection({ businessId, selectedBotId }: { businessId: string; selectedBotId?: string | null }) {
   const [copied, setCopied] = useState<string | null>(null)
-  const botId = businessId
+  const botId = selectedBotId ?? ''
   const origin = 'https://instantdesk.pl'
-  const directLink = `${origin}/chat/${botId}`
+  const directLink = `${origin}/chat/${botId || businessId}`
   const scriptCode = `<script
   defer
   src="${origin}/embed.js"
-  data-bot-id="${botId}"
+  data-business-id="${businessId}"${botId ? `
+  data-bot-id="${botId}"` : ''}
 ></script>`
   const iframeCode = `<iframe
-  src="${origin}/embed/${botId}"
+  src="${origin}/embed/${businessId}?instantdesk_business_id=${businessId}${botId ? `&bot_id=${botId}` : ''}"
   width="400"
   height="600">
 </iframe>`
@@ -2543,20 +2535,22 @@ function IntegrationCard({
   )
 }
 
-function IntegrationsSection({ businessId, onOpenDeploy }: { businessId: string; onOpenDeploy: () => void }) {
+function IntegrationsSection({ businessId, selectedBotId, onOpenDeploy }: { businessId: string; selectedBotId?: string | null; onOpenDeploy: () => void }) {
   const [copied, setCopied] = useState<string | null>(null)
   const [apiOpen, setApiOpen] = useState(false)
   const [webhookSecretVersion, setWebhookSecretVersion] = useState(1)
   const origin = 'https://instantdesk.pl'
-  const directLink = `${origin}/embed/${businessId}?instantdesk_business_id=${businessId}&instantdesk_open=1`
-  const testWidgetLink = `${origin}/?instantdesk_business_id=${businessId}&instantdesk_open=1`
+  const botParam = selectedBotId ? `&bot_id=${encodeURIComponent(selectedBotId)}` : ''
+  const directLink = `${origin}/embed/${businessId}?instantdesk_business_id=${businessId}${botParam}&instantdesk_open=1`
+  const testWidgetLink = `${origin}/?instantdesk_business_id=${businessId}${botParam}&instantdesk_open=1`
   const scriptCode = `<script
   defer
   src="${origin}/embed.js"
-  data-business-id="${businessId}"
+  data-business-id="${businessId}"${selectedBotId ? `
+  data-bot-id="${selectedBotId}"` : ''}
 ></script>`
   const iframeCode = `<iframe
-  src="${origin}/embed/${businessId}?instantdesk_business_id=${businessId}&instantdesk_open=1"
+  src="${origin}/embed/${businessId}?instantdesk_business_id=${businessId}${botParam}&instantdesk_open=1"
   width="400"
   height="600">
 </iframe>`
@@ -2749,6 +2743,225 @@ function IntegrationsSection({ businessId, onOpenDeploy }: { businessId: string;
           </div>
         </section>
       ))}
+    </div>
+  )
+}
+
+function BotsSection({
+  bots,
+  selectedBotId,
+  onSelectBot,
+  onCreateBot,
+  onSetDefault,
+  onOpenSection,
+}: {
+  bots: DashboardBot[]
+  selectedBotId: string | null
+  onSelectBot: (botId: string) => void
+  onCreateBot: (input: { name: string; business_type: string; model: string; tone: string }) => Promise<void>
+  onSetDefault: (botId: string) => Promise<void>
+  onOpenSection: (section: Section) => void
+}) {
+  const selected = bots.find(bot => bot.id === selectedBotId) ?? bots[0] ?? null
+  const [creating, setCreating] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [form, setForm] = useState({
+    name: '',
+    business_type: 'general_service',
+    model: 'gemini-2.5-pro',
+    tone: 'professional',
+  })
+
+  const quickActions = [
+    { label: 'Test bot', section: 'ai_test' as Section, Icon: FlaskConical },
+    { label: 'Edit instructions', section: 'ai_instructions' as Section, Icon: Brain },
+    { label: 'Knowledge base', section: 'ai_knowledge' as Section, Icon: BookOpen },
+    { label: 'Deploy / widget', section: 'deploy' as Section, Icon: Rocket },
+    { label: 'Live chat', section: 'live_chat' as Section, Icon: Headphones },
+    { label: 'Settings', section: 'settings' as Section, Icon: Settings },
+  ]
+
+  const submit = async () => {
+    setError(null)
+    setSaving(true)
+    try {
+      await onCreateBot(form)
+      setCreating(false)
+      setForm({ name: '', business_type: 'general_service', model: 'gemini-2.5-pro', tone: 'professional' })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create bot')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mx-auto grid w-full max-w-7xl gap-5 lg:grid-cols-[92px_minmax(0,1fr)]">
+      <aside className="rounded-2xl p-3" style={{ background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.075)' }}>
+        <div className="grid gap-3">
+          {bots.map(bot => {
+            const active = bot.id === selected?.id
+            return (
+              <button
+                key={bot.id}
+                type="button"
+                title={bot.name}
+                onClick={() => onSelectBot(bot.id)}
+                className="relative flex h-14 w-14 items-center justify-center rounded-full text-sm font-black transition-transform hover:scale-[1.03]"
+                style={{
+                  background: active ? 'rgba(52,211,153,0.16)' : 'rgba(255,255,255,0.055)',
+                  border: `1px solid ${active ? 'rgba(52,211,153,0.34)' : 'rgba(255,255,255,0.09)'}`,
+                  color: active ? '#bbf7d0' : 'rgba(255,255,255,0.62)',
+                }}
+              >
+                {agentInitials(bot.name)}
+                {bot.is_default_website_bot && <span className="absolute -right-0.5 -top-0.5 h-4 w-4 rounded-full bg-emerald-400 ring-4 ring-[#090909]" />}
+              </button>
+            )
+          })}
+          <button
+            type="button"
+            onClick={() => setCreating(true)}
+            title="Create bot"
+            className="flex h-14 w-14 items-center justify-center rounded-full text-white/62 transition-colors hover:text-white"
+            style={{ background: 'rgba(255,255,255,0.055)', border: '1px dashed rgba(255,255,255,0.18)' }}
+          >
+            <Plus className="h-5 w-5" />
+          </button>
+        </div>
+      </aside>
+
+      <main className="grid min-w-0 gap-5">
+        <section className="rounded-2xl p-5 sm:p-6" style={{ background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.075)', boxShadow: '0 24px 80px rgba(0,0,0,0.22)' }}>
+          {selected ? (
+            <>
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="mb-3 flex items-center gap-3">
+                    <div className="flex h-14 w-14 items-center justify-center rounded-2xl text-sm font-black text-emerald-100" style={{ background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.22)' }}>
+                      {agentInitials(selected.name)}
+                    </div>
+                    <div className="min-w-0">
+                      <h2 className="truncate text-2xl font-black text-white">{selected.name}</h2>
+                      <p className="mt-1 text-sm text-white/42">
+                        {BUSINESS_TYPE_CONFIG[normalizeBusinessType(selected.business_type ?? null)].label} · {selected.model ?? 'model not set'} · {selected.tone ?? 'professional'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-full px-3 py-1 text-xs font-bold text-emerald-200" style={{ background: 'rgba(52,211,153,0.10)', border: '1px solid rgba(52,211,153,0.20)' }}>
+                      {selected.active === false ? 'Inactive' : 'Active'}
+                    </span>
+                    {selected.is_default_website_bot && (
+                      <span className="rounded-full px-3 py-1 text-xs font-bold text-white/72" style={{ background: 'rgba(255,255,255,0.055)', border: '1px solid rgba(255,255,255,0.09)' }}>
+                        Default website bot
+                      </span>
+                    )}
+                    <span className="rounded-full px-3 py-1 font-mono text-[11px] font-bold text-white/36" style={{ background: 'rgba(255,255,255,0.035)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                      {selected.id}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={selected.is_default_website_bot === true}
+                  onClick={() => void onSetDefault(selected.id)}
+                  className="rounded-xl px-4 py-3 text-sm font-black transition-colors disabled:cursor-not-allowed disabled:text-emerald-200/70"
+                  style={{ background: 'rgba(52,211,153,0.11)', border: '1px solid rgba(52,211,153,0.22)', color: '#bbf7d0' }}
+                >
+                  {selected.is_default_website_bot ? 'Default website bot' : 'Set as default website bot'}
+                </button>
+              </div>
+
+              <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {quickActions.map(action => (
+                  <button
+                    key={action.label}
+                    type="button"
+                    onClick={() => onOpenSection(action.section)}
+                    className="group flex items-center gap-3 rounded-2xl p-4 text-left transition-[transform,border-color,background-color] duration-150 hover:-translate-y-0.5"
+                    style={{ background: 'rgba(7,8,9,0.42)', border: '1px solid rgba(255,255,255,0.075)' }}
+                  >
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: 'rgba(255,255,255,0.055)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                      <action.Icon className="h-5 w-5 text-white/60 group-hover:text-white/85" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-black text-white/82">{action.label}</div>
+                      <div className="text-xs text-white/32">Uses selected bot context</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="py-10 text-center">
+              <Bot className="mx-auto mb-4 h-12 w-12 text-white/30" />
+              <h2 className="text-xl font-black text-white">No bots yet</h2>
+              <p className="mt-2 text-sm text-white/42">Create the first bot for this business workspace.</p>
+              <button type="button" onClick={() => setCreating(true)} className="mt-5 rounded-xl px-4 py-3 text-sm font-black text-white" style={{ background: 'rgba(52,211,153,0.13)', border: '1px solid rgba(52,211,153,0.24)' }}>
+                Create bot
+              </button>
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-2xl p-5 sm:p-6" style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.065)' }}>
+          <div className="mb-4 text-sm font-black uppercase tracking-[0.14em] text-white/32">Workspace pages</div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+            {AI_NAV_ITEMS.map(item => (
+              <button key={item.id} type="button" onClick={() => onOpenSection(item.id)} className="flex items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-bold text-white/54 transition-colors hover:bg-white/[0.055] hover:text-white">
+                <item.Icon className="h-4 w-4" />
+                {item.label.replace('AI ', '')}
+              </button>
+            ))}
+          </div>
+        </section>
+      </main>
+
+      <AnimatePresence>
+        {creating && (
+          <motion.div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-4 backdrop-blur-xl" initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}>
+            <motion.div className="w-full max-w-xl rounded-3xl border border-white/10 bg-[#0d0d0c] p-6 shadow-2xl" initial={{ y:16, scale:0.98 }} animate={{ y:0, scale:1 }} exit={{ y:12, scale:0.98 }}>
+              <div className="mb-5 flex items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-black text-white">Create bot</h3>
+                  <p className="mt-1 text-sm text-white/38">Creates an isolated bot inside the current business only.</p>
+                </div>
+                <button onClick={() => setCreating(false)} className="icon-btn"><X className="h-4 w-4" /></button>
+              </div>
+              <div className="grid gap-3">
+                <input value={form.name} onChange={event => setForm(prev => ({ ...prev, name: event.target.value }))} placeholder="Bot name" className="h-12 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-emerald-400/55" />
+                <select value={form.business_type} onChange={event => setForm(prev => ({ ...prev, business_type: event.target.value }))} className="h-12 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-emerald-400/55">
+                  {CANONICAL_BUSINESS_TYPES.map(type => (
+                    <option key={type} value={type}>{BUSINESS_TYPE_CONFIG[type].label}</option>
+                  ))}
+                </select>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <select value={form.model} onChange={event => setForm(prev => ({ ...prev, model: event.target.value }))} className="h-12 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-emerald-400/55">
+                    <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                    <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                    <option value="gpt-4o">GPT-4o</option>
+                    <option value="gpt-4o-mini">GPT-4o Mini</option>
+                    <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                  </select>
+                  <select value={form.tone} onChange={event => setForm(prev => ({ ...prev, tone: event.target.value }))} className="h-12 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-emerald-400/55">
+                    <option value="professional">Professional</option>
+                    <option value="friendly">Friendly</option>
+                    <option value="casual">Casual</option>
+                    <option value="luxury">Luxury</option>
+                  </select>
+                </div>
+                {error && <div className="rounded-xl border border-red-400/25 bg-red-500/10 px-3 py-2 text-sm text-red-100">{error}</div>}
+              </div>
+              <div className="mt-5 flex justify-end gap-3">
+                <button type="button" onClick={() => setCreating(false)} className="btn-muted">Cancel</button>
+                <button type="button" disabled={saving} onClick={() => void submit()} className="btn-primary">{saving ? 'Creating...' : 'Create bot'}</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
@@ -5106,7 +5319,7 @@ function RentalOperationsSection() {
 /* ─── Hash persistence helpers ───────────────────────────────── */
 
 const VALID_SECTIONS = new Set<string>([
-  'overview','analytics','pipeline','live_chat','deploy','integrations','activity','appointments','rental_ops','log','team','automation','settings',
+  'overview','analytics','pipeline','bots','live_chat','deploy','integrations','activity','appointments','rental_ops','log','team','automation','settings',
   'ai_overview','ai_instructions','ai_knowledge','ai_qualification','ai_test',
 ])
 
@@ -5139,6 +5352,7 @@ export default function ClientDashboard({
   const [notifs,         setNotifs]         = useState<Notification[]>([])   // filled by realtime only
   const [toasts,         setToasts]         = useState<ToastItem[]>([])
   const [soundEnabled,   setSoundEnabled]   = useState(false)
+  const dashboardBusinessId = businessIdProp ?? '0616a47a-2c01-49ce-a798-385f8276b92b'
 
   // Refs so realtime callbacks (closed over stale state) always see current values
   const soundEnabledRef     = useRef(false)
@@ -5159,6 +5373,72 @@ export default function ClientDashboard({
   const analyticsSummary = initialData?.analyticsSummary
   const overviewMetrics  = initialData?.overviewMetrics
   const liveAnalytics    = initialData?.liveAnalytics
+
+  // ── Bot workspace state ──────────────────────────────────────
+  const [bots, setBots] = useState<DashboardBot[]>([])
+  const [selectedBotId, setSelectedBotId] = useState<string | null>(null)
+
+  const refreshBots = useCallback(async () => {
+    try {
+      const res = await fetch('/api/bots')
+      const data = await res.json() as { bots?: DashboardBot[]; error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'Failed to load bots')
+      const list = Array.isArray(data.bots) ? data.bots : []
+      setBots(list)
+      setSelectedBotId(prev => {
+        if (prev && list.some(bot => bot.id === prev)) return prev
+        return list.find(bot => bot.is_default_website_bot)?.id ?? list[0]?.id ?? null
+      })
+    } catch {
+      setBots([])
+    }
+  }, [])
+
+  useEffect(() => { void refreshBots() }, [refreshBots])
+
+  const createBot = useCallback(async (input: { name: string; business_type: string; model: string; tone: string }) => {
+    const res = await fetch('/api/bots', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+    const data = await res.json() as { bot?: DashboardBot; error?: string }
+    if (!res.ok || !data.bot) throw new Error(data.error ?? 'Failed to create bot')
+    setBots(prev => [...prev, data.bot!])
+    setSelectedBotId(data.bot.id)
+  }, [])
+
+  const setDefaultWebsiteBot = useCallback(async (botId: string) => {
+    const res = await fetch('/api/bots', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bot_id: botId, default_website_bot: true }),
+    })
+    const data = await res.json() as { bot?: DashboardBot; error?: string }
+    if (!res.ok || !data.bot) {
+      setToasts(prev => [{
+        id: crypto.randomUUID(),
+        type: 'hint' as const,
+        title: 'Default bot not updated',
+        sub: data.error ?? 'Failed to set website default bot',
+        badge: 'Error',
+        badgeColor: '#f87171',
+        duration: 5000,
+      }, ...prev.slice(0, 3)])
+      return
+    }
+    setBots(prev => prev.map(bot => ({ ...bot, is_default_website_bot: bot.id === data.bot!.id })))
+    setSelectedBotId(data.bot.id)
+    setToasts(prev => [{
+      id: crypto.randomUUID(),
+      type: 'hint' as const,
+      title: 'Website default updated',
+      sub: `${data.bot!.name} is now the default website bot.`,
+      badge: 'Done',
+      badgeColor: '#34d399',
+      duration: 3500,
+    }, ...prev.slice(0, 3)])
+  }, [])
 
   // ── Team members ──────────────────────────────────────────────
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
@@ -5458,7 +5738,7 @@ export default function ClientDashboard({
 
   // ── Supabase Realtime subscriptions ──────────────────────────
   useEffect(() => {
-    const BUSINESS_ID = businessIdProp ?? '0616a47a-2c01-49ce-a798-385f8276b92b'
+    const BUSINESS_ID = dashboardBusinessId
 
     // ── Dedicated leads channel — isolated so other broken subscriptions
     //    cannot poison this channel and prevent lead events from arriving.
@@ -5761,7 +6041,7 @@ export default function ClientDashboard({
       supabase.removeChannel(channel)
       supabase.removeChannel(followUpsChannel)
     }
-  }, [businessIdProp, refreshAppointments])
+  }, [dashboardBusinessId, refreshAppointments])
 
   // ── Browser notification permission ──────────────────────────
   // Requested 3 s after mount so it doesn't fire immediately on load.
@@ -5909,9 +6189,10 @@ export default function ClientDashboard({
                 {section==='overview'     && <OverviewSection onSelectLead={handleSelectLead} leads={visibleLeads} appointments={appointments} activity={activityFeed} overviewMetrics={overviewMetrics} />}
                 {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} liveAnalytics={liveAnalytics} />}
                 {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={visibleLeads} newLeadIds={newLeadIds} onAddLead={can.canAddLead ? () => setShowAddLead(true) : undefined} teamMembers={teamMembers} />}
-                {section==='live_chat'    && <LiveChatSection businessId={businessIdProp ?? '0616a47a-2c01-49ce-a798-385f8276b92b'} />}
-                {section==='deploy'       && <DeploySection businessId={businessIdProp ?? '0616a47a-2c01-49ce-a798-385f8276b92b'} />}
-                {section==='integrations' && <IntegrationsSection businessId={businessIdProp ?? '0616a47a-2c01-49ce-a798-385f8276b92b'} onOpenDeploy={() => handleNav('deploy')} />}
+                {section==='bots'         && <BotsSection bots={bots} selectedBotId={selectedBotId} onSelectBot={setSelectedBotId} onCreateBot={createBot} onSetDefault={setDefaultWebsiteBot} onOpenSection={handleNav} />}
+                {section==='live_chat'    && <LiveChatSection businessId={dashboardBusinessId} />}
+                {section==='deploy'       && <DeploySection businessId={dashboardBusinessId} selectedBotId={selectedBotId} />}
+                {section==='integrations' && <IntegrationsSection businessId={dashboardBusinessId} selectedBotId={selectedBotId} onOpenDeploy={() => handleNav('deploy')} />}
                 {section==='activity'     && <ActivitySection feed={activityFeed} />}
                 {section==='appointments' && <AppointmentsSection appointments={appointments} leads={visibleLeads} onSelectLead={handleSelectLead} onApptUpdated={handleApptUpdated} onAddAppointment={can.canAddAppt ? () => openAddAppt() : undefined} actorName={currentUser.name} />}
                 {section==='rental_ops'   && <RentalOperationsSection />}
@@ -5934,7 +6215,8 @@ export default function ClientDashboard({
                 {(section==='ai_overview' || section==='ai_instructions' || section==='ai_knowledge' || section==='ai_qualification' || section==='ai_test') && (
                   <AIAgentSection
                     section={section}
-                    businessId={businessIdProp ?? '0616a47a-2c01-49ce-a798-385f8276b92b'}
+                    businessId={dashboardBusinessId}
+                    selectedBotId={selectedBotId}
                     onLeadCreated={(leadId) => { void handleTestAILeadCreated(leadId) }}
                     onAppointmentCreated={(apptId) => { void handleTestAIApptCreated(apptId) }}
                   />

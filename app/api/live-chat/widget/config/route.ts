@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../../../lib/supabase-server'
 import { getLiveChatSettings } from '../../../../lib/live-chat'
+import { logBotResolution, resolveBotContext } from '../../../../lib/bot-context'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,20 +18,33 @@ function requestHost(request: NextRequest): string {
 export async function GET(request: NextRequest) {
   const host = requestHost(request)
   const requestedBusinessId = request.nextUrl.searchParams.get('business_id')?.trim()
+  const requestedBotId = request.nextUrl.searchParams.get('bot_id')?.trim()
   const businessId = requestedBusinessId && UUID_RE.test(requestedBusinessId) ? requestedBusinessId : PUBLIC_SITE_BUSINESS_ID
   const sb = createAdminClient()
   const settings = await getLiveChatSettings(sb, businessId)
+  const botContext = await resolveBotContext({
+    sb,
+    requestType: 'public_widget',
+    businessId,
+    botId: requestedBotId && UUID_RE.test(requestedBotId) ? requestedBotId : null,
+  })
+  logBotResolution({ requestType: 'public_widget', businessId, result: botContext })
   console.log('[LiveChatDebug] widget config', {
     host,
     business_id: businessId,
+    bot_id: botContext.ok ? botContext.agent.id : null,
     ai_auto_replies_enabled: settings.ai_auto_replies_enabled,
     live_chat_enabled: settings.live_chat_enabled,
   })
 
   return NextResponse.json({
     business_id: businessId,
+    bot_id: botContext.ok ? botContext.agent.id : null,
+    bot_name: botContext.ok ? botContext.agent.name : null,
+    business_type: botContext.ok ? botContext.businessType : null,
     ai_auto_replies_enabled: settings.ai_auto_replies_enabled,
     live_chat_enabled: settings.live_chat_enabled,
+    configured: botContext.ok,
   }, {
     headers: {
       'Cache-Control': 'no-store',

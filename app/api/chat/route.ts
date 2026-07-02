@@ -39,6 +39,7 @@ import { getLimits, checkMonthlyMessageLimit } from '../../lib/usageLimits'
 import { loadLeadMemory, upsertLeadMemory, formatMemoryForPrompt } from '../../lib/leadMemory'
 import { buildAgentSystemPrompt } from '../../lib/agentPrompt'
 import { formatToolResultsForPrompt, runOperationalTools, type AgentToolResult } from '../../lib/agent-tools'
+import { logBotResolution, resolveBotContext } from '../../lib/bot-context'
 import { parseRentalDateWindow } from '../../lib/rentalDateTime'
 import { extractRentalVehicleName } from '../../lib/rentalVehicle'
 import { getBusinessTypeConfig, normalizeBusinessType } from '../../lib/businessTypes'
@@ -1419,11 +1420,12 @@ async function callAIProvider(
 
 export async function POST(req: NextRequest) {
   /* 1. Parse ─────────────────────────────────────────────────────────────── */
-  let body: { business_id?: unknown; conversation_id?: unknown; message?: unknown; attachment?: unknown; visitor_context?: unknown; debug?: unknown; test_ai?: unknown }
+  let body: { business_id?: unknown; bot_id?: unknown; conversation_id?: unknown; message?: unknown; attachment?: unknown; visitor_context?: unknown; debug?: unknown; test_ai?: unknown }
   try { body = await req.json() }
   catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }) }
 
   const requestedBusinessId = typeof body.business_id === 'string' ? body.business_id.trim() : null
+  const requestedBotId = typeof body.bot_id === 'string' ? body.bot_id.trim() : null
   const conversation_id = typeof body.conversation_id === 'string' ? body.conversation_id.trim() : null
   const message         = typeof body.message         === 'string' ? body.message.trim()         : null
   const attachmentResult = parseAttachment(body.attachment)
@@ -1459,12 +1461,14 @@ export async function POST(req: NextRequest) {
   let clientId:     string  = business_id
   let businessId:   string  = business_id
   let fallbackUsed: boolean = true
+  let sessionUserId: string | null = null
   try {
     const session = await getSessionBusinessId()
-    if (session.fromSession) {
+    if (testAiMode && session.fromSession) {
       clientId     = session.clientId
       businessId   = session.businessId ?? session.clientId
       fallbackUsed = false
+      sessionUserId = session.userEmail || session.ownerName || null
     }
   } catch { /* no session — use body business_id */ }
   console.log('[LiveChatDebug] chat request resolved', {
@@ -1677,143 +1681,49 @@ export async function POST(req: NextRequest) {
     console.warn('[LIMITS] monthly check failed (non-fatal):', err instanceof Error ? err.message : err)
   }
 
-  /* 4. Load active agent ──────────────────────────────────────────────────── */
-  // Try session businessId first; if not found, fall back to the widget's body business_id.
-  // This handles the case where an authenticated owner tests the widget from their browser
-  // (session overrides businessId) but the agent row is keyed on the widget's configured ID.
+  /* 4. Load selected/default bot ──────────────────────────────────────────── */
   console.log('[LiveChatDebug] entering AI branch', {
     business_id: businessId,
     requested_business_id: requestedBusinessId,
     body_business_id: business_id,
+    requested_bot_id: requestedBotId,
     ai_auto_replies_enabled: liveChatSettings.ai_auto_replies_enabled,
     live_chat_enabled: liveChatSettings.live_chat_enabled,
     human_handover_enabled: liveChatSettings.human_handover_enabled,
     test_ai: testAiMode,
   })
-  console.log('[POST /api/chat] agent lookup — session businessId:', businessId, '| body business_id:', business_id)
 
-  const { data: businessRow, error: businessTypeError } = await sb
-    .from('businesses')
-    .select('business_type')
-    .eq('id', businessId)
-    .maybeSingle()
-  if (businessTypeError && businessTypeError.code !== '42703') {
-    console.warn('[POST /api/chat] business_type lookup failed:', JSON.stringify(businessTypeError))
-  }
-  const businessType = normalizeBusinessType(typeof businessRow?.business_type === 'string' ? businessRow.business_type : null)
+  const requestType = testAiMode ? 'test_ai' : 'public_widget'
+  const botContext = await resolveBotContext({
+    sb,
+    requestType,
+    businessId,
+    botId: requestedBotId,
+    userId: sessionUserId,
+    createDefaultForTestAi: testAiMode,
+  })
+  logBotResolution({ requestType, userId: sessionUserId, businessId, result: botContext })
 
-  let agentRow: AgentRow | null = null
-  let agentLookupId = businessId
-
-  // Primary lookup: session-resolved businessId
-  const { data: agentPrimary, error: agentErr } = await sb
-    .from('agents').select('*')
-    .eq('business_id', businessId).eq('active', true)
-    .limit(1).maybeSingle()
-
-  if (agentErr) {
-    console.error('[POST /api/chat] agent primary lookup error:', JSON.stringify(agentErr))
-    return NextResponse.json({ error: 'Failed to load agent', details: agentErr }, { status: 500 })
-  }
-
-  if (agentPrimary) {
-    agentRow = agentPrimary as AgentRow
-    console.log('[POST /api/chat] agent found via session businessId:', businessId, '| agent id:', agentRow.id)
-  } else if (business_id && business_id !== businessId) {
-    // Fallback: try the body's business_id (widget embed ID may differ from session ID)
-    console.log('[POST /api/chat] no agent for session businessId, trying body business_id:', business_id)
-    const { data: agentFallback, error: agentFallbackErr } = await sb
-      .from('agents').select('*')
-      .eq('business_id', business_id).eq('active', true)
-      .limit(1).maybeSingle()
-
-    if (agentFallbackErr) {
-      console.error('[POST /api/chat] agent fallback lookup error:', JSON.stringify(agentFallbackErr))
-    } else if (agentFallback) {
-      agentRow = agentFallback as AgentRow
-      agentLookupId = business_id
-      // Agent config found via widget ID — but all DB writes still use the session-resolved
-      // clientId/businessId so leads and appointments land in the right account.
-      console.log('[POST /api/chat] agent found via body business_id:', business_id, '| agent id:', agentRow.id, '| writes use session:', businessId)
-    }
-  }
-
-  if (!agentRow) {
-    if (testAiMode) {
-      const { data: existingAgents, error: existingAgentsErr } = await sb
-        .from('agents').select('*')
-        .eq('business_id', businessId)
-        .order('created_at', { ascending: true })
-        .limit(1)
-
-      if (existingAgentsErr) {
-        console.error('[POST /api/chat] Test AI fallback agent lookup error:', JSON.stringify(existingAgentsErr))
-        return NextResponse.json({ error: 'Failed to load agent', details: existingAgentsErr }, { status: 500 })
-      }
-
-      const existingAgent = existingAgents?.[0] as AgentRow | undefined
-      if (existingAgent?.id) {
-        const { data: activatedAgent, error: activateErr } = await sb
-          .from('agents')
-          .update({ active: true })
-          .eq('id', existingAgent.id)
-          .select('*')
-          .maybeSingle()
-
-        if (activateErr) {
-          console.error('[POST /api/chat] Test AI fallback agent activation error:', JSON.stringify(activateErr))
-          return NextResponse.json({ error: 'Failed to activate default AI agent', details: activateErr.message }, { status: 500 })
-        }
-
-        agentRow = activatedAgent as AgentRow
-        agentLookupId = businessId
-        console.log('[POST /api/chat] Test AI activated existing agent fallback:', {
-          business_id: businessId,
-          agent_id: agentRow?.id,
-        })
-      } else {
-        const { data: createdAgent, error: createErr } = await sb
-          .from('agents')
-          .insert(defaultAgentPayload(businessId, businessType))
-          .select('*')
-          .maybeSingle()
-
-        if (createErr) {
-          console.error('[POST /api/chat] Test AI default agent creation error:', JSON.stringify(createErr))
-          return NextResponse.json({ error: 'Failed to create default AI agent', details: createErr.message }, { status: 500 })
-        }
-
-        agentRow = createdAgent as AgentRow
-        agentLookupId = businessId
-        console.log('[POST /api/chat] Test AI created default active agent:', {
-          business_id: businessId,
-          agent_id: agentRow?.id,
-        })
-      }
-    }
-  }
-
-  if (!agentRow) {
-    // Diagnostic: count ALL agents for both IDs to help debug
-    const { data: allAgents } = await sb
-      .from('agents').select('id, business_id, active, name')
-      .in('business_id', [businessId, business_id ?? businessId].filter(Boolean))
-    console.error('[POST /api/chat] NO ACTIVE AGENT FOUND', {
-      sessionBusinessId: businessId,
-      bodyBusinessId:    business_id,
-      agentsFound:       allAgents ?? [],
-    })
+  if (!botContext.ok) {
     return NextResponse.json({
-      error:  'No active agent found',
-      details: {
-        sessionBusinessId: businessId,
-        bodyBusinessId:    business_id,
-        hint: 'Create an active agent in the dashboard AI section, or ensure the widget business_id matches your account.',
-      },
-    }, { status: 404 })
+      error: testAiMode ? botContext.adminMessage : botContext.publicMessage,
+      details: testAiMode ? { businessId, botId: requestedBotId, resolution: botContext.resolution } : undefined,
+      reply: testAiMode ? undefined : botContext.publicMessage,
+    }, { status: botContext.status })
   }
-  void agentLookupId  // consumed above
-  const agent = agentRow as AgentRow
+
+  const agent = botContext.agent as AgentRow
+  const businessType = botContext.businessType
+  const botDebug = {
+    id: agent.id,
+    name: agent.name,
+    businessId,
+    businessType,
+    model: agent.model,
+    resolution: botContext.resolution,
+    toolsEnabled: botContext.toolsEnabled,
+    instructionPreview: `${agent.persona ?? ''} ${agent.objective ?? ''}`.trim().slice(0, 80),
+  }
 
   /* 4. Retrieve relevant knowledge ───────────────────────────────────────── */
   // Priority: 1) vector chunks  2) capped fallback from knowledge_sources  3) empty
@@ -2076,6 +1986,7 @@ export async function POST(req: NextRequest) {
         isQualified:    true,
         ai_summary:     null,
         blocked:        false,
+        bot:            botDebug,
       }
     }
     return NextResponse.json(bookingBody)
@@ -2142,6 +2053,7 @@ export async function POST(req: NextRequest) {
           summary: result.summary,
           error: result.error ?? null,
         })),
+        bot: botDebug,
       }
     }
     return NextResponse.json(response)
@@ -2285,6 +2197,7 @@ export async function POST(req: NextRequest) {
       blocked,
       businessType,
       operationalTools: operationalToolResults,
+      bot: botDebug,
       finalSystemPrompt: systemPrompt,
     }
   }

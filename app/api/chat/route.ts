@@ -1233,11 +1233,17 @@ function formatCustomerDateTime(value: string | null | undefined) {
   if (!value) return null
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  const day = date.getDate()
-  const month = date.toLocaleDateString('en-GB', { month: 'long' })
-  const year = date.getFullYear()
-  const time = date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })
-  return `${day} ${month} ${year} at ${time}`
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Warsaw',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date)
+  const valueFor = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? ''
+  return `${valueFor('day')} ${valueFor('month')} ${valueFor('year')} at ${valueFor('hour')}:${valueFor('minute')}`
 }
 
 function formatCustomerRentalWindow(pickupAt: string | null | undefined, returnAt: string | null | undefined) {

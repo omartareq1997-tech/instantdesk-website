@@ -4125,7 +4125,7 @@ function TeamSection({
   )
 }
 
-type RentalTab = 'fleet' | 'calendar' | 'availability' | 'booking' | 'locations' | 'documents' | 'sync'
+type RentalTab = 'fleet' | 'calendar' | 'availability' | 'booking' | 'locations' | 'ledger' | 'documents' | 'sync'
 
 const RENTAL_TABS: { id: RentalTab; label: string; Icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'fleet', label: 'Fleet', Icon: Car },
@@ -4133,6 +4133,7 @@ const RENTAL_TABS: { id: RentalTab; label: string; Icon: React.ComponentType<{ c
   { id: 'availability', label: 'Availability', Icon: Search },
   { id: 'booking', label: 'Bookings', Icon: CalendarPlus },
   { id: 'locations', label: 'Locations', Icon: MapPin },
+  { id: 'ledger', label: 'Rental Ledger', Icon: ScrollText },
   { id: 'documents', label: 'Documents', Icon: FileText },
   { id: 'sync', label: 'Sync & Rules', Icon: Link2 },
 ]
@@ -4309,7 +4310,89 @@ function bookingRangePosition(booking: RentalBooking, day: Date) {
 
 function fmtDateTime(iso?: string | null) {
   if (!iso) return '-'
-  return new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+  return new Date(iso).toLocaleString('en-GB', { timeZone: 'Europe/Warsaw', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function rentalDaysBetween(pickupAt?: string | null, dropoffAt?: string | null) {
+  const pickup = pickupAt ? new Date(pickupAt).getTime() : NaN
+  const dropoff = dropoffAt ? new Date(dropoffAt).getTime() : NaN
+  if (!Number.isFinite(pickup) || !Number.isFinite(dropoff) || dropoff <= pickup) return 0
+  return Math.max(1, Math.ceil((dropoff - pickup) / 86_400_000))
+}
+
+function formatMoney(value?: number | null, currency = 'PLN') {
+  const amount = Number(value ?? 0)
+  return `${amount.toLocaleString('en-US', { maximumFractionDigits: 0 })} ${currency}`
+}
+
+function inferRentalCityLabel(value?: string | null) {
+  const text = String(value ?? '').toLowerCase()
+  if (!text.trim()) return 'Unassigned'
+  if (/krak[oó]w|krakow|boche[ńn]ska/.test(text)) return 'Kraków'
+  if (/warszawa|warsaw/.test(text)) return 'Warsaw'
+  if (/pozna[ńn]|poznan/.test(text)) return 'Poznań'
+  if (/wroc[łl]aw|wroclaw/.test(text)) return 'Wrocław'
+  if (/gda[ńn]sk|gdansk/.test(text)) return 'Gdańsk'
+  return String(value).split(/[,\-–]/)[0]?.trim() || 'Unassigned'
+}
+
+function cityForCar(car: RentalCar) {
+  return car.city || inferRentalCityLabel(car.locationName)
+}
+
+function cityForBooking(booking: RentalBooking, cars: RentalCar[]) {
+  return booking.city || inferRentalCityLabel(booking.pickupLocation || cars.find(car => car.id === booking.carId)?.locationName)
+}
+
+function bookingCustomerName(booking: RentalBooking) {
+  return booking.customerName?.trim() || 'Manual booking'
+}
+
+function BookingHoverCard({ booking, car, settings }: { booking: RentalBooking; car?: RentalCar | null; settings: RentalSettings }) {
+  const pickup = fmtDateTime(booking.pickupAt)
+  const dropoff = fmtDateTime(booking.dropoffAt ?? booking.returnAt)
+  const days = rentalDaysBetween(booking.pickupAt, booking.dropoffAt ?? booking.returnAt)
+  const dailyPrice = booking.dailyPrice ?? car?.dailyPrice ?? (days ? Math.round((booking.totalPrice || 0) / days) : 0)
+  const deposit = booking.deposit ?? car?.deposit ?? 0
+  const reference = booking.bookingNumber || `RB-${booking.id.slice(0, 8).toUpperCase()}`
+  const rows = [
+    ['Customer', bookingCustomerName(booking)],
+    ['Reference', reference],
+    ['Car', booking.carName || car?.name || 'Rental car'],
+    ['Status', RENTAL_STATUS_CFG[booking.status]?.label ?? booking.status],
+    ['Pickup', pickup],
+    ['Return', dropoff],
+    ['Duration', days ? `${days} rental day${days === 1 ? '' : 's'}` : 'Not set'],
+    ['Rental value', formatMoney(booking.totalPrice, settings.currency ?? 'PLN')],
+    ['Daily price', dailyPrice ? formatMoney(dailyPrice, settings.currency ?? 'PLN') : 'Not set'],
+    ['Deposit', deposit ? formatMoney(deposit, settings.currency ?? 'PLN') : 'Not set'],
+    ['Deposit status', booking.paymentStatus || 'not set'],
+    ['Phone', booking.customerPhone || 'Not set'],
+    ['Email', booking.customerEmail || 'Not set'],
+    ['Pickup location', booking.pickupLocation || 'Not set'],
+    ['Drop-off location', booking.dropoffLocation || 'Not set'],
+    ['Buffer until', booking.bufferUntil ? fmtDateTime(booking.bufferUntil) : `${settings.cleaningBufferMinutes ?? 120} min after return`],
+    ['Source', booking.source || 'manual'],
+  ]
+  return (
+    <div className="pointer-events-none absolute left-1/2 top-full z-40 mt-2 hidden w-80 -translate-x-1/2 rounded-2xl border border-white/10 bg-[#11100f] p-4 text-left shadow-2xl group-hover:block">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-black text-white">{bookingCustomerName(booking)}</p>
+          <p className="mt-0.5 text-xs text-white/38">{reference}</p>
+        </div>
+        <RentalStatusBadge status={booking.status} />
+      </div>
+      <div className="grid gap-1.5 text-[11px]">
+        {rows.slice(2).map(([label, value]) => (
+          <div key={label} className="grid grid-cols-[94px_minmax(0,1fr)] gap-2">
+            <span className="text-white/30">{label}</span>
+            <span className="truncate font-semibold text-white/64">{value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 function RentalOperationsSection() {
@@ -4371,21 +4454,67 @@ function RentalOperationsSection() {
   const [calendarModalCar, setCalendarModalCar] = useState<RentalCar | null>(null)
   const [calendarBookings, setCalendarBookings] = useState<RentalBooking[]>([])
   const [calendarStatus, setCalendarStatus] = useState('')
+  const [calendarLoading, setCalendarLoading] = useState(false)
   const [calendarCursor, setCalendarCursor] = useState(() => startOfMonth(new Date()))
+  const [selectedRentalCity, setSelectedRentalCity] = useState('All cities')
+  const [ledgerSearch, setLedgerSearch] = useState('')
+  const [ledgerStatusFilter, setLedgerStatusFilter] = useState('all')
+  const [ledgerDepositFilter, setLedgerDepositFilter] = useState('all')
+  const [ledgerCarFilter, setLedgerCarFilter] = useState('all')
+  const [ledgerDateFrom, setLedgerDateFrom] = useState('')
+  const [ledgerDateTo, setLedgerDateTo] = useState('')
   const [locationModalOpen, setLocationModalOpen] = useState(false)
   const [carForm, setCarForm] = useState<RentalCarForm>(() => emptyRentalCarForm())
   const [locationForm, setLocationForm] = useState<RentalLocationForm>(() => emptyRentalLocationForm())
   const [crudStatus, setCrudStatus] = useState('')
   const fleetCsvRef = useRef<HTMLInputElement>(null)
+  const calendarRequestRef = useRef<string | null>(null)
 
   const calendarMonths = useMemo(() => [calendarCursor, addMonths(calendarCursor, 1)], [calendarCursor])
   const activeCalendarBookings = useMemo(() => calendarBookings.filter(rentalBookingBlocksCalendar), [calendarBookings])
   const nonBlockingCalendarBookings = useMemo(() => calendarBookings.filter(booking => !rentalBookingBlocksCalendar(booking)), [calendarBookings])
+  const rentalCities = useMemo(() => {
+    const values = new Set<string>()
+    for (const location of locations) values.add(location.city || inferRentalCityLabel(`${location.name} ${location.address ?? ''}`))
+    for (const car of cars) values.add(cityForCar(car))
+    for (const booking of bookings) values.add(cityForBooking(booking, cars))
+    return ['All cities', ...Array.from(values).filter(Boolean).sort((a, b) => a.localeCompare(b))]
+  }, [bookings, cars, locations])
+  const visibleCars = useMemo(() => selectedRentalCity === 'All cities' ? cars : cars.filter(car => cityForCar(car) === selectedRentalCity), [cars, selectedRentalCity])
+  const visibleLocations = useMemo(() => selectedRentalCity === 'All cities' ? locations : locations.filter(location => (location.city || inferRentalCityLabel(`${location.name} ${location.address ?? ''}`)) === selectedRentalCity), [locations, selectedRentalCity])
+  const visibleBookings = useMemo(() => selectedRentalCity === 'All cities' ? bookings : bookings.filter(booking => cityForBooking(booking, cars) === selectedRentalCity), [bookings, cars, selectedRentalCity])
+  const filteredLedgerBookings = useMemo(() => {
+    const query = ledgerSearch.trim().toLowerCase()
+    const fromMs = ledgerDateFrom ? new Date(`${ledgerDateFrom}T00:00:00`).getTime() : null
+    const toMs = ledgerDateTo ? new Date(`${ledgerDateTo}T23:59:59`).getTime() : null
+    return visibleBookings.filter(booking => {
+      const car = cars.find(item => item.id === booking.carId)
+      if (ledgerStatusFilter !== 'all' && booking.status !== ledgerStatusFilter) return false
+      if (ledgerCarFilter !== 'all' && booking.carId !== ledgerCarFilter) return false
+      const depositStatus = booking.paymentStatus || 'not_set'
+      if (ledgerDepositFilter !== 'all' && depositStatus !== ledgerDepositFilter) return false
+      const pickupMs = new Date(booking.pickupAt).getTime()
+      if (fromMs && pickupMs < fromMs) return false
+      if (toMs && pickupMs > toMs) return false
+      if (!query) return true
+      const haystack = [
+        booking.bookingNumber,
+        booking.customerName,
+        booking.customerPhone,
+        booking.customerEmail,
+        booking.carName,
+        car?.licensePlate,
+        booking.pickupLocation,
+        booking.dropoffLocation,
+      ].filter(Boolean).join(' ').toLowerCase()
+      return haystack.includes(query)
+    })
+  }, [bookings, cars, ledgerCarFilter, ledgerDateFrom, ledgerDateTo, ledgerDepositFilter, ledgerSearch, ledgerStatusFilter, visibleBookings])
 
-  const reloadFleet = useCallback(async () => {
-    setLoading(true)
+  const reloadFleet = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true)
     try {
-      const res = await fetch('/api/rental/fleet')
+      const res = await fetch('/api/rental/fleet', { cache: 'no-store' })
       const data = await res.json()
       setCars(data.cars ?? [])
       setBookings(data.bookings ?? [])
@@ -4399,11 +4528,20 @@ function RentalOperationsSection() {
     } catch {
       setMigrationRequired(true)
     } finally {
-      setLoading(false)
+      if (showLoading) setLoading(false)
     }
   }, [])
 
   useEffect(() => { void reloadFleet() }, [reloadFleet])
+  useEffect(() => {
+    const interval = window.setInterval(() => void reloadFleet(false), 6000)
+    return () => window.clearInterval(interval)
+  }, [reloadFleet])
+  useEffect(() => {
+    if (!calendarModalCar) return
+    const interval = window.setInterval(() => void openCarCalendar(calendarModalCar), 8000)
+    return () => window.clearInterval(interval)
+  }, [calendarModalCar])
 
   const fleetCalendarDays = useMemo(() => monthDays(calendarCursor), [calendarCursor])
 
@@ -4467,17 +4605,22 @@ function RentalOperationsSection() {
   }
 
   async function openCarCalendar(car: RentalCar) {
+    calendarRequestRef.current = car.id
     setCalendarModalCar(car)
     setCalendarStatus('Loading booking calendar...')
+    setCalendarLoading(true)
     setCalendarBookings([])
     try {
-      const res = await fetch(`/api/rental/cars/${encodeURIComponent(car.id)}/calendar`)
+      const res = await fetch(`/api/rental/cars/${encodeURIComponent(car.id)}/calendar`, { cache: 'no-store' })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error ?? 'Calendar load failed')
+      if (calendarRequestRef.current !== car.id) return
       setCalendarBookings(data.bookings ?? [])
       setCalendarStatus('')
     } catch (error) {
       setCalendarStatus(error instanceof Error ? error.message : 'Calendar load failed')
+    } finally {
+      if (calendarRequestRef.current === car.id) setCalendarLoading(false)
     }
   }
 
@@ -4598,6 +4741,7 @@ function RentalOperationsSection() {
       return
     }
     setLocationModalOpen(false)
+    setSelectedRentalCity('All cities')
     setCrudStatus('Saved location.')
     await reloadFleet()
   }
@@ -4755,12 +4899,71 @@ function RentalOperationsSection() {
     }
   }
 
+  function exportRentalLedgerCsv() {
+    const headers = [
+      'Booking reference', 'Customer name', 'Phone', 'Email', 'Rented car', 'City', 'Pickup location', 'Drop-off location',
+      'Pickup date/time', 'Return date/time', 'Rental days', 'Daily price', 'Rental value', 'Deposit amount',
+      'Deposit status', 'Booking status', 'Source', 'Created at', 'Last updated',
+    ]
+    const rows = filteredLedgerBookings.map(booking => {
+      const car = cars.find(item => item.id === booking.carId)
+      const days = rentalDaysBetween(booking.pickupAt, booking.dropoffAt ?? booking.returnAt)
+      const dailyPrice = booking.dailyPrice ?? car?.dailyPrice ?? (days ? Math.round((booking.totalPrice || 0) / days) : 0)
+      return [
+        booking.bookingNumber || `RB-${booking.id.slice(0, 8).toUpperCase()}`,
+        bookingCustomerName(booking),
+        booking.customerPhone || '',
+        booking.customerEmail || '',
+        booking.carName || car?.name || '',
+        cityForBooking(booking, cars),
+        booking.pickupLocation || '',
+        booking.dropoffLocation || '',
+        fmtDateTime(booking.pickupAt),
+        fmtDateTime(booking.dropoffAt ?? booking.returnAt),
+        String(days),
+        String(dailyPrice || ''),
+        String(booking.totalPrice || ''),
+        String(booking.deposit ?? car?.deposit ?? ''),
+        booking.paymentStatus || 'not set',
+        booking.status,
+        booking.source || 'manual',
+        booking.createdAt ? fmtDateTime(booking.createdAt) : '',
+        booking.updatedAt ? fmtDateTime(booking.updatedAt) : '',
+      ]
+    })
+    const csv = [headers, ...rows]
+      .map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(','))
+      .join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `rental-ledger-${new Date().toISOString().slice(0, 10)}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
   const statusCounts = useMemo(() => {
-    return bookings.reduce<Record<string, number>>((acc, booking) => {
+    return visibleBookings.reduce<Record<string, number>>((acc, booking) => {
       acc[booking.status] = (acc[booking.status] ?? 0) + 1
       return acc
     }, {})
-  }, [bookings])
+  }, [visibleBookings])
+  const ledgerSummary = useMemo(() => {
+    return filteredLedgerBookings.reduce((acc, booking) => {
+      acc.total += 1
+      if (booking.status === 'active') acc.active += 1
+      if (booking.status === 'confirmed') acc.confirmed += 1
+      if (booking.status === 'completed') acc.completed += 1
+      if (booking.status === 'cancelled') acc.cancelled += 1
+      acc.value += Number(booking.totalPrice ?? 0)
+      const deposit = Number(booking.deposit ?? cars.find(car => car.id === booking.carId)?.deposit ?? 0)
+      const status = String(booking.paymentStatus ?? '').toLowerCase()
+      if (status.includes('release') || status.includes('refund')) acc.depositsReleased += deposit
+      else if (status.includes('held') || status.includes('hold') || status.includes('paid')) acc.depositsHeld += deposit
+      return acc
+    }, { total: 0, active: 0, confirmed: 0, completed: 0, cancelled: 0, value: 0, depositsHeld: 0, depositsReleased: 0 })
+  }, [cars, filteredLedgerBookings])
 
   return (
     <div className="space-y-5">
@@ -4776,10 +4979,15 @@ function RentalOperationsSection() {
                 Manage fleet availability, website chat booking requests, human handover, driver documents, extensions, pickup instructions, and external calendar sync from one operational layer.
               </p>
             </div>
-            <button onClick={() => void reloadFleet()} className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-white px-4 text-sm font-semibold text-black transition-colors hover:bg-[#f5f0ea]">
-              <RefreshCw className="h-4 w-4" />
-              Refresh
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <select value={selectedRentalCity} onChange={event => setSelectedRentalCity(event.target.value)} className="h-10 rounded-full border border-white/10 bg-black/25 px-4 text-sm font-semibold text-white/70 outline-none">
+                {rentalCities.map(city => <option key={city} value={city}>{city}</option>)}
+              </select>
+              <button onClick={() => void reloadFleet()} className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-white px-4 text-sm font-semibold text-black transition-colors hover:bg-[#f5f0ea]">
+                <RefreshCw className="h-4 w-4" />
+                Refresh
+              </button>
+            </div>
           </div>
           {migrationRequired && (
             <div className="mt-4 rounded-xl border border-[#f8a36d]/25 bg-[#f8a36d]/10 p-3 text-sm font-semibold text-[#f8a36d]">
@@ -4790,8 +4998,8 @@ function RentalOperationsSection() {
         <Card className="p-5">
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-white/34">Today</p>
           <div className="mt-4 grid grid-cols-3 gap-3">
-            <div><p className="text-2xl font-black text-white">{cars.length}</p><p className="text-xs text-white/36">Cars</p></div>
-            <div><p className="text-2xl font-black text-white">{bookings.length}</p><p className="text-xs text-white/36">Bookings</p></div>
+            <div><p className="text-2xl font-black text-white">{visibleCars.length}</p><p className="text-xs text-white/36">Cars</p></div>
+            <div><p className="text-2xl font-black text-white">{visibleBookings.length}</p><p className="text-xs text-white/36">Bookings</p></div>
             <div><p className="text-2xl font-black text-white">{settings.cleaningBufferMinutes ?? 120}m</p><p className="text-xs text-white/36">Buffer</p></div>
           </div>
         </Card>
@@ -4831,7 +5039,7 @@ function RentalOperationsSection() {
               <button onClick={() => void useDemoFleetNow()} className="btn-muted"><Check className="h-4 w-4" />Use demo fleet</button>
             </div>
           </div>
-          {cars.length === 0 ? (
+          {visibleCars.length === 0 ? (
             <div className="p-8 text-center">
               <p className="text-base font-semibold text-white">No cars yet. Add your first car, import CSV, or use demo fleet.</p>
               <div className="mt-5 flex justify-center gap-2">
@@ -4848,7 +5056,7 @@ function RentalOperationsSection() {
                 </tr>
               </thead>
               <tbody>
-                {cars.map(car => (
+                {visibleCars.map(car => (
                   <tr key={car.id} className="border-t border-white/8">
                     <td className="px-5 py-4">
                       <div className="font-semibold text-white">{car.name}</div>
@@ -4899,23 +5107,24 @@ function RentalOperationsSection() {
                 <div className="p-4 text-xs font-black uppercase tracking-[0.14em] text-white/34">Car</div>
                 {fleetCalendarDays.map(day => <div key={day.toISOString()} className="p-3 text-center text-[10px] font-black uppercase tracking-[0.08em] text-white/34">{day.getDate()}</div>)}
               </div>
-              {cars.map(car => (
+              {visibleCars.map(car => (
                 <div key={car.id} className="grid border-b border-white/8 last:border-b-0" style={{ gridTemplateColumns: `220px repeat(${fleetCalendarDays.length}, minmax(42px, 1fr))` }}>
                   <div className="p-4">
                     <p className="text-sm font-semibold text-white">{car.name}</p>
                     <p className="mt-1 text-xs text-white/34">{car.className}</p>
                   </div>
                   {fleetCalendarDays.map(day => {
-                    const dayBookings = bookings.filter(booking => booking.carId === car.id && rentalBookingBlocksCalendar(booking) && bookingTouchesDay(booking, day))
+                    const dayBookings = visibleBookings.filter(booking => booking.carId === car.id && rentalBookingBlocksCalendar(booking) && bookingTouchesDay(booking, day))
                     const primary = dayBookings[0]
                     const pos = primary ? bookingRangePosition(primary, day) : null
                     return (
-                      <div key={`${car.id}-${day.toISOString()}`} title={primary ? `${primary.bookingNumber}: ${fmtDateTime(primary.pickupAt)} → ${fmtDateTime(bookingEnd(primary))}${primary.bufferUntil ? ` · buffer until ${fmtDateTime(primary.bufferUntil)}` : ''}` : 'Free'} className={`relative min-h-16 border-l border-white/8 p-1 ${dayBookings.length ? 'bg-[#f8a36d]/5' : ''}`}>
+                      <div key={`${car.id}-${day.toISOString()}`} className={`group relative min-h-16 border-l border-white/8 p-1 ${dayBookings.length ? 'bg-[#f8a36d]/5' : ''}`}>
                         {primary && (
                           <div className={`absolute inset-x-0 top-1/2 h-5 -translate-y-1/2 border-y border-[#f8a36d]/30 bg-[#f8a36d]/18 ${pos?.starts ? 'left-1 rounded-l-full border-l' : ''} ${pos?.ends ? 'right-1 rounded-r-full border-r' : ''}`}>
                             <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_45%,rgba(248,163,109,0.45)_46%,rgba(248,163,109,0.45)_54%,transparent_55%)] bg-[length:8px_8px]" />
                           </div>
                         )}
+                        {primary && <BookingHoverCard booking={primary} car={car} settings={settings} />}
                         {dayBookings.length > 1 && <span className="absolute right-1 top-1 rounded-full bg-white/10 px-1.5 text-[9px] font-bold text-white/55">+{dayBookings.length - 1}</span>}
                       </div>
                     )
@@ -4945,11 +5154,11 @@ function RentalOperationsSection() {
             </select>
             <select value={availabilityForm.pickupLocation} onChange={e => setAvailabilityForm(prev => ({ ...prev, pickupLocation: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
               <option value="">Pickup location</option>
-              {locations.map(location => <option key={location.id} value={location.name}>{location.name}</option>)}
+              {visibleLocations.map(location => <option key={location.id} value={location.name}>{location.name}</option>)}
             </select>
             <select value={availabilityForm.dropoffLocation} onChange={e => setAvailabilityForm(prev => ({ ...prev, dropoffLocation: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
               <option value="">Drop-off location</option>
-              {locations.map(location => <option key={location.id} value={location.name}>{location.name}</option>)}
+              {visibleLocations.map(location => <option key={location.id} value={location.name}>{location.name}</option>)}
             </select>
             <input value={availabilityForm.seats} onChange={e => setAvailabilityForm(prev => ({ ...prev, seats: e.target.value }))} placeholder="Seats" inputMode="numeric" className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
             <input value={availabilityForm.budget} onChange={e => setAvailabilityForm(prev => ({ ...prev, budget: e.target.value }))} placeholder="Budget/day" inputMode="numeric" className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
@@ -4981,15 +5190,15 @@ function RentalOperationsSection() {
             <input type="datetime-local" value={bookingForm.returnDateTime} onChange={e => setBookingForm(prev => ({ ...prev, returnDateTime: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
             <select value={bookingForm.carId} onChange={e => setBookingForm(prev => ({ ...prev, carId: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
               <option value="">Select car</option>
-              {cars.map(car => <option key={car.id} value={car.id}>{car.name} · {car.className}</option>)}
+              {visibleCars.map(car => <option key={car.id} value={car.id}>{car.name} · {car.className}</option>)}
             </select>
             <select value={bookingForm.pickupLocationId} onChange={e => setBookingForm(prev => ({ ...prev, pickupLocationId: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
               <option value="">Pickup location</option>
-              {locations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}
+              {visibleLocations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}
             </select>
             <select value={bookingForm.dropoffLocationId} onChange={e => setBookingForm(prev => ({ ...prev, dropoffLocationId: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
               <option value="">Drop-off location</option>
-              {locations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}
+              {visibleLocations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}
             </select>
             <input placeholder="Extras" value={bookingForm.extras} onChange={e => setBookingForm(prev => ({ ...prev, extras: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
             <input placeholder="Total price" value={bookingForm.totalPrice} onChange={e => setBookingForm(prev => ({ ...prev, totalPrice: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
@@ -5005,12 +5214,12 @@ function RentalOperationsSection() {
           <div className="mt-6 overflow-hidden rounded-2xl border border-white/8">
             <div className="flex items-center justify-between bg-white/[0.025] px-4 py-3">
               <h4 className="text-sm font-black text-white">All bookings</h4>
-              <span className="text-xs font-semibold text-white/34">{bookings.length} total</span>
+              <span className="text-xs font-semibold text-white/34">{visibleBookings.length} total</span>
             </div>
             <div className="divide-y divide-white/8">
-              {bookings.length === 0 ? (
+              {visibleBookings.length === 0 ? (
                 <p className="px-4 py-5 text-sm text-white/42">No bookings yet.</p>
-              ) : bookings.map(booking => (
+              ) : visibleBookings.map(booking => (
                 <div key={booking.id} className="grid gap-3 px-4 py-4 lg:grid-cols-[1.2fr_1fr_auto] lg:items-center">
                   <div>
                     <p className="text-sm font-black text-white">{booking.customerName}</p>
@@ -5047,14 +5256,14 @@ function RentalOperationsSection() {
               <button onClick={() => void useDemoLocationsNow()} className="btn-muted">Use demo locations</button>
             </div>
           </div>
-          {locations.length === 0 ? (
+          {visibleLocations.length === 0 ? (
             <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.025] p-8 text-center">
               <p className="text-base font-semibold text-white">No locations yet. Add pickup/drop-off locations so the bot can guide customers.</p>
               <button onClick={openAddLocation} className="btn-primary mt-5"><Plus className="h-4 w-4" />Add pickup/drop-off location</button>
             </div>
           ) : (
           <div className="mt-5 grid gap-4 lg:grid-cols-2">
-            {locations.map(location => (
+            {visibleLocations.map(location => (
             <div key={location.id} className="rounded-2xl border border-white/8 bg-white/[0.025] p-5">
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -5080,6 +5289,93 @@ function RentalOperationsSection() {
           </div>
           )}
           {crudStatus && <p className="mt-4 text-sm font-semibold text-[#f8a36d]">{crudStatus}</p>}
+        </Card>
+      )}
+
+      {!loading && tab === 'ledger' && (
+        <Card className="overflow-hidden">
+          <div className="flex flex-col gap-4 border-b border-white/8 p-5 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h3 className="text-base font-black text-white">Rental Ledger</h3>
+              <p className="mt-1 text-sm text-white/40">Operational booking history, deposits, customer details, and revenue for the current filters.</p>
+            </div>
+            <button type="button" onClick={exportRentalLedgerCsv} className="btn-muted"><Download className="h-4 w-4" />Export CSV</button>
+          </div>
+          <div className="grid gap-3 border-b border-white/8 p-5 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+            {[
+              ['Total bookings', ledgerSummary.total],
+              ['Active', ledgerSummary.active],
+              ['Confirmed', ledgerSummary.confirmed],
+              ['Completed', ledgerSummary.completed],
+              ['Cancelled', ledgerSummary.cancelled],
+              ['Rental value', formatMoney(ledgerSummary.value, settings.currency ?? 'PLN')],
+              ['Deposits held', formatMoney(ledgerSummary.depositsHeld, settings.currency ?? 'PLN')],
+              ['Deposits released', formatMoney(ledgerSummary.depositsReleased, settings.currency ?? 'PLN')],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-2xl border border-white/8 bg-white/[0.025] p-3">
+                <div className="text-[10px] font-black uppercase tracking-[0.12em] text-white/30">{label}</div>
+                <div className="mt-2 text-base font-black text-white">{value}</div>
+              </div>
+            ))}
+          </div>
+          <div className="grid gap-3 border-b border-white/8 p-5 md:grid-cols-3 xl:grid-cols-6">
+            <input value={ledgerSearch} onChange={event => setLedgerSearch(event.target.value)} placeholder="Search name, phone, email, ref, plate" className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none" />
+            <input type="date" value={ledgerDateFrom} onChange={event => setLedgerDateFrom(event.target.value)} className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none" />
+            <input type="date" value={ledgerDateTo} onChange={event => setLedgerDateTo(event.target.value)} className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none" />
+            <select value={ledgerCarFilter} onChange={event => setLedgerCarFilter(event.target.value)} className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none">
+              <option value="all">All cars</option>
+              {visibleCars.map(car => <option key={car.id} value={car.id}>{car.name}</option>)}
+            </select>
+            <select value={ledgerStatusFilter} onChange={event => setLedgerStatusFilter(event.target.value)} className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none">
+              <option value="all">All statuses</option>
+              {['pending', 'confirmed', 'active', 'completed', 'cancelled'].map(status => <option key={status} value={status}>{RENTAL_STATUS_CFG[status]?.label ?? status}</option>)}
+            </select>
+            <select value={ledgerDepositFilter} onChange={event => setLedgerDepositFilter(event.target.value)} className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none">
+              <option value="all">All deposit states</option>
+              {['not_set', 'pending', 'held', 'released', 'refunded', 'paid'].map(status => <option key={status} value={status}>{status.replace(/_/g, ' ')}</option>)}
+            </select>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1500px] text-left">
+              <thead className="bg-white/[0.025] text-[11px] uppercase tracking-[0.14em] text-white/34">
+                <tr>
+                  {['Reference', 'Customer', 'Car', 'City', 'Locations', 'Pickup', 'Return', 'Days', 'Daily', 'Value', 'Deposit', 'Deposit status', 'Status', 'Source', 'Created', 'Updated'].map(column => <th key={column} className="px-4 py-3 font-black">{column}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {filteredLedgerBookings.length === 0 ? (
+                  <tr><td colSpan={16} className="px-4 py-6 text-sm text-white/42">No ledger rows match these filters.</td></tr>
+                ) : filteredLedgerBookings.map(booking => {
+                  const car = cars.find(item => item.id === booking.carId)
+                  const days = rentalDaysBetween(booking.pickupAt, booking.dropoffAt ?? booking.returnAt)
+                  const dailyPrice = booking.dailyPrice ?? car?.dailyPrice ?? (days ? Math.round((booking.totalPrice || 0) / days) : 0)
+                  return (
+                    <tr key={booking.id} className="border-t border-white/8 text-sm">
+                      <td className="px-4 py-3 font-mono text-xs text-white/54">{booking.bookingNumber || `RB-${booking.id.slice(0, 8).toUpperCase()}`}</td>
+                      <td className="px-4 py-3">
+                        <div className="font-semibold text-white">{bookingCustomerName(booking)}</div>
+                        <div className="text-xs text-white/34">{booking.customerPhone || 'No phone'} · {booking.customerEmail || 'No email'}</div>
+                      </td>
+                      <td className="px-4 py-3 text-white/58">{booking.carName || car?.name || 'Unassigned'}<div className="text-xs text-white/30">{car?.licensePlate || booking.carId || '-'}</div></td>
+                      <td className="px-4 py-3 text-white/50">{cityForBooking(booking, cars)}</td>
+                      <td className="px-4 py-3 text-xs text-white/42">{booking.pickupLocation || 'Pickup'} → {booking.dropoffLocation || 'Drop-off'}</td>
+                      <td className="px-4 py-3 text-xs text-white/50">{fmtDateTime(booking.pickupAt)}</td>
+                      <td className="px-4 py-3 text-xs text-white/50">{fmtDateTime(booking.dropoffAt ?? booking.returnAt)}</td>
+                      <td className="px-4 py-3 text-white/52">{days}</td>
+                      <td className="px-4 py-3 text-white/52">{dailyPrice ? formatMoney(dailyPrice, settings.currency ?? 'PLN') : '-'}</td>
+                      <td className="px-4 py-3 font-semibold text-white/70">{formatMoney(booking.totalPrice, settings.currency ?? 'PLN')}</td>
+                      <td className="px-4 py-3 text-white/52">{formatMoney(booking.deposit ?? car?.deposit ?? 0, settings.currency ?? 'PLN')}</td>
+                      <td className="px-4 py-3 text-white/42">{booking.paymentStatus || 'not set'}</td>
+                      <td className="px-4 py-3"><RentalStatusBadge status={booking.status} /></td>
+                      <td className="px-4 py-3 text-white/42">{booking.source || 'manual'}</td>
+                      <td className="px-4 py-3 text-xs text-white/40">{booking.createdAt ? fmtDateTime(booking.createdAt) : '-'}</td>
+                      <td className="px-4 py-3 text-xs text-white/40">{booking.updatedAt ? fmtDateTime(booking.updatedAt) : '-'}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </Card>
       )}
 
@@ -5168,9 +5464,9 @@ function RentalOperationsSection() {
                   <p className="mt-2 text-sm text-white/46">{calendarModalCar.name} · {calendarModalCar.licensePlate ?? 'No plate'} · {calendarModalCar.status}</p>
                   <p className="mt-1 text-xs text-white/34">Exact pickup/drop-off intervals include the {settings.cleaningBufferMinutes ?? 120} minute turnaround buffer.</p>
                 </div>
-                <button onClick={() => setCalendarModalCar(null)} className="icon-btn self-start"><X className="h-4 w-4" /></button>
+                <button onClick={() => { calendarRequestRef.current = null; setCalendarModalCar(null) }} className="icon-btn self-start"><X className="h-4 w-4" /></button>
               </div>
-              {calendarStatus && <p className="mt-4 rounded-xl border border-[#f8a36d]/20 bg-[#f8a36d]/10 px-4 py-3 text-sm font-semibold text-[#f8a36d]">{calendarStatus}</p>}
+              {calendarStatus && !calendarLoading && <p className="mt-4 rounded-xl border border-[#f8a36d]/20 bg-[#f8a36d]/10 px-4 py-3 text-sm font-semibold text-[#f8a36d]">{calendarStatus}</p>}
               <div className="mt-5 grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
                 <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
                   <div className="mb-4 flex items-center justify-between gap-3">
@@ -5178,6 +5474,18 @@ function RentalOperationsSection() {
                     <p className="text-sm font-black text-white">{monthLabel(calendarCursor)} - {monthLabel(addMonths(calendarCursor, 1))}</p>
                     <button onClick={() => setCalendarCursor(prev => addMonths(prev, 1))} className="btn-muted">Next</button>
                   </div>
+                  {calendarLoading ? (
+                    <div className="grid gap-5 lg:grid-cols-2">
+                      {[0, 1].map(index => (
+                        <div key={index} className="space-y-3">
+                          <div className="h-5 w-36 animate-pulse rounded bg-white/8" />
+                          <div className="grid grid-cols-7 gap-1">
+                            {Array.from({ length: 35 }, (_, i) => <div key={i} className="h-12 animate-pulse rounded-lg bg-white/[0.04]" />)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
                   <div className="grid gap-5 lg:grid-cols-2">
                     {calendarMonths.map(month => (
                       <div key={month.toISOString()}>
@@ -5191,9 +5499,10 @@ function RentalOperationsSection() {
                             const primary = dayBookings[0]
                             const pos = primary ? bookingRangePosition(primary, day) : null
                             return (
-                              <div key={day.toISOString()} title={primary ? `${primary.customerName}: ${fmtDateTime(primary.pickupAt)} → ${fmtDateTime(bookingEnd(primary))}${primary.bufferUntil ? ` · buffer until ${fmtDateTime(primary.bufferUntil)}` : ''}` : 'Free'} className={`relative min-h-14 border-y border-white/8 bg-black/18 p-1.5 ${dayBookings.length ? 'border-[#f8a36d]/30 bg-[#f8a36d]/10 text-[#f8a36d]' : 'text-white/60'} ${pos?.starts ? 'rounded-l-xl border-l' : ''} ${pos?.ends ? 'rounded-r-xl border-r' : ''}`}>
+                              <div key={day.toISOString()} className={`group relative min-h-14 border-y border-white/8 bg-black/18 p-1.5 ${dayBookings.length ? 'border-[#f8a36d]/30 bg-[#f8a36d]/10 text-[#f8a36d]' : 'text-white/60'} ${pos?.starts ? 'rounded-l-xl border-l' : ''} ${pos?.ends ? 'rounded-r-xl border-r' : ''}`}>
                                 <div className="relative z-10 text-xs font-bold">{day.getDate()}</div>
                                 {primary && <div className="absolute inset-1 rounded-lg bg-[linear-gradient(135deg,transparent_45%,rgba(248,163,109,0.4)_46%,rgba(248,163,109,0.4)_54%,transparent_55%)] bg-[length:8px_8px]" />}
+                                {primary && <BookingHoverCard booking={primary} car={calendarModalCar} settings={settings} />}
                                 {dayBookings.length > 1 && <span className="absolute bottom-1 right-1 z-10 rounded-full bg-black/35 px-1 text-[9px] font-bold text-white/70">+{dayBookings.length - 1}</span>}
                               </div>
                             )
@@ -5202,17 +5511,23 @@ function RentalOperationsSection() {
                       </div>
                     ))}
                   </div>
+                  )}
                 </div>
                 <div className="grid gap-4">
                   <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
                     <h4 className="text-sm font-black text-white">Booked intervals</h4>
                     <div className="mt-3 max-h-80 space-y-3 overflow-y-auto pr-1">
-                      {activeCalendarBookings.length === 0 ? (
+                      {calendarLoading ? (
+                        <div className="space-y-3">
+                          <div className="h-20 animate-pulse rounded-xl bg-white/[0.04]" />
+                          <div className="h-20 animate-pulse rounded-xl bg-white/[0.04]" />
+                        </div>
+                      ) : activeCalendarBookings.length === 0 ? (
                         <p className="text-sm text-white/42">No bookings for this car.</p>
                       ) : activeCalendarBookings.map(booking => (
                         <div key={booking.id} className="rounded-xl border border-white/8 bg-black/20 p-3">
                           <div className="flex items-center justify-between gap-3">
-                            <p className="text-sm font-black text-white">{booking.customerName}</p>
+                            <p className="text-sm font-black text-white">{bookingCustomerName(booking)}</p>
                             <RentalStatusBadge status={booking.status} />
                           </div>
                           <p className="mt-2 text-xs leading-5 text-white/48">Booked: {fmtDateTime(booking.pickupAt)} → {fmtDateTime(booking.dropoffAt ?? booking.returnAt)}</p>
@@ -5227,7 +5542,7 @@ function RentalOperationsSection() {
                             {nonBlockingCalendarBookings.map(booking => (
                               <div key={booking.id} className="rounded-lg border border-white/8 bg-black/15 p-2 text-xs text-white/44">
                                 <div className="flex items-center justify-between gap-3">
-                                  <span>{booking.customerName}</span>
+                                  <span>{bookingCustomerName(booking)}</span>
                                   <span className="font-bold capitalize">{booking.status} — does not block availability</span>
                                 </div>
                                 <p className="mt-1">{fmtDateTime(booking.pickupAt)} → {fmtDateTime(booking.dropoffAt ?? booking.returnAt)}</p>
@@ -5288,7 +5603,7 @@ function RentalOperationsSection() {
                 <input value={carForm.licensePlate} onChange={e => setCarForm(prev => ({ ...prev, licensePlate: e.target.value }))} placeholder="License plate" className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55" />
                 <select value={carForm.locationName} onChange={e => setCarForm(prev => ({ ...prev, locationName: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
                   <option value="">No base location</option>
-                  {locations.map(location => <option key={location.id} value={location.name}>{location.name}</option>)}
+                  {visibleLocations.map(location => <option key={location.id} value={location.name}>{location.name}</option>)}
                 </select>
                 <select value={carForm.status} onChange={e => setCarForm(prev => ({ ...prev, status: e.target.value }))} className="h-11 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-[#f8a36d]/55">
                   {RENTAL_CAR_STATUSES.map(value => <option key={value}>{value}</option>)}

@@ -296,7 +296,7 @@ test('Car Rental Ops shows empty CTAs and supports add/edit/delete car and locat
   await page.locator('input[placeholder="Location name"]').fill('Airport Terminal 1')
   await page.locator('textarea[placeholder="Pickup instruction text"]').fill('Meet at arrivals.')
   await page.getByRole('button', { name: 'Save location' }).click()
-  await expect(page.getByText('Airport Terminal 1').first()).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Airport Terminal 1' })).toBeVisible()
   await page.getByRole('button', { name: /^Locations$/ }).click()
   await page.locator('.icon-btn').last().click()
   await expect(page.getByText('No locations yet. Add pickup/drop-off locations so the bot can guide customers.').first()).toBeVisible()
@@ -397,8 +397,78 @@ test('per-car booking calendar renders connected month date ranges', async ({ ch
   await expect(page.getByText('Booking Calendar')).toBeVisible()
   await expect(page.getByText('July 2026', { exact: true })).toBeVisible()
   await expect(page.getByText('August 2026', { exact: true })).toBeVisible()
-  await expect(page.getByText('Calendar Tester')).toBeVisible()
+  await expect(page.getByText('Calendar Tester').last()).toBeVisible()
+  await expect(page.getByText('undefined')).toHaveCount(0)
   await expect(page.getByText(/Buffer until 15 Jul 2026, 20:00/)).toBeVisible()
   await expect(page.getByText('Cancelled Tester')).toBeVisible()
   await expect(page.getByText('cancelled — does not block availability')).toBeVisible()
+})
+
+test('city selector filters rental ops and Rental Ledger exports current view', async ({ checkedPage: page, baseURL }) => {
+  await addMemberSessionCookie(page, baseURL)
+  const krakowCar = {
+    id: 'car-krk-1',
+    name: 'Toyota Corolla',
+    className: 'Economy',
+    transmission: 'automatic',
+    seats: 5,
+    fuelType: 'petrol',
+    dailyPrice: 140,
+    deposit: 1000,
+    status: 'available',
+    active: true,
+    licensePlate: 'KR TEST',
+    locationName: 'Kraków Bocheńska 2a',
+    city: 'Kraków',
+  }
+  const warsawCar = {
+    ...krakowCar,
+    id: 'car-waw-1',
+    name: 'Skoda Superb',
+    dailyPrice: 150,
+    licensePlate: 'WA TEST',
+    locationName: 'Warsaw Central',
+    city: 'Warsaw',
+  }
+  const booking = {
+    id: 'booking-waw-1',
+    bookingNumber: 'RB-WAW001',
+    carId: warsawCar.id,
+    carName: warsawCar.name,
+    customerName: 'Warsaw Customer',
+    customerPhone: '500111222',
+    customerEmail: 'warsaw@example.com',
+    pickupAt: '2026-07-12T10:00:00+02:00',
+    returnAt: '2026-07-15T18:00:00+02:00',
+    dropoffAt: '2026-07-15T18:00:00+02:00',
+    pickupLocation: 'Warsaw Central',
+    dropoffLocation: 'Warsaw Central',
+    status: 'confirmed',
+    totalPrice: 600,
+    deposit: 1200,
+    paymentStatus: 'held',
+    source: 'website',
+    city: 'Warsaw',
+    createdAt: '2026-07-01T10:00:00+02:00',
+    updatedAt: '2026-07-01T10:00:00+02:00',
+  }
+  const settings = { cleaningBufferMinutes: 120, currency: 'PLN', syncDirection: 'none', externalSyncEnabled: false }
+
+  await page.route('**/api/business/settings', route => route.fulfill({ status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ businessType: 'car_rental' }) }))
+  await page.route('**/api/rental/fleet', route => route.fulfill({
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ migrationRequired: false, cars: [krakowCar, warsawCar], bookings: [booking], locations: [], settings }),
+  }))
+
+  await page.goto('/dashboard#rental_ops')
+  await expect(page.getByText('Toyota Corolla').first()).toBeVisible()
+  await page.locator('select').first().selectOption('Warsaw')
+  await expect(page.getByText('Skoda Superb').first()).toBeVisible()
+  await expect(page.getByText('Toyota Corolla').first()).toBeHidden()
+
+  await page.getByRole('button', { name: /Rental Ledger/i }).click()
+  await expect(page.getByText('Warsaw Customer')).toBeVisible()
+  await expect(page.getByText('RB-WAW001')).toBeVisible()
+  await expect(page.getByRole('button', { name: /Export CSV/i })).toBeVisible()
 })

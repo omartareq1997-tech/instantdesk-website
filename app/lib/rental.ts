@@ -18,6 +18,7 @@ export interface RentalCar {
   status: RentalCarStatus
   locationName?: string | null
   locationId?: string | null
+  city?: string | null
   imageUrl?: string | null
   licensePlate?: string | null
   notes?: string | null
@@ -46,6 +47,10 @@ export interface RentalBooking {
   deposit: number
   paymentStatus: string
   source?: string | null
+  city?: string | null
+  createdAt?: string | null
+  updatedAt?: string | null
+  dailyPrice?: number | null
   notes?: string | null
 }
 
@@ -63,6 +68,7 @@ export interface RentalLocation {
   imageUrl?: string | null
   whatsappText?: string | null
   active: boolean
+  city?: string | null
 }
 
 export interface RentalSettings {

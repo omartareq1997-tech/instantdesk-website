@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { createAdminClient } from '../../../lib/supabase-server'
 import { getSessionBusinessId } from '../../../lib/getSessionBusinessId'
 import { demoRentalBookings, demoRentalCars, demoRentalLocations, demoRentalSettings, type RentalSettings } from '../../../lib/rental'
-import { normalizeRentalBooking } from '../../../lib/rentalAvailability'
+import { inferRentalCity, normalizeRentalBooking } from '../../../lib/rentalAvailability'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,7 +20,7 @@ export async function GET() {
 
   const [carsRes, bookingsRes, locationsRes, settingsRes] = await Promise.all([
     sb.from('cars').select('id,name,model,transmission,seats,fuel_type,daily_price,deposit,status,image_url,license_plate,notes,active,car_class_id,location_id,car_classes(name),rental_locations(name)').eq('business_id', businessId).order('created_at', { ascending: false }),
-    sb.from('rental_bookings').select('id,business_id,car_id,customer_name,customer_phone,customer_email,pickup_location_id,dropoff_location_id,pickup_at,dropoff_at,status,total_price,notes,created_at,updated_at,cars(name,car_classes(name)),pickup:rental_locations!rental_bookings_pickup_location_id_fkey(name),dropoff:rental_locations!rental_bookings_dropoff_location_id_fkey(name)').eq('business_id', businessId).order('pickup_at', { ascending: true }),
+    sb.from('rental_bookings').select('id,business_id,car_id,customer_name,customer_phone,customer_email,pickup_location_id,dropoff_location_id,pickup_at,dropoff_at,status,total_price,notes,created_at,updated_at,cars(name,daily_price,deposit,license_plate,car_classes(name),rental_locations(name)),pickup:rental_locations!rental_bookings_pickup_location_id_fkey(name),dropoff:rental_locations!rental_bookings_dropoff_location_id_fkey(name)').eq('business_id', businessId).order('pickup_at', { ascending: true }),
     sb.from('rental_locations').select('*').eq('business_id', businessId).order('name'),
     sb.from('rental_settings').select('*').eq('business_id', businessId).maybeSingle(),
   ])
@@ -53,6 +53,7 @@ export async function GET() {
     status: row.status,
     locationId: row.location_id,
     locationName: row.rental_locations?.name ?? null,
+    city: inferRentalCity(row.rental_locations?.name ?? null),
     imageUrl: row.image_url,
     licensePlate: row.license_plate,
     notes: row.notes,

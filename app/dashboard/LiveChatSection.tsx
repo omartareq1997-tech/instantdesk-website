@@ -872,7 +872,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
   const loadMessages = useCallback(async (conversationId: string, delta = false) => {
     const cached = messageCacheRef.current[conversationId] ?? []
     const since = delta && cached.length ? `?since=${encodeURIComponent(cached[cached.length - 1].created_at)}` : ''
-    const res = await fetch(`/api/live-chat/conversations/${conversationId}/messages${since}`)
+    const res = await fetch(`/api/live-chat/conversations/${conversationId}/messages${since}`, { cache: 'no-store' })
     if (!res.ok) return
     const data = await res.json() as { messages: ChatMessage[] }
     if (delta) mergeMessages(conversationId, data.messages)
@@ -906,7 +906,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
 
   const loadConversations = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true)
-    const res = await fetch('/api/live-chat/conversations')
+    const res = await fetch('/api/live-chat/conversations', { cache: 'no-store' })
     if (res.ok) {
       const data = await res.json() as { conversations: ConversationItem[] }
       const normalized = data.conversations.map(conversation => ({
@@ -1046,7 +1046,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
 
   const loadCustomerProfile = useCallback(async (customerId: string) => {
     activeProfileRequestRef.current = customerId
-    const res = await fetch(`/api/customers/${customerId}`)
+    const res = await fetch(`/api/customers/${customerId}`, { cache: 'no-store' })
     if (activeProfileRequestRef.current !== customerId) return
     if (!res.ok) {
       setCustomerProfile(null)
@@ -1059,7 +1059,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
     setCustomerProfileId(data.profile?.customer?.id ?? customerId)
   }, [])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const customerId = selected?.customer?.id ?? selected?.customer_id ?? null
     setMergeOpen(false)
     setCustomerProfile(null)
@@ -1070,7 +1070,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
       return
     }
     void loadCustomerProfile(customerId)
-  }, [loadCustomerProfile, selected?.customer?.id, selected?.customer_id])
+  }, [loadCustomerProfile, selected?.id, selected?.customer?.id, selected?.customer_id])
 
   useEffect(() => {
     if (!selected?.id) return
@@ -1202,7 +1202,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
       void loadConversations(false)
       const current = selectedIdRef.current
       if (current) void loadMessages(current, ticks % 5 !== 0)
-    }, 7000)
+    }, 3500)
     return () => {
       window.clearInterval(interval)
     }

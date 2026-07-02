@@ -36,7 +36,7 @@ test.describe('agent operational tool planner', () => {
     expect(tools).toContain('checkAvailability')
   })
 
-  test('keeps exact car requests stable without checking availability before contact details', () => {
+  test('checks availability for exact car requests once period and locations are known', () => {
     const tools = planOperationalTools({
       ...baseContext,
       slots: {
@@ -49,7 +49,7 @@ test.describe('agent operational tool planner', () => {
       message: 'Please book Toyota Corolla in Krakow from tomorrow 10:00 until Friday 18:00.',
     })
     expect(tools).toContain('searchFleet')
-    expect(tools).not.toContain('checkAvailability')
+    expect(tools).toContain('checkAvailability')
     expect(tools).not.toContain('createBooking')
   })
 
@@ -237,7 +237,7 @@ test.describe('agent operational tool planner', () => {
     expect(extractRentalVehicleName('book the GLC for me')).toBe('Mercedes GLC')
   })
 
-  test('selected Mercedes continues booking workflow without needing another vehicle choice', () => {
+  test('selected Mercedes continues booking workflow and checks availability when period and locations are known', () => {
     const tools = planOperationalTools({
       ...baseContext,
       slots: {
@@ -252,7 +252,7 @@ test.describe('agent operational tool planner', () => {
       message: 'I will take the Mercedes',
     })
     expect(tools).toContain('searchFleet')
-    expect(tools).not.toContain('checkAvailability')
+    expect(tools).toContain('checkAvailability')
     expect(tools).not.toContain('createBooking')
   })
 
@@ -308,6 +308,23 @@ test.describe('agent operational tool planner', () => {
     })
     expect(tools).toContain('searchFleet')
     expect(tools).not.toContain('checkAvailability')
+    expect(tools).not.toContain('createBooking')
+  })
+
+  test('economy intent with a confirmed period and locations checks live availability before offering cars', () => {
+    const tools = planOperationalTools({
+      ...baseContext,
+      slots: {
+        car_class: 'economy',
+        pickup_location: 'Kraków Bocheńska 2a',
+        dropoff_location: 'Kraków Bocheńska 2a',
+        pickup_datetime: '2026-07-02T15:00:00+02:00',
+        return_datetime: '2026-07-10T17:00:00+02:00',
+      },
+      message: 'I want an economical car',
+    })
+    expect(tools).toContain('searchFleet')
+    expect(tools).toContain('checkAvailability')
     expect(tools).not.toContain('createBooking')
   })
 

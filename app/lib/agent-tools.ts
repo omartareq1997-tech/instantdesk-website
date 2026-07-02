@@ -157,13 +157,14 @@ export function planOperationalTools(context: AgentToolContext): AgentToolName[]
   const canCheckAvailability = hasAvailabilityInputs(context)
   const hasCustomerContact = Boolean(context.slots.name && context.slots.phone && context.slots.email)
   const explicitAvailabilityQuestion = includesAny(text, ['available', 'availability', 'free'])
+  const fleetSearchIntent = includesAny(text, ['what cars', 'which cars', 'do you have', 'available cars', 'automatic cars', 'economy', 'economical', 'cheap', 'budget', 'suv', 'fleet', 'corolla', 'camry', 'toyota', 'bmw', 'x5', 'mercedes', 'glc', 'skoda', 'superb'])
   if (includesAny(text, ['policy', 'deposit', 'documents', 'license', 'insurance', 'mileage', 'late fee', 'cancel', 'cancellation', 'age requirement'])) {
     tools.push('getBusinessPolicies')
   }
   if (includesAny(text, ['where can i pick', 'where is your location', "what's your location", 'what is your location', 'pickup location', 'pick up location', 'drop off', 'airport', 'deliver', 'delivery area', 'locations'])) {
     tools.push('getLocations')
   }
-  if (includesAny(text, ['what cars', 'which cars', 'do you have', 'available cars', 'automatic cars', 'economy', 'economical', 'cheap', 'budget', 'suv', 'fleet', 'corolla', 'camry', 'toyota', 'bmw', 'x5', 'mercedes', 'glc', 'skoda', 'superb'])) {
+  if (fleetSearchIntent) {
     tools.push('searchFleet')
   }
   if (wantsCancellation(text)) {
@@ -177,6 +178,10 @@ export function planOperationalTools(context: AgentToolContext): AgentToolName[]
   if (canCheckAvailability && (hasCustomerContact || explicitAvailabilityQuestion) && includesAny(text, ['available', 'free', 'rent', 'from ', 'until ', 'tomorrow', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'same location', 'drop off', 'drop-off', 'return location', 'automatic', 'manual', 'correct'])) {
     if (!tools.includes('searchFleet')) tools.push('searchFleet')
     tools.push('checkAvailability')
+  }
+  if (canCheckAvailability && fleetSearchIntent) {
+    if (!tools.includes('searchFleet')) tools.push('searchFleet')
+    if (!tools.includes('checkAvailability')) tools.push('checkAvailability')
   }
   if (hasCompleteBookingData) {
     if (!tools.includes('searchFleet')) tools.push('searchFleet')
@@ -234,17 +239,44 @@ async function searchFleet(sb: SupabaseClient, context: AgentToolContext): Promi
   const wantedLocation = context.slots.selected_vehicle
     ? ''
     : norm(context.slots.pickup_location) || (/\bkrakow|kraków\b/i.test(context.message) ? 'krakow' : '')
-  const cars = ((data ?? []) as RentalCarRow[])
+  const filteredRows = ((data ?? []) as RentalCarRow[])
     .filter(car => carMatches(car, carText))
     .filter(car => !wantedClass || norm(car.car_classes?.name).includes(wantedClass))
     .filter(car => !wantedTransmission || norm(car.transmission) === wantedTransmission)
     .filter(car => !wantedLocation || !car.rental_locations?.name || norm(car.rental_locations?.name).includes(wantedLocation))
-    .map(normalizeCar)
+  let cars = filteredRows.map(normalizeCar)
+  const requestedCar = (carText || context.slots.selected_vehicle) && cars.length === 1 ? cars[0] : null
+  const { pickupAt, dropoffAt } = parseRentalDateWindow(context.message, context.slots)
+  const hasRentalWindowAndLocations = Boolean(pickupAt && dropoffAt && context.slots.pickup_location && context.slots.dropoff_location)
+  const unavailableCars: string[] = []
+  if (hasRentalWindowAndLocations && cars.length) {
+    const checked = await Promise.all(cars.map(async car => {
+      try {
+        const availability = await checkRentalAvailability({
+          businessId: context.businessId,
+          carId: car.id,
+          pickupAt: pickupAt!,
+          dropoffAt: dropoffAt!,
+        })
+        return { car, available: availability.available }
+      } catch {
+        return { car, available: false }
+      }
+    }))
+    cars = checked.filter(item => item.available).map(item => item.car)
+    unavailableCars.push(...checked.filter(item => !item.available).map(item => item.car.name))
+  }
   return {
     tool: 'searchFleet',
     ok: true,
-    summary: cars.length ? `Found ${cars.length} matching active fleet vehicle(s).` : 'No matching active fleet vehicles found.',
-    data: { cars },
+    summary: hasRentalWindowAndLocations
+      ? cars.length
+        ? `Found ${cars.length} matching available fleet vehicle(s) for the requested rental period.${unavailableCars.length ? ` Unavailable for that period: ${unavailableCars.join(', ')}.` : ''}`
+        : unavailableCars.length
+          ? `No matching fleet vehicles are available for the requested rental period. Unavailable for that period: ${unavailableCars.join(', ')}.`
+          : 'No matching active fleet vehicles found.'
+      : cars.length ? `Found ${cars.length} matching active fleet vehicle(s).` : 'No matching active fleet vehicles found.',
+    data: { cars, requestedCar, availabilityFiltered: hasRentalWindowAndLocations, unavailableCars },
   }
 }
 
@@ -281,8 +313,11 @@ async function getBusinessPolicies(sb: SupabaseClient, context: AgentToolContext
 }
 
 function firstCar(toolResults: AgentToolResult[]) {
-  const fleet = toolResults.find(result => result.tool === 'searchFleet' && result.ok)?.data as { cars?: { id: string; name: string; dailyPrice?: number; deposit?: number }[] } | undefined
-  return fleet?.cars?.[0] ?? null
+  const fleet = toolResults.find(result => result.tool === 'searchFleet' && result.ok)?.data as {
+    cars?: { id: string; name: string; dailyPrice?: number; deposit?: number }[]
+    requestedCar?: { id: string; name: string; dailyPrice?: number; deposit?: number } | null
+  } | undefined
+  return fleet?.cars?.[0] ?? fleet?.requestedCar ?? null
 }
 
 async function checkAvailability(context: AgentToolContext, toolResults: AgentToolResult[]): Promise<AgentToolResult> {

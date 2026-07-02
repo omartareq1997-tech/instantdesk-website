@@ -35,7 +35,7 @@ test.describe('agent operational tool planner', () => {
     expect(tools).toContain('checkAvailability')
   })
 
-  test('keeps exact car requests stable when location and dates follow the model name', () => {
+  test('keeps exact car requests stable without checking availability before contact details', () => {
     const tools = planOperationalTools({
       ...baseContext,
       slots: {
@@ -48,7 +48,8 @@ test.describe('agent operational tool planner', () => {
       message: 'Please book Toyota Corolla in Krakow from tomorrow 10:00 until Friday 18:00.',
     })
     expect(tools).toContain('searchFleet')
-    expect(tools).toContain('checkAvailability')
+    expect(tools).not.toContain('checkAvailability')
+    expect(tools).not.toContain('createBooking')
   })
 
   test('plans policy and location lookups separately', () => {
@@ -195,6 +196,73 @@ test.describe('agent operational tool planner', () => {
     expect(extractRentalVehicleName('I want the BMW X5 please')).toBe('BMW X5')
     expect(extractRentalVehicleName('Please reserve Corolla for me')).toBe('Toyota Corolla')
     expect(extractRentalVehicleName("I'll go with the X5")).toBe('BMW X5')
+    expect(extractRentalVehicleName('I will take the Mercedes')).toBe('Mercedes GLC')
+    expect(extractRentalVehicleName('Mercedes GLC')).toBe('Mercedes GLC')
+    expect(extractRentalVehicleName('book the GLC for me')).toBe('Mercedes GLC')
+  })
+
+  test('selected Mercedes continues booking workflow without needing another vehicle choice', () => {
+    const tools = planOperationalTools({
+      ...baseContext,
+      slots: {
+        selected_vehicle: 'Mercedes GLC',
+        car_class: 'SUV',
+        transmission: 'automatic',
+        pickup_location: 'Kraków Bocheńska 2a',
+        dropoff_location: 'Kraków Bocheńska 2a',
+        pickup_datetime: '2026-07-02T10:00:00+02:00',
+        return_datetime: '2026-07-09T21:00:00+02:00',
+      },
+      message: 'I will take the Mercedes',
+    })
+    expect(tools).toContain('searchFleet')
+    expect(tools).not.toContain('checkAvailability')
+    expect(tools).not.toContain('createBooking')
+  })
+
+  test('complete selected vehicle state checks availability and price before final confirmation', () => {
+    const tools = planOperationalTools({
+      ...baseContext,
+      slots: {
+        name: 'Alex',
+        phone: '510880999',
+        email: 'alex@example.com',
+        selected_vehicle: 'Mercedes GLC',
+        car_class: 'SUV',
+        transmission: 'automatic',
+        pickup_location: 'Kraków Bocheńska 2a',
+        dropoff_location: 'Kraków Bocheńska 2a',
+        pickup_datetime: '2026-07-02T10:00:00+02:00',
+        return_datetime: '2026-07-09T21:00:00+02:00',
+      },
+      message: 'My email is alex@example.com',
+    })
+    expect(tools).toContain('searchFleet')
+    expect(tools).toContain('checkAvailability')
+    expect(tools).toContain('calculatePrice')
+    expect(tools).not.toContain('createBooking')
+  })
+
+  test('explicit confirmation with complete Mercedes state creates only after availability and price', () => {
+    const tools = planOperationalTools({
+      ...baseContext,
+      slots: {
+        name: 'Alex',
+        phone: '510880999',
+        email: 'alex@example.com',
+        selected_vehicle: 'Mercedes GLC',
+        car_class: 'SUV',
+        transmission: 'automatic',
+        pickup_location: 'Kraków Bocheńska 2a',
+        dropoff_location: 'Kraków Bocheńska 2a',
+        pickup_datetime: '2026-07-02T10:00:00+02:00',
+        return_datetime: '2026-07-09T21:00:00+02:00',
+      },
+      message: 'yes, book it',
+    })
+    expect(tools.indexOf('searchFleet')).toBeLessThan(tools.indexOf('checkAvailability'))
+    expect(tools.indexOf('checkAvailability')).toBeLessThan(tools.indexOf('calculatePrice'))
+    expect(tools.indexOf('calculatePrice')).toBeLessThan(tools.indexOf('createBooking'))
   })
 
   test('economy intent searches fleet without selecting BMW X5 or checking availability', () => {

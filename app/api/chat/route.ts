@@ -29,6 +29,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { createAdminClient } from '../../lib/supabase-server'
 import { logEvent } from '../_lib/logEvent'
 import { getSessionBusinessId } from '../../lib/getSessionBusinessId'
@@ -940,6 +941,70 @@ function computeQualificationStage(confirmed: Slots, missing: SlotDef[]): string
   return 'qualifying'
 }
 
+type RentalFleetCarForState = {
+  id?: string
+  name?: string | null
+  model?: string | null
+  transmission?: string | null
+  seats?: number | null
+  fuel_type?: string | null
+  daily_price?: number | null
+  car_classes?: { name?: string | null } | { name?: string | null }[] | null
+}
+
+function normalizeRentalLookup(value: string | null | undefined) {
+  return (value ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+function rentalClassName(row: RentalFleetCarForState) {
+  const related = Array.isArray(row.car_classes) ? row.car_classes[0] : row.car_classes
+  return related?.name ?? null
+}
+
+function rentalCarMatchesSelection(row: RentalFleetCarForState, selectedVehicle: string) {
+  const selected = normalizeRentalLookup(extractRentalVehicleName(selectedVehicle) ?? selectedVehicle)
+  if (!selected) return false
+  const haystack = normalizeRentalLookup(`${row.name ?? ''} ${row.model ?? ''} ${rentalClassName(row) ?? ''}`)
+  if (!haystack) return false
+  const selectedWords = selected.split(/\s+/).filter(Boolean)
+  return selectedWords.every(word => haystack.includes(word))
+}
+
+async function hydrateSelectedRentalVehicle(
+  sb: SupabaseClient,
+  businessId: string,
+  slots: Slots,
+  businessType?: string | null,
+): Promise<Slots> {
+  if (normalizeBusinessType(businessType) !== 'car_rental' || !slots.selected_vehicle) return slots
+  const { data, error } = await sb
+    .from('cars')
+    .select('id,name,model,transmission,seats,fuel_type,daily_price,active,car_classes(name)')
+    .eq('business_id', businessId)
+    .eq('active', true)
+  if (error) {
+    console.error('[RENTAL STATE] selected vehicle hydration failed:', JSON.stringify(error))
+    return slots
+  }
+  const selectedVehicle = slots.selected_vehicle
+  if (!selectedVehicle) return slots
+  const matches = ((data ?? []) as RentalFleetCarForState[]).filter(row => rentalCarMatchesSelection(row, selectedVehicle))
+  if (matches.length !== 1) return slots
+  const car = matches[0]
+  return {
+    ...slots,
+    selected_vehicle: car.name?.trim() || slots.selected_vehicle,
+    car_class: slots.car_class ?? rentalClassName(car),
+    transmission: slots.transmission ?? strOrNull(car.transmission)?.toLowerCase() ?? null,
+    seats: slots.seats ?? (typeof car.seats === 'number' ? String(car.seats) : null),
+  }
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    BOOKING INTENT DETECTION
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -1062,6 +1127,46 @@ function guardReply(
   return { reply, blocked: false }
 }
 
+type FleetReplyCar = {
+  name?: string | null
+  className?: string | null
+  transmission?: string | null
+  dailyPrice?: number | null
+}
+
+function firstFleetReplyCar(toolResults: AgentToolResult[]) {
+  const fleet = toolResults.find(result => result.tool === 'searchFleet' && result.ok)
+  const data = fleet?.data as { cars?: FleetReplyCar[] } | undefined
+  return data?.cars?.[0] ?? null
+}
+
+function selectedVehicleIntro(confirmed: Slots, car?: FleetReplyCar | null) {
+  const name = car?.name || confirmed.selected_vehicle || 'that vehicle'
+  const attrs = [
+    car?.transmission || confirmed.transmission || null,
+    car?.dailyPrice ? `${car.dailyPrice} PLN/day` : null,
+  ].filter(Boolean)
+  return attrs.length
+    ? `Great — ${name} is ${attrs.join(' and ')}.`
+    : `Great — ${name} is selected.`
+}
+
+function selectedVehicleNextStepReply(confirmed: Slots, missing: SlotDef[], toolResults: AgentToolResult[]) {
+  if (!confirmed.selected_vehicle) return null
+  const car = firstFleetReplyCar(toolResults)
+  const missingKeys = new Set(missing.map(field => field.key))
+  const intro = selectedVehicleIntro(confirmed, car)
+  if (missingKeys.has('pickup_location')) return `${intro} What pickup location should I use?`
+  if (missingKeys.has('dropoff_location')) return `${intro} What drop-off location should I use?`
+  if (missingKeys.has('pickup_datetime') || missingKeys.has('return_datetime')) {
+    return `${intro} What pickup date and time should I use, and what return date and time should I use?`
+  }
+  if (missingKeys.has('name')) return `${intro} Could you please provide your name?`
+  if (missingKeys.has('phone')) return 'What is your phone number?'
+  if (missingKeys.has('email')) return 'What is your email address?'
+  return null
+}
+
 function rentalToolReplyOverride(
   toolResults: AgentToolResult[],
   confirmed: Slots,
@@ -1110,6 +1215,11 @@ function rentalToolReplyOverride(
   }
 
   if (availability) {
+    const contactMissing = missing.find(field => ['name', 'phone', 'email'].includes(String(field.key)))
+    if (contactMissing && confirmed.selected_vehicle) {
+      const selectedNext = selectedVehicleNextStepReply(confirmed, missing, toolResults)
+      if (selectedNext) return selectedNext
+    }
     if (!availability.ok) {
       const nextMissing = missing.find(field => ['dropoff_location', 'pickup_location', 'pickup_datetime', 'return_datetime', 'selected_vehicle', 'car_class'].includes(String(field.key)))
       return nextMissing ? `${availability.summary} ${nextMissing.question}` : availability.summary
@@ -1118,8 +1228,15 @@ function rentalToolReplyOverride(
     const pieces = [availability.summary]
     if (price?.ok) pieces.push(price.summary)
     if (nextMissing) pieces.push(nextMissing.question)
+    const availabilityData = availability.data as { available?: boolean } | undefined
+    if (!nextMissing && availabilityData?.available && price?.ok) {
+      pieces.push('Would you like me to create the booking request?')
+    }
     return pieces.join(' ')
   }
+
+  const selectedNextStep = selectedVehicleNextStepReply(confirmed, missing, toolResults)
+  if (selectedNextStep && confirmed.pickup_location && confirmed.dropoff_location) return selectedNextStep
 
   if (locations?.ok) {
     const data = locations.data as { locations?: { name?: string | null; address?: string | null }[] } | undefined
@@ -1135,7 +1252,10 @@ function rentalToolReplyOverride(
     return 'No active pickup locations are configured yet. I can connect you with the team to confirm pickup options.'
   }
 
+  if (selectedNextStep) return selectedNextStep
+
   if (fleet?.ok && !availability && !price) {
+    if (confirmed.selected_vehicle) return null
     const data = fleet.data as { cars?: { name?: string | null; className?: string | null; transmission?: string | null; dailyPrice?: number | null }[] } | undefined
     const cars = data?.cars ?? []
     if (cars.length === 0) return 'I do not see any matching cars currently listed in the live fleet.'
@@ -1166,6 +1286,14 @@ function rentalClarificationReply(
   }
   if (missingKeys.has('pickup_datetime') || missingKeys.has('return_datetime')) {
     return 'Sure — what pickup date and time should I use, and what return date and time should I use?'
+  }
+  if (confirmed.selected_vehicle) {
+    const intro = selectedVehicleIntro(confirmed)
+    if (missingKeys.has('pickup_location')) return `${intro} What pickup location should I use?`
+    if (missingKeys.has('dropoff_location')) return `${intro} What drop-off location should I use?`
+    if (missingKeys.has('name')) return `${intro} Could you please provide your name?`
+    if (missingKeys.has('phone')) return 'What is your phone number?'
+    if (missingKeys.has('email')) return 'What is your email address?'
   }
   if (!confirmed.selected_vehicle && confirmed.car_class) {
     return `I can help with ${confirmed.car_class} cars. Which specific vehicle would you like?`
@@ -1825,7 +1953,8 @@ export async function POST(req: NextRequest) {
     : defaultSlotDefsForBusinessType(businessType)
 
   /* 7. Build confirmedSlots deterministically ─────────────────────────────── */
-  const confirmed          = buildConfirmedSlots(existingLead, history, messageText)
+  let confirmed            = buildConfirmedSlots(existingLead, history, messageText)
+  confirmed                = await hydrateSelectedRentalVehicle(sb, businessId, confirmed, businessType)
   const missing            = computeMissingSlots(confirmed, slotDefs)
   const qualificationStage = computeQualificationStage(confirmed, missing)
 

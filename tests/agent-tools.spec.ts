@@ -2,6 +2,7 @@ import { expect, test } from './fixtures'
 import { planOperationalTools } from '../app/lib/agent-tools'
 import { parseRentalDateWindow } from '../app/lib/rentalDateTime'
 import { extractRentalVehicleName } from '../app/lib/rentalVehicle'
+import { __testRentalChatHelpers } from '../app/api/chat/route'
 
 test.describe('agent operational tool planner', () => {
   const baseContext = {
@@ -172,6 +173,41 @@ test.describe('agent operational tool planner', () => {
     expect(tools).toContain('createBooking')
   })
 
+  test('does not create a booking when customer name is missing despite confirmation', () => {
+    const tools = planOperationalTools({
+      ...baseContext,
+      slots: {
+        phone: '520555000',
+        email: 'sam@test.com',
+        selected_vehicle: 'BMW X5',
+        pickup_location: 'Kraków Bocheńska 2a',
+        dropoff_location: 'Kraków Bocheńska 2a',
+        pickup_datetime: '2026-07-03T11:00:00+02:00',
+        return_datetime: '2026-07-08T21:00:00+02:00',
+      },
+      message: 'yes please',
+    })
+    expect(tools).not.toContain('createBooking')
+  })
+
+  test('does not create a booking when drop-off location is missing despite confirmation', () => {
+    const tools = planOperationalTools({
+      ...baseContext,
+      slots: {
+        name: 'Sam Marty',
+        phone: '520555000',
+        email: 'sam@test.com',
+        selected_vehicle: 'BMW X5',
+        pickup_location: 'Kraków Bocheńska 2a',
+        pickup_datetime: '2026-07-03T11:00:00+02:00',
+        return_datetime: '2026-07-08T21:00:00+02:00',
+      },
+      message: 'yes please',
+    })
+    expect(tools).not.toContain('checkAvailability')
+    expect(tools).not.toContain('createBooking')
+  })
+
   test('parses tomorrow and explicit July return dates as business-time ISO values', () => {
     const parsed = parseRentalDateWindow(
       'I want to pick up tomorrow at 9am and return on 9 July at 10pm.',
@@ -301,5 +337,39 @@ test.describe('agent operational tool planner', () => {
     )
     expect(parsed.pickupAt).toContain('2026-07-16T09:00:00')
     expect(parsed.dropoffAt).toContain('2026-07-18T22:00:00')
+  })
+
+  test('extracts plain full name when assistant asked for customer name', () => {
+    const slots = __testRentalChatHelpers.buildConfirmedSlots(
+      null,
+      [{ role: 'assistant', content: 'What is your full name?' }],
+      'Sam Marty',
+    )
+    expect(slots.name).toBe('Sam Marty')
+  })
+
+  test('extracts same pickup drop-off as canonical business location', () => {
+    const slots = __testRentalChatHelpers.buildConfirmedSlots(
+      { id: 'lead-1', name: null, phone: null, email: null, interest: null, status: null, metadata: { pickup_location: 'Kraków Bocheńska 2a' } },
+      [],
+      'same as pick up location',
+    )
+    expect(slots.dropoff_location).toBe('Kraków Bocheńska 2a')
+  })
+
+  test('normalizes Bocheńska drop-off mentions to the canonical business location', () => {
+    const slots = __testRentalChatHelpers.buildConfirmedSlots(
+      { id: 'lead-1', name: null, phone: null, email: null, interest: null, status: null, metadata: { pickup_location: 'Kraków Bocheńska 2a' } },
+      [],
+      'I will drop off the car there at Kraków Bocheńska 2a',
+    )
+    expect(slots.dropoff_location).toBe('Kraków Bocheńska 2a')
+  })
+
+  test('formats pickup location without duplicate city and street copy', () => {
+    expect(__testRentalChatHelpers.formatRentalLocationForCustomer({
+      name: 'Kraków Bocheńska 2a',
+      address: 'Kraków Bocheńska 2a',
+    })).toBe('in Kraków is Bocheńska 2a')
   })
 })

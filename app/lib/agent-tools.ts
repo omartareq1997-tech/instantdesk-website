@@ -135,6 +135,19 @@ function hasBookingInputs(context: AgentToolContext) {
   )
 }
 
+function missingBookingFields(context: AgentToolContext) {
+  const missing: string[] = []
+  if (!context.slots.selected_vehicle) missing.push('selected vehicle')
+  if (!context.slots.pickup_location) missing.push('pickup location')
+  if (!context.slots.dropoff_location) missing.push('drop-off location')
+  if (!context.slots.pickup_datetime) missing.push('pickup date/time')
+  if (!context.slots.return_datetime) missing.push('return date/time')
+  if (!context.slots.name) missing.push('customer name')
+  if (!context.slots.phone) missing.push('phone number')
+  if (!context.slots.email) missing.push('email')
+  return missing
+}
+
 export function planOperationalTools(context: AgentToolContext): AgentToolName[] {
   const businessType = context.businessType
   if (businessType !== 'car_rental') return []
@@ -348,9 +361,13 @@ async function createBooking(sb: SupabaseClient, context: AgentToolContext, tool
   if (!wantsBookingCreation(context.message)) {
     return { tool: 'createBooking', ok: false, summary: 'Booking creation needs explicit customer confirmation first.' }
   }
+  const missing = missingBookingFields(context)
+  if (missing.length) {
+    return { tool: 'createBooking', ok: false, summary: `Booking creation blocked. Missing required field(s): ${missing.join(', ')}.` }
+  }
   if (!car?.id) return { tool: 'createBooking', ok: false, summary: 'Booking creation needs a selected car from the live fleet.' }
   if (!pickupAt || !dropoffAt) return { tool: 'createBooking', ok: false, summary: 'Booking creation needs exact pickup and return date/time.' }
-  if (!availability?.available) return { tool: 'createBooking', ok: false, summary: 'Booking was not created because availability has not been confirmed for this car and time window.' }
+  if (!availability?.available || availability.requestedCar?.id !== car.id) return { tool: 'createBooking', ok: false, summary: 'Booking was not created because availability has not been confirmed for this exact car and time window.' }
   if (!context.slots.name || !context.slots.phone || !context.slots.email) {
     return { tool: 'createBooking', ok: false, summary: 'Booking creation needs customer name, phone number, and email first.' }
   }
@@ -358,6 +375,27 @@ async function createBooking(sb: SupabaseClient, context: AgentToolContext, tool
   const dropoffLocationId = await resolveLocationId(sb, context.businessId, context.slots.dropoff_location)
   if (!pickupLocationId || !dropoffLocationId) {
     return { tool: 'createBooking', ok: false, summary: 'Booking creation needs valid pickup and drop-off locations first.' }
+  }
+  let freshAvailability: RentalAvailabilityResult
+  try {
+    freshAvailability = await checkRentalAvailability({
+      businessId: context.businessId,
+      carId: car.id,
+      pickupAt,
+      dropoffAt,
+      pickupLocationId,
+      dropoffLocationId,
+    })
+  } catch (error) {
+    return { tool: 'createBooking', ok: false, summary: 'Booking creation failed during final availability check.', error: error instanceof Error ? error.message : String(error) }
+  }
+  if (!freshAvailability.available || freshAvailability.requestedCar?.id !== car.id) {
+    return {
+      tool: 'createBooking',
+      ok: false,
+      summary: `${car.name} is not available for those dates. I can show you other available cars.`,
+      data: freshAvailability,
+    }
   }
   const totalPrice = (toolResults.find(result => result.tool === 'calculatePrice')?.data as { totalDueBeforeDeposit?: number } | undefined)?.totalDueBeforeDeposit ?? 0
   const { data, error } = await sb

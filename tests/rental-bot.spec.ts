@@ -371,18 +371,25 @@ test('per-car booking calendar renders connected month date ranges', async ({ ch
     deposit: 1500,
     paymentStatus: 'pending',
   }
+  const cancelledBooking = {
+    ...booking,
+    id: 'booking-cancelled-1',
+    bookingNumber: 'RB-CANCEL',
+    customerName: 'Cancelled Tester',
+    status: 'cancelled',
+  }
   const settings = { cleaningBufferMinutes: 120, currency: 'PLN', syncDirection: 'none', externalSyncEnabled: false }
 
   await page.route('**/api/business/settings', route => route.fulfill({ status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ businessType: 'car_rental' }) }))
   await page.route('**/api/rental/fleet', route => route.fulfill({
     status: 200,
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ migrationRequired: false, cars: [car], bookings: [booking], locations: [], settings }),
+    body: JSON.stringify({ migrationRequired: false, cars: [car], bookings: [booking, cancelledBooking], locations: [], settings }),
   }))
   await page.route('**/api/rental/cars/car-range-1/calendar', route => route.fulfill({
     status: 200,
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ car, bookings: [booking] }),
+    body: JSON.stringify({ car, bookings: [booking, cancelledBooking] }),
   }))
 
   await page.goto('/dashboard#rental_ops')
@@ -392,4 +399,6 @@ test('per-car booking calendar renders connected month date ranges', async ({ ch
   await expect(page.getByText('August 2026', { exact: true })).toBeVisible()
   await expect(page.getByText('Calendar Tester')).toBeVisible()
   await expect(page.getByText(/Buffer until 15 Jul 2026, 20:00/)).toBeVisible()
+  await expect(page.getByText('Cancelled Tester')).toBeVisible()
+  await expect(page.getByText('cancelled — does not block availability')).toBeVisible()
 })

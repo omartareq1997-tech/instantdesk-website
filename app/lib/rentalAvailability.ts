@@ -1,6 +1,6 @@
 import { createAdminClient } from './supabase-server'
 
-export type RentalBookingCalendarStatus = 'pending' | 'confirmed' | 'active' | 'completed' | 'cancelled'
+export type RentalBookingCalendarStatus = 'pending' | 'confirmed' | 'active' | 'completed' | 'cancelled' | 'paid' | 'picked_up' | 'extended' | 'maintenance' | 'unavailable'
 
 export type RentalAvailabilityInput = {
   businessId: string
@@ -63,7 +63,7 @@ export type RentalAvailabilityResult = {
   message: string
 }
 
-const BLOCKING_BOOKING_STATUSES = new Set<RentalBookingCalendarStatus>(['pending', 'confirmed', 'active'])
+export const BLOCKING_RENTAL_BOOKING_STATUSES = new Set<string>(['pending', 'confirmed', 'active', 'paid', 'picked_up', 'extended', 'maintenance', 'unavailable'])
 
 function toMs(value: string) {
   const ms = new Date(value).getTime()
@@ -88,7 +88,7 @@ export function rentalBookingBlocksWindow(
   dropoffAt: string,
   bufferMinutes: number,
 ) {
-  if (!BLOCKING_BOOKING_STATUSES.has(booking.status)) return false
+  if (!BLOCKING_RENTAL_BOOKING_STATUSES.has(booking.status)) return false
   const requestedPickup = toMs(pickupAt)
   const requestedDropoff = toMs(dropoffAt)
   const existingPickup = toMs(booking.pickupAt)
@@ -191,7 +191,7 @@ export async function checkRentalAvailability(input: RentalAvailabilityInput): P
     .select('id,business_id,car_id,customer_name,customer_phone,customer_email,pickup_location_id,dropoff_location_id,pickup_at,dropoff_at,status,total_price,notes,created_at,updated_at,cars(name,car_classes(name)),pickup:rental_locations!rental_bookings_pickup_location_id_fkey(name),dropoff:rental_locations!rental_bookings_dropoff_location_id_fkey(name)')
     .eq('business_id', input.businessId)
     .in('car_id', bookingCarIds)
-    .in('status', Array.from(BLOCKING_BOOKING_STATUSES))
+    .in('status', Array.from(BLOCKING_RENTAL_BOOKING_STATUSES))
     .lt('pickup_at', input.dropoffAt)
 
   if (bookingsRes.error) throw bookingsRes.error
@@ -233,7 +233,7 @@ export async function checkRentalAvailability(input: RentalAvailabilityInput): P
         .select('id,car_id,pickup_at,dropoff_at,status,customer_name,total_price')
         .eq('business_id', input.businessId)
         .in('car_id', altIds)
-        .in('status', Array.from(BLOCKING_BOOKING_STATUSES))
+        .in('status', Array.from(BLOCKING_RENTAL_BOOKING_STATUSES))
         .lt('pickup_at', input.dropoffAt)
       const altConflicts = (altBookingsRes.data ?? []).map((row: any) => normalizeRentalBooking(row, bufferMinutes))
         .filter(booking => rentalBookingBlocksWindow(booking, input.pickupAt, input.dropoffAt, bufferMinutes))

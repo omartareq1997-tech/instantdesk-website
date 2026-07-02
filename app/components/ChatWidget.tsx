@@ -7,7 +7,7 @@ import { Bot, Check, CheckCheck, Download, FileText, Image as ImageIcon, Papercl
 
 /* ─── Config ─────────────────────────────────────────────── */
 
-const DEFAULT_BUSINESS_ID = 'a7827a5c-8480-4cc9-a418-361ea962f50d'
+const DEFAULT_BUSINESS_ID = '0616a47a-2c01-49ce-a798-385f8276b92b'
 const MAX_MESSAGE_LENGTH = 4000
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -55,7 +55,12 @@ function businessIdFromUrl(): string | null {
   if (typeof window === 'undefined') return null
   const params = new URLSearchParams(window.location.search)
   const candidate = params.get('instantdesk_business_id') || params.get('business_id')
-  return candidate && UUID_RE.test(candidate) ? candidate : null
+  if (!candidate || !UUID_RE.test(candidate)) return null
+  const hostname = window.location.hostname.toLowerCase()
+  if ((hostname === 'instantdesk.pl' || hostname === 'www.instantdesk.pl') && candidate !== DEFAULT_BUSINESS_ID) {
+    return DEFAULT_BUSINESS_ID
+  }
+  return candidate
 }
 
 function botIdFromUrl(): string | null {

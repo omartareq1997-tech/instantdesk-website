@@ -114,11 +114,11 @@ const ALLOWED_ATTACHMENT_TYPES = new Set([
 type RateBucket = { count: number; resetAt: number }
 const rateBuckets = new Map<string, RateBucket>()
 
-const LEGACY_DEMO_BUSINESS_ID = '0616a47a-2c01-49ce-a798-385f8276b92b'
+const ADMIN_WEBSITE_BUSINESS_ID = '0616a47a-2c01-49ce-a798-385f8276b92b'
 const PUBLIC_SITE_BUSINESS_ID =
   process.env.PUBLIC_SITE_BUSINESS_ID ||
   process.env.NEXT_PUBLIC_SITE_BUSINESS_ID ||
-  'a7827a5c-8480-4cc9-a418-361ea962f50d'
+  ADMIN_WEBSITE_BUSINESS_ID
 
 interface ExistingLead {
   id: string; name: string | null; phone: string | null; email: string | null
@@ -181,8 +181,8 @@ function isInstantDeskPublicHost(host: string): boolean {
 
 function resolvePublicWidgetBusinessId(req: NextRequest, requestedBusinessId: string): string {
   const host = requestHost(req)
-  if (isInstantDeskPublicHost(host) && requestedBusinessId === LEGACY_DEMO_BUSINESS_ID) {
-    return PUBLIC_SITE_BUSINESS_ID
+  if (isInstantDeskPublicHost(host) && requestedBusinessId !== ADMIN_WEBSITE_BUSINESS_ID) {
+    return ADMIN_WEBSITE_BUSINESS_ID
   }
   return requestedBusinessId
 }
@@ -619,6 +619,15 @@ function cleanNameCandidate(raw: string): string | null {
   return toTitleCase(candidate)
 }
 
+function plainNameAnswer(text: string): string | null {
+  const normalized = text
+    .replace(/\[([^\]]+)\]\(mailto:[^)]+\)/gi, '$1')
+    .replace(/\b(?:sure|ok|okay|yes|yeah|yep|hi|hello|hey|thanks|thank you)[,.\s]+/gi, ' ')
+    .trim()
+  if (!/^[A-Za-zÀ-ž]+(?:\s+[A-Za-zÀ-ž]+){0,2}$/.test(normalized)) return null
+  return cleanNameCandidate(normalized)
+}
+
 function extractName(text: string): string | null {
   let ph: RegExpMatchArray | null
 
@@ -805,6 +814,21 @@ function isLocationAffirmation(text: string) {
   return /\b(yes|yeah|yep|ok|okay|fine|correct|that location|same location|works|sounds good)\b/i.test(text)
 }
 
+function assistantAskedForName(history: { role: string; content: string }[]) {
+  const lastAssistant = [...history].reverse().find(message => message.role === 'assistant')?.content ?? ''
+  return /\b(?:your|full)\s+name\b|\bprovide your name\b|\bmay i (?:have|get) your name\b|\bcould you (?:please )?(?:provide|share|send) your name\b/i.test(lastAssistant)
+}
+
+function normalizeRentalLocationText(value: string | null | undefined, fallback?: string | null) {
+  const raw = value?.trim()
+  if (!raw) return null
+  if (/\b(?:same as pick\s*up|same as pickup|same pickup|same location|there|your location|the location)\b/i.test(raw)) {
+    return fallback?.trim() || null
+  }
+  if (/\bboche[ńn]ska\s*2a\b/i.test(raw) || /\bkrak[oó]w\b/i.test(raw) && /\bboche/i.test(raw)) return 'Kraków Bocheńska 2a'
+  return raw
+}
+
 function latestAssistantSuggestedLocation(history: { role: string; content: string }[]): string | null {
   const assistantMessages = history.filter(message => message.role === 'assistant').map(message => message.content).reverse()
   for (const content of assistantMessages) {
@@ -862,19 +886,28 @@ function buildConfirmedSlots(
   ]
   const extracted = latestExtractedSlots(userTexts)
   const currentExtracted = extractFromText(currentMsg)
+  if (!extracted.name && assistantAskedForName(history)) {
+    const answeredName = plainNameAnswer(currentMsg)
+    if (answeredName) extracted.name = answeredName
+  }
   if (!currentExtracted.pickup_location && isLocationAffirmation(currentMsg)) {
     const suggestedLocation = latestAssistantSuggestedLocation(history)
     if (suggestedLocation) extracted.pickup_location = suggestedLocation
   }
-  if (!currentExtracted.dropoff_location && /\b(?:drop(?:off|-off)?|return)\b.*\bsame location\b|\bsame location\b.*\b(?:drop(?:off|-off)?|return)\b/i.test(currentMsg)) {
+  if (!currentExtracted.dropoff_location && /\b(?:same as pick\s*up|same as pickup|same pickup|same location|there|your location|the location)\b/i.test(currentMsg)) {
     const pickupLocation = extracted.pickup_location ?? fromDB.pickup_location
     if (pickupLocation) extracted.dropoff_location = pickupLocation
   }
+  if (!currentExtracted.dropoff_location && /\bboche[ńn]ska\s*2a\b/i.test(currentMsg)) {
+    extracted.dropoff_location = 'Kraków Bocheńska 2a'
+  }
+  if (extracted.pickup_location) extracted.pickup_location = normalizeRentalLocationText(extracted.pickup_location, fromDB.pickup_location ?? null) ?? extracted.pickup_location
+  if (extracted.dropoff_location) extracted.dropoff_location = normalizeRentalLocationText(extracted.dropoff_location, extracted.pickup_location ?? fromDB.pickup_location ?? null) ?? extracted.dropoff_location
 
   // Stable identity fields keep DB continuity; operational rental fields use
   // latest confirmed values so corrections update immediately.
   return {
-    name:          fromDB.name          ?? extracted.name          ?? null,
+    name:          extracted.name       ?? fromDB.name             ?? null,
     phone:         fromDB.phone         ?? extracted.phone         ?? null,
     email:         fromDB.email         ?? extracted.email         ?? null,
     company:       fromDB.company       ?? extracted.company       ?? null,
@@ -1168,6 +1201,19 @@ function selectedVehicleNextStepReply(confirmed: Slots, missing: SlotDef[], tool
   return null
 }
 
+function formatRentalLocationForCustomer(location: { name?: string | null; address?: string | null }) {
+  const name = location.name?.trim() ?? ''
+  const address = location.address?.trim() ?? ''
+  const combined = `${name} ${address}`
+  if (/\bkrak[oó]w\b/i.test(combined) && /\bboche[ńn]ska\s*2a\b/i.test(combined)) {
+    return 'in Kraków is Bocheńska 2a'
+  }
+  if (name && address && address.toLowerCase().includes(name.toLowerCase())) return `is ${address}`
+  if (name && address && name.toLowerCase().includes(address.toLowerCase())) return `is ${name}`
+  if (name && address) return `is ${name}, ${address}`
+  return `is ${name || address || 'the configured location'}`
+}
+
 function rentalToolReplyOverride(
   toolResults: AgentToolResult[],
   confirmed: Slots,
@@ -1198,10 +1244,8 @@ function rentalToolReplyOverride(
     const data = create.data as { bookingNumber?: string; status?: string } | undefined
     if (!data?.bookingNumber) return 'Booking creation failed because no booking reference was returned. I can connect you with the team to finish this safely.'
     return [
-      `Your booking request has been created for ${selected}.`,
-      data?.bookingNumber ? `Reference: ${data.bookingNumber}.` : null,
-      data?.status ? `Status: ${data.status}.` : null,
-      confirmed.pickup_datetime && confirmed.return_datetime ? `Rental window: ${confirmed.pickup_datetime} to ${confirmed.return_datetime}.` : null,
+      `Your booking is confirmed. Reference: ${data.bookingNumber}.`,
+      `${selected} is reserved${confirmed.pickup_datetime && confirmed.return_datetime ? ` from ${confirmed.pickup_datetime} to ${confirmed.return_datetime}` : ''}.`,
       'Payment and deposit will be handled at pickup.',
     ].filter(Boolean).join(' ')
   }
@@ -1244,8 +1288,7 @@ function rentalToolReplyOverride(
     const list = data?.locations ?? []
     if (list.length === 1) {
       const location = list[0]
-      const label = [location.name, location.address].filter(Boolean).join(', ')
-      return `Our pickup location is ${label}.`
+      return `Our pickup location ${formatRentalLocationForCustomer(location)}.`
     }
     if (list.length > 1) {
       return `Our pickup locations are: ${list.map(location => [location.name, location.address].filter(Boolean).join(', ')).join('; ')}.`
@@ -1301,6 +1344,13 @@ function rentalClarificationReply(
   }
   const nextMissing = missing.find(field => ['selected_vehicle', 'car_class', 'pickup_location', 'dropoff_location', 'name', 'phone', 'email'].includes(String(field.key)))
   return nextMissing ? nextMissing.question : null
+}
+
+export const __testRentalChatHelpers = {
+  buildConfirmedSlots,
+  formatRentalLocationForCustomer,
+  normalizeRentalLocationText,
+  plainNameAnswer,
 }
 
 /* ════════════════════════════════════════════════════════════════════════════

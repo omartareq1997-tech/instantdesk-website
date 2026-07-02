@@ -4289,6 +4289,12 @@ function bookingTouchesDay(booking: RentalBooking, day: Date) {
   return new Date(booking.pickupAt) < end && new Date(bookingEnd(booking)) > start
 }
 
+const BLOCKING_RENTAL_BOOKING_STATUSES = new Set(['pending', 'confirmed', 'active', 'paid', 'picked_up', 'extended', 'maintenance', 'unavailable'])
+
+function rentalBookingBlocksCalendar(booking: RentalBooking) {
+  return BLOCKING_RENTAL_BOOKING_STATUSES.has(String(booking.status).toLowerCase())
+}
+
 function bookingRangePosition(booking: RentalBooking, day: Date) {
   const dayStart = new Date(day)
   dayStart.setHours(0, 0, 0, 0)
@@ -4373,6 +4379,8 @@ function RentalOperationsSection() {
   const fleetCsvRef = useRef<HTMLInputElement>(null)
 
   const calendarMonths = useMemo(() => [calendarCursor, addMonths(calendarCursor, 1)], [calendarCursor])
+  const activeCalendarBookings = useMemo(() => calendarBookings.filter(rentalBookingBlocksCalendar), [calendarBookings])
+  const nonBlockingCalendarBookings = useMemo(() => calendarBookings.filter(booking => !rentalBookingBlocksCalendar(booking)), [calendarBookings])
 
   const reloadFleet = useCallback(async () => {
     setLoading(true)
@@ -4898,7 +4906,7 @@ function RentalOperationsSection() {
                     <p className="mt-1 text-xs text-white/34">{car.className}</p>
                   </div>
                   {fleetCalendarDays.map(day => {
-                    const dayBookings = bookings.filter(booking => booking.carId === car.id && bookingTouchesDay(booking, day))
+                    const dayBookings = bookings.filter(booking => booking.carId === car.id && rentalBookingBlocksCalendar(booking) && bookingTouchesDay(booking, day))
                     const primary = dayBookings[0]
                     const pos = primary ? bookingRangePosition(primary, day) : null
                     return (
@@ -5179,7 +5187,7 @@ function RentalOperationsSection() {
                         </div>
                         <div className="mt-2 grid grid-cols-7 gap-y-2">
                           {monthDays(month).map(day => {
-                            const dayBookings = calendarBookings.filter(booking => bookingTouchesDay(booking, day))
+                            const dayBookings = activeCalendarBookings.filter(booking => bookingTouchesDay(booking, day))
                             const primary = dayBookings[0]
                             const pos = primary ? bookingRangePosition(primary, day) : null
                             return (
@@ -5199,9 +5207,9 @@ function RentalOperationsSection() {
                   <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
                     <h4 className="text-sm font-black text-white">Booked intervals</h4>
                     <div className="mt-3 max-h-80 space-y-3 overflow-y-auto pr-1">
-                      {calendarBookings.length === 0 ? (
+                      {activeCalendarBookings.length === 0 ? (
                         <p className="text-sm text-white/42">No bookings for this car.</p>
-                      ) : calendarBookings.map(booking => (
+                      ) : activeCalendarBookings.map(booking => (
                         <div key={booking.id} className="rounded-xl border border-white/8 bg-black/20 p-3">
                           <div className="flex items-center justify-between gap-3">
                             <p className="text-sm font-black text-white">{booking.customerName}</p>
@@ -5212,6 +5220,22 @@ function RentalOperationsSection() {
                           <p className="mt-2 text-xs text-white/36">{booking.customerPhone ?? 'No phone'} · {booking.pickupLocation ?? 'Pickup'} → {booking.dropoffLocation ?? 'Drop-off'}</p>
                         </div>
                       ))}
+                      {nonBlockingCalendarBookings.length > 0 && (
+                        <div className="rounded-xl border border-white/8 bg-white/[0.02] p-3">
+                          <p className="text-xs font-black uppercase tracking-[0.14em] text-white/38">Past / cancelled bookings</p>
+                          <div className="mt-3 space-y-2">
+                            {nonBlockingCalendarBookings.map(booking => (
+                              <div key={booking.id} className="rounded-lg border border-white/8 bg-black/15 p-2 text-xs text-white/44">
+                                <div className="flex items-center justify-between gap-3">
+                                  <span>{booking.customerName}</span>
+                                  <span className="font-bold capitalize">{booking.status} — does not block availability</span>
+                                </div>
+                                <p className="mt-1">{fmtDateTime(booking.pickupAt)} → {fmtDateTime(booking.dropoffAt ?? booking.returnAt)}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">

@@ -5,7 +5,7 @@ import { checkRentalAvailability, normalizeRentalBooking } from '../../../lib/re
 
 export const dynamic = 'force-dynamic'
 
-const VALID_STATUSES = new Set(['pending', 'confirmed', 'active', 'completed', 'cancelled'])
+const VALID_STATUSES = new Set(['pending', 'confirmed', 'active', 'completed', 'cancelled', 'maintenance', 'unavailable'])
 
 function isMissingTable(error: unknown) {
   return typeof error === 'object' && error !== null && 'code' in error && ['42P01', 'PGRST205'].includes(String((error as { code?: string }).code))
@@ -72,8 +72,8 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}))
   const input = bookingInput(body)
 
-  if (!input.carId || !input.customerName || !input.pickupAt || !input.dropoffAt) {
-    return NextResponse.json({ error: 'car_id, customer_name, pickup_at, and dropoff_at are required' }, { status: 400 })
+  if (!input.carId || !input.customerName || !input.customerPhone || !input.customerEmail || !input.pickupLocationId || !input.dropoffLocationId || !input.pickupAt || !input.dropoffAt) {
+    return NextResponse.json({ error: 'car_id, customer_name, customer_phone, customer_email, pickup_location_id, dropoff_location_id, pickup_at, and dropoff_at are required' }, { status: 400 })
   }
 
   try {

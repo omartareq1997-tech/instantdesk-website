@@ -38,4 +38,9 @@ test.describe('rental booking availability overlap rules', () => {
     expect(rentalBookingBlocksWindow({ ...baseBooking, status: 'cancelled' }, '2026-07-13T09:00:00.000Z', '2026-07-14T09:00:00.000Z', 120)).toBe(false)
     expect(rentalBookingBlocksWindow({ ...baseBooking, status: 'completed' }, '2026-07-13T09:00:00.000Z', '2026-07-14T09:00:00.000Z', 120)).toBe(false)
   })
+
+  test('maintenance and unavailable bookings block availability', () => {
+    expect(rentalBookingBlocksWindow({ ...baseBooking, status: 'maintenance' }, '2026-07-13T09:00:00.000Z', '2026-07-14T09:00:00.000Z', 120)).toBe(true)
+    expect(rentalBookingBlocksWindow({ ...baseBooking, status: 'unavailable' }, '2026-07-13T09:00:00.000Z', '2026-07-14T09:00:00.000Z', 120)).toBe(true)
+  })
 })

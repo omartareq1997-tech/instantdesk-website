@@ -114,7 +114,7 @@ const ALLOWED_ATTACHMENT_TYPES = new Set([
 type RateBucket = { count: number; resetAt: number }
 const rateBuckets = new Map<string, RateBucket>()
 
-const ADMIN_WEBSITE_BUSINESS_ID = '0616a47a-2c01-49ce-a798-385f8276b92b'
+const ADMIN_WEBSITE_BUSINESS_ID = '59bd9987-46b9-48a3-ad14-cfe1ab733453'
 const PUBLIC_SITE_BUSINESS_ID =
   process.env.PUBLIC_SITE_BUSINESS_ID ||
   process.env.NEXT_PUBLIC_SITE_BUSINESS_ID ||
@@ -829,6 +829,14 @@ function normalizeRentalLocationText(value: string | null | undefined, fallback?
   return raw
 }
 
+function mentionsCanonicalRentalLocation(text: string) {
+  return /\bboche[ńn]ska\s*2a\b/i.test(text) || /\bkrak[oó]w\b/i.test(text) && /\bboche/i.test(text)
+}
+
+function mentionsPickupAndDropoff(text: string) {
+  return /\bpick\s*up\b/i.test(text) && /\b(?:drop\s*off|dropoff|return)\b/i.test(text)
+}
+
 function latestAssistantSuggestedLocation(history: { role: string; content: string }[]): string | null {
   const assistantMessages = history.filter(message => message.role === 'assistant').map(message => message.content).reverse()
   for (const content of assistantMessages) {
@@ -893,6 +901,13 @@ function buildConfirmedSlots(
   if (!currentExtracted.pickup_location && isLocationAffirmation(currentMsg)) {
     const suggestedLocation = latestAssistantSuggestedLocation(history)
     if (suggestedLocation) extracted.pickup_location = suggestedLocation
+  }
+  if (!currentExtracted.pickup_location && mentionsCanonicalRentalLocation(currentMsg) && /\bpick\s*up\b/i.test(currentMsg)) {
+    extracted.pickup_location = 'Kraków Bocheńska 2a'
+  }
+  if (mentionsCanonicalRentalLocation(currentMsg) && mentionsPickupAndDropoff(currentMsg)) {
+    extracted.pickup_location = 'Kraków Bocheńska 2a'
+    extracted.dropoff_location = 'Kraków Bocheńska 2a'
   }
   if (!currentExtracted.dropoff_location && /\b(?:same as pick\s*up|same as pickup|same pickup|same location|there|your location|the location)\b/i.test(currentMsg)) {
     const pickupLocation = extracted.pickup_location ?? fromDB.pickup_location
@@ -1214,6 +1229,94 @@ function formatRentalLocationForCustomer(location: { name?: string | null; addre
   return `is ${name || address || 'the configured location'}`
 }
 
+function formatCustomerDateTime(value: string | null | undefined) {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const day = date.getDate()
+  const month = date.toLocaleDateString('en-GB', { month: 'long' })
+  const year = date.getFullYear()
+  const time = date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })
+  return `${day} ${month} ${year} at ${time}`
+}
+
+function formatCustomerRentalWindow(pickupAt: string | null | undefined, returnAt: string | null | undefined) {
+  const pickup = formatCustomerDateTime(pickupAt)
+  const dropoff = formatCustomerDateTime(returnAt)
+  if (pickup && dropoff) return `from ${pickup} to ${dropoff}`
+  if (pickup) return `from ${pickup}`
+  if (dropoff) return `until ${dropoff}`
+  return ''
+}
+
+function formatPln(value: unknown) {
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) return null
+  return `${amount.toLocaleString('en-US', { maximumFractionDigits: 0 })} PLN`
+}
+
+function requestedRentalDays(text: string) {
+  const match = text.match(/\b(\d{1,2})\s*(?:rental\s*)?days?\b/i)
+  return match ? Number(match[1]) : null
+}
+
+function formatPriceReply(price: AgentToolResult, userMessage: string) {
+  const data = price.data as {
+    rentalDays?: number
+    dailyPrice?: number
+    rentalSubtotal?: number
+    deposit?: number
+  } | undefined
+  const total = formatPln(data?.rentalSubtotal)
+  const daily = formatPln(data?.dailyPrice)
+  const deposit = formatPln(data?.deposit)
+  const days = Number(data?.rentalDays ?? 0)
+  if (!total || !daily || !days) return price.summary
+  const pieces = [
+    `Estimated rental price: ${total}.`,
+    `This period is charged as ${days} rental ${days === 1 ? 'day' : 'days'} at ${daily}/day.`,
+  ]
+  const statedDays = requestedRentalDays(userMessage)
+  if (statedDays && days > statedDays) {
+    pieces.push(`Because the return time is later than the pickup time, this is charged as ${days} rental days.`)
+  }
+  if (deposit) pieces.push(`Deposit: ${deposit}.`)
+  return pieces.join(' ')
+}
+
+function formatAvailabilityReply(availability: AgentToolResult, confirmed: Slots) {
+  const data = availability.data as {
+    available?: boolean
+    requestedCar?: { name?: string | null } | null
+    availableCars?: { name?: string | null }[]
+  } | undefined
+  const selected = data?.requestedCar?.name || confirmed.selected_vehicle || confirmed.car_class || 'the selected car'
+  const window = formatCustomerRentalWindow(confirmed.pickup_datetime, confirmed.return_datetime)
+  if (availability.ok && data?.available && data.requestedCar) {
+    return `The ${selected} is available${window ? ` ${window}` : ''}.`
+  }
+  if (availability.ok && data?.requestedCar && data?.available === false) {
+    const alternatives = (data.availableCars ?? []).map(car => car.name).filter(Boolean).join(', ')
+    return alternatives
+      ? `The ${selected} is not available for those dates, but these similar cars are available: ${alternatives}.`
+      : `The ${selected} is not available for those dates.`
+  }
+  return availability.summary
+}
+
+function locationAcceptanceReply(confirmed: Slots, missing: SlotDef[], userMessage: string) {
+  if (!confirmed.pickup_location || !confirmed.dropoff_location) return null
+  if (!mentionsCanonicalRentalLocation(userMessage) && !/\b(?:same as pick\s*up|same as pickup|same location|there|your location|the location)\b/i.test(userMessage)) return null
+  const missingKeys = new Set(missing.map(field => field.key))
+  const prefix = 'Perfect — pickup and drop-off will be at Bocheńska 2a in Kraków.'
+  if (missingKeys.has('selected_vehicle') || missingKeys.has('car_class')) return `${prefix} What type of car would you prefer?`
+  if (missingKeys.has('pickup_datetime') || missingKeys.has('return_datetime')) return `${prefix} What pickup date and time should I use, and what return date and time should I use?`
+  if (missingKeys.has('name')) return `${prefix} Could you please provide your name?`
+  if (missingKeys.has('phone')) return `${prefix} What is your phone number?`
+  if (missingKeys.has('email')) return `${prefix} What is your email address?`
+  return prefix
+}
+
 function rentalToolReplyOverride(
   toolResults: AgentToolResult[],
   confirmed: Slots,
@@ -1239,13 +1342,19 @@ function rentalToolReplyOverride(
   const fleet = toolResults.find(result => result.tool === 'searchFleet')
   const locations = toolResults.find(result => result.tool === 'getLocations')
   const selected = confirmed.selected_vehicle ?? confirmed.car_class ?? 'the selected car'
+  const acceptedLocation = locationAcceptanceReply(confirmed, missing, userMessage)
 
   if (create?.ok) {
     const data = create.data as { bookingNumber?: string; status?: string } | undefined
     if (!data?.bookingNumber) return 'Booking creation failed because no booking reference was returned. I can connect you with the team to finish this safely.'
+    const priceLine = price?.ok ? formatPriceReply(price, userMessage) : null
+    const deposit = price?.ok ? formatPln((price.data as { deposit?: number } | undefined)?.deposit) : null
+    const window = formatCustomerRentalWindow(confirmed.pickup_datetime, confirmed.return_datetime)
     return [
-      `Your booking is confirmed. Reference: ${data.bookingNumber}.`,
-      `${selected} is reserved${confirmed.pickup_datetime && confirmed.return_datetime ? ` from ${confirmed.pickup_datetime} to ${confirmed.return_datetime}` : ''}.`,
+      `Your booking is confirmed ✅\nReference: ${data.bookingNumber}`,
+      `${selected} is reserved${window ? ` ${window}` : ''}.`,
+      priceLine ? priceLine.split(' Deposit:')[0] : null,
+      deposit ? `Deposit: ${deposit}.` : null,
       'Payment and deposit will be handled at pickup.',
     ].filter(Boolean).join(' ')
   }
@@ -1270,8 +1379,8 @@ function rentalToolReplyOverride(
       return nextMissing ? `${availability.summary} ${nextMissing.question}` : availability.summary
     }
     const nextMissing = missing.find(field => ['name', 'phone', 'email', 'dropoff_location', 'pickup_location'].includes(String(field.key)))
-    const pieces = [availability.summary]
-    if (price?.ok) pieces.push(price.summary)
+    const pieces = [formatAvailabilityReply(availability, confirmed)]
+    if (price?.ok) pieces.push(formatPriceReply(price, userMessage))
     if (nextMissing) pieces.push(nextMissing.question)
     const availabilityData = availability.data as { available?: boolean } | undefined
     if (!nextMissing && availabilityData?.available && price?.ok) {
@@ -1282,6 +1391,7 @@ function rentalToolReplyOverride(
 
   const selectedNextStep = selectedVehicleNextStepReply(confirmed, missing, toolResults)
   if (selectedNextStep && confirmed.pickup_location && confirmed.dropoff_location) return selectedNextStep
+  if (acceptedLocation) return acceptedLocation
 
   if (locations?.ok) {
     const data = locations.data as { locations?: { name?: string | null; address?: string | null }[] } | undefined
@@ -1349,6 +1459,9 @@ function rentalClarificationReply(
 export const __testRentalChatHelpers = {
   buildConfirmedSlots,
   formatRentalLocationForCustomer,
+  formatCustomerDateTime,
+  formatPriceReply,
+  rentalToolReplyOverride,
   normalizeRentalLocationText,
   plainNameAnswer,
 }

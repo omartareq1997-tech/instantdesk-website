@@ -7,7 +7,7 @@ import { Bot, Check, CheckCheck, Download, FileText, Image as ImageIcon, Papercl
 
 /* ─── Config ─────────────────────────────────────────────── */
 
-const DEFAULT_BUSINESS_ID = '0616a47a-2c01-49ce-a798-385f8276b92b'
+const DEFAULT_BUSINESS_ID = '59bd9987-46b9-48a3-ad14-cfe1ab733453'
 const MAX_MESSAGE_LENGTH = 4000
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -304,9 +304,9 @@ export default function ChatWidget() {
         if (explicitBotId) params.set('bot_id', explicitBotId)
         const res = await fetch(`/api/live-chat/widget/config${params.toString() ? `?${params.toString()}` : ''}`, { cache: 'no-store' })
         if (!res.ok) return
-        const data = await res.json() as { business_id?: string; bot_id?: string; ai_auto_replies_enabled?: boolean }
+        const data = await res.json() as { business_id?: string; bot_id?: string | null; ai_auto_replies_enabled?: boolean }
         if (!cancelled && data.business_id) setBusinessId(data.business_id)
-        if (!cancelled && data.bot_id) setBotId(data.bot_id)
+        if (!cancelled) setBotId(data.bot_id && UUID_RE.test(data.bot_id) ? data.bot_id : null)
         if (!cancelled && typeof data.ai_auto_replies_enabled === 'boolean') {
           setAiAutoRepliesEnabled(data.ai_auto_replies_enabled)
         }

@@ -323,6 +323,15 @@ function daysBetween(pickupAt: string, dropoffAt: string) {
   return Math.max(1, Math.ceil((dropoff - pickup) / (24 * 60 * 60 * 1000)))
 }
 
+function formatPln(value: number) {
+  return `${value.toLocaleString('en-US', { maximumFractionDigits: 0 })} PLN`
+}
+
+function requestedRentalDays(text: string) {
+  const match = text.match(/\b(\d{1,2})\s*(?:rental\s*)?days?\b/i)
+  return match ? Number(match[1]) : null
+}
+
 async function calculatePrice(context: AgentToolContext, toolResults: AgentToolResult[]): Promise<AgentToolResult> {
   const car = firstCar(toolResults)
   const { pickupAt, dropoffAt } = parseRentalDateWindow(context.message, context.slots)
@@ -332,10 +341,14 @@ async function calculatePrice(context: AgentToolContext, toolResults: AgentToolR
   const dailyPrice = Number(car.dailyPrice ?? 0)
   const deposit = Number(car.deposit ?? 0)
   const rentalSubtotal = rentalDays * dailyPrice
+  const statedDays = requestedRentalDays(context.message)
+  const roundingNote = statedDays && rentalDays > statedDays
+    ? ` Because the return time is later than the pickup time, this is charged as ${rentalDays} rental days.`
+    : ''
   return {
     tool: 'calculatePrice',
     ok: true,
-    summary: `Estimated price for ${car.name}: ${rentalDays} day(s) × ${dailyPrice} = ${rentalSubtotal}. Deposit: ${deposit}.`,
+    summary: `Estimated rental price: ${formatPln(rentalSubtotal)}. This period is charged as ${rentalDays} rental ${rentalDays === 1 ? 'day' : 'days'} at ${formatPln(dailyPrice)}/day.${roundingNote} Deposit: ${formatPln(deposit)}.`,
     data: { car, pickupAt, dropoffAt, rentalDays, dailyPrice, rentalSubtotal, deposit, totalDueBeforeDeposit: rentalSubtotal },
   }
 }

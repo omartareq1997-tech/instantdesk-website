@@ -146,9 +146,11 @@ export async function resolveBotContext(input: ResolveBotContextInput): Promise<
 
   const businessType = normalizeBusinessType(typeof business?.business_type === 'string' ? business.business_type : null)
 
-  let agentsQuery = sb.from('agents').select('*').eq('business_id', businessId)
-  if (botId) agentsQuery = agentsQuery.eq('id', botId)
-  const { data: agentRows, error: agentError } = await agentsQuery.order('created_at', { ascending: true })
+  const { data: agentRows, error: agentError } = await sb
+    .from('agents')
+    .select('*')
+    .eq('business_id', businessId)
+    .order('created_at', { ascending: true })
 
   if (agentError) {
     return {
@@ -163,7 +165,8 @@ export async function resolveBotContext(input: ResolveBotContextInput): Promise<
   }
 
   const agents = (agentRows ?? []) as AgentRow[]
-  if (botId && agents.length === 0) {
+  const explicitAgent = botId ? agents.find(agent => agent.id === botId) ?? null : null
+  if (botId && !explicitAgent) {
     return {
       ok: false,
       businessId,
@@ -172,6 +175,31 @@ export async function resolveBotContext(input: ResolveBotContextInput): Promise<
       publicMessage: 'This assistant is not configured yet.',
       adminMessage: 'Requested bot does not belong to this business or does not exist.',
       resolution: 'explicit_bot_not_found_in_business',
+    }
+  }
+
+  if (requestType === 'public_widget' && explicitAgent) {
+    if (explicitAgent.is_default_website_bot !== true) {
+      return {
+        ok: false,
+        businessId,
+        businessType,
+        status: 200,
+        publicMessage: 'This assistant is not configured yet.',
+        adminMessage: 'Public widget explicit bot is not the default website bot for this business.',
+        resolution: 'explicit_bot_not_default_for_widget',
+      }
+    }
+    if (!isBusinessTypeLike(explicitAgent, businessType)) {
+      return {
+        ok: false,
+        businessId,
+        businessType,
+        status: 200,
+        publicMessage: 'This assistant is not configured yet.',
+        adminMessage: 'Public widget explicit bot does not match this business type.',
+        resolution: 'explicit_bot_business_type_mismatch',
+      }
     }
   }
 
@@ -204,7 +232,7 @@ export async function resolveBotContext(input: ResolveBotContextInput): Promise<
   }
 
   let picked = botId
-    ? { agent: agents[0], resolution: 'explicit_bot_id' }
+    ? { agent: explicitAgent, resolution: 'explicit_bot_id' }
     : pickDefaultAgent(agents, businessType)
 
   if (!picked.agent) {
@@ -218,15 +246,18 @@ export async function resolveBotContext(input: ResolveBotContextInput): Promise<
       resolution: 'no_usable_bot',
     }
   }
+  let pickedAgent = picked.agent
 
-  if (!botId && businessType === 'car_rental' && isRealEstateLike(picked.agent) && !isBusinessTypeLike(picked.agent, businessType)) {
+  if (!botId && businessType === 'car_rental' && isRealEstateLike(pickedAgent) && !isBusinessTypeLike(pickedAgent, businessType)) {
     const carRentalAgent = agents.find(agent => isBusinessTypeLike(agent, businessType))
     if (carRentalAgent) {
       picked = { agent: carRentalAgent, resolution: 'car_rental_guard_preferred_matching_bot' }
+      pickedAgent = carRentalAgent
     } else if (requestType === 'test_ai' || requestType === 'public_widget') {
       try {
         const created = await createDefaultAgent(sb, businessId, businessType)
         picked = { agent: created, resolution: 'car_rental_guard_created_default_bot' }
+        pickedAgent = created
       } catch {
         return {
           ok: false,
@@ -241,13 +272,13 @@ export async function resolveBotContext(input: ResolveBotContextInput): Promise<
     }
   }
 
-  if (requestType === 'test_ai' && picked.agent.active === false) {
+  if (requestType === 'test_ai' && pickedAgent.active === false) {
     const { error } = await sb
       .from('agents')
       .update({ active: true })
       .eq('business_id', businessId)
-      .eq('id', picked.agent.id)
-    if (!error) picked.agent = { ...picked.agent, active: true }
+      .eq('id', pickedAgent.id)
+    if (!error) pickedAgent = { ...pickedAgent, active: true }
     else console.warn('[BotResolution] inactive bot activation failed:', error.message)
   }
 
@@ -255,7 +286,7 @@ export async function resolveBotContext(input: ResolveBotContextInput): Promise<
     ok: true,
     businessId,
     businessType,
-    agent: picked.agent,
+    agent: pickedAgent,
     resolution: picked.resolution,
     toolsEnabled: enabledToolsForBusinessType(businessType),
   }

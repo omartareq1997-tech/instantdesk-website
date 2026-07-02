@@ -366,10 +366,82 @@ test.describe('agent operational tool planner', () => {
     expect(slots.dropoff_location).toBe('Kraków Bocheńska 2a')
   })
 
+  test('accepting pickup and drop-off at Bocheńska sets both locations and does not repeat location lookup', () => {
+    const slots = __testRentalChatHelpers.buildConfirmedSlots(
+      null,
+      [{ role: 'assistant', content: 'Our pickup location in Kraków is Bocheńska 2a.' }],
+      'OK will pick up and drop off the car at Kraków Bocheńska 2a',
+    )
+    expect(slots.pickup_location).toBe('Kraków Bocheńska 2a')
+    expect(slots.dropoff_location).toBe('Kraków Bocheńska 2a')
+
+    const reply = __testRentalChatHelpers.rentalToolReplyOverride(
+      [{ tool: 'getLocations', ok: true, summary: 'Found 1 active pickup/drop-off location(s).', data: { locations: [{ name: 'Kraków Bocheńska 2a', address: 'Kraków Bocheńska 2a' }] } }],
+      slots,
+      [{ key: 'selected_vehicle', label: 'Selected vehicle', question: 'Which vehicle would you like?', required: true }],
+      'car_rental',
+      'OK will pick up and drop off the car at Kraków Bocheńska 2a',
+    )
+    expect(reply).toBe('Perfect — pickup and drop-off will be at Bocheńska 2a in Kraków. What type of car would you prefer?')
+    expect(reply).not.toContain('Our pickup location')
+  })
+
   test('formats pickup location without duplicate city and street copy', () => {
     expect(__testRentalChatHelpers.formatRentalLocationForCustomer({
       name: 'Kraków Bocheńska 2a',
       address: 'Kraków Bocheńska 2a',
     })).toBe('in Kraków is Bocheńska 2a')
+  })
+
+  test('customer-facing availability and confirmation replies do not expose ISO datetimes', () => {
+    const slots = {
+      selected_vehicle: 'Mercedes GLC',
+      pickup_datetime: '2026-07-03T09:00:00+02:00',
+      return_datetime: '2026-07-08T22:00:00+02:00',
+      pickup_location: 'Kraków Bocheńska 2a',
+      dropoff_location: 'Kraków Bocheńska 2a',
+      name: 'Alex',
+      phone: '510880999',
+      email: 'alex@example.com',
+    } as any
+    const reply = __testRentalChatHelpers.rentalToolReplyOverride(
+      [
+        { tool: 'checkAvailability', ok: true, summary: 'raw', data: { available: true, requestedCar: { name: 'Mercedes GLC' }, availableCars: [] } },
+        { tool: 'calculatePrice', ok: true, summary: 'raw', data: { rentalDays: 6, dailyPrice: 300, rentalSubtotal: 1800, deposit: 3000 } },
+      ],
+      slots,
+      [],
+      'car_rental',
+      'I need it for 5 days',
+    ) ?? ''
+    expect(reply).toContain('The Mercedes GLC is available from 3 July 2026 at 09:00 to 8 July 2026 at 22:00.')
+    expect(reply).toContain('Estimated rental price: 1,800 PLN.')
+    expect(reply).toContain('This period is charged as 6 rental days at 300 PLN/day.')
+    expect(reply).toContain('Because the return time is later than the pickup time, this is charged as 6 rental days.')
+    expect(reply).not.toMatch(/\d{4}-\d{2}-\d{2}T/)
+  })
+
+  test('final booking confirmation includes reference, formatted price, and no team confirmation copy', () => {
+    const reply = __testRentalChatHelpers.rentalToolReplyOverride(
+      [
+        { tool: 'calculatePrice', ok: true, summary: 'raw', data: { rentalDays: 6, dailyPrice: 300, rentalSubtotal: 1800, deposit: 3000 } },
+        { tool: 'createBooking', ok: true, summary: 'Created pending booking RB-388E23B8.', data: { bookingNumber: 'RB-388E23B8', status: 'pending' } },
+      ],
+      {
+        selected_vehicle: 'Mercedes GLC',
+        pickup_datetime: '2026-07-03T09:00:00+02:00',
+        return_datetime: '2026-07-08T22:00:00+02:00',
+      } as any,
+      [],
+      'car_rental',
+      'yes please',
+    ) ?? ''
+    expect(reply).toContain('Your booking is confirmed ✅')
+    expect(reply).toContain('Reference: RB-388E23B8')
+    expect(reply).toContain('Mercedes GLC is reserved from 3 July 2026 at 09:00 to 8 July 2026 at 22:00.')
+    expect(reply).toContain('Estimated rental price: 1,800 PLN.')
+    expect(reply).toContain('Deposit: 3,000 PLN.')
+    expect(reply).not.toMatch(/team will contact|team will confirm/i)
+    expect(reply).not.toMatch(/\d{4}-\d{2}-\d{2}T/)
   })
 })

@@ -2,9 +2,10 @@ import { createClient } from '@supabase/supabase-js'
 import { NextRequest } from 'next/server'
 import { expect, test } from './fixtures'
 import { POST as postChat } from '../app/api/chat/route'
+import { GET as getWidgetConfig } from '../app/api/live-chat/widget/config/route'
 import { resolveBotContext } from '../app/lib/bot-context'
 
-const BUSINESS_ID = '0616a47a-2c01-49ce-a798-385f8276b92b'
+const BUSINESS_ID = '59bd9987-46b9-48a3-ad14-cfe1ab733453'
 const MISSING_OPENAI_KEY_MESSAGE = 'OPENAI_API_KEY is missing. Add it in Vercel Environment Variables and redeploy.'
 const MISSING_GEMINI_KEY_MESSAGE = 'GEMINI_API_KEY is missing. Add it in Vercel Environment Variables and redeploy.'
 
@@ -285,6 +286,27 @@ test.describe('Live Chat API production boundaries', () => {
     }
   })
 
+  test('public widget config for instantdesk.pl resolves the production car rental bot', async () => {
+    const request = new NextRequest('https://instantdesk.pl/api/live-chat/widget/config', {
+      headers: { host: 'instantdesk.pl' },
+    })
+    const response = await getWidgetConfig(request)
+    const body = await response.json() as {
+      business_id?: string
+      bot_name?: string
+      business_type?: string
+      prompt_preview?: string
+      configured?: boolean
+    }
+
+    expect(response.headers.get('cache-control')).toContain('no-store')
+    expect(body.business_id).toBe(BUSINESS_ID)
+    expect(body.configured).toBe(true)
+    expect(body.business_type).toBe('car_rental')
+    expect(`${body.bot_name ?? ''} ${body.prompt_preview ?? ''}`).toMatch(/car|rental|vehicle|fleet/i)
+    expect(`${body.bot_name ?? ''} ${body.prompt_preview ?? ''}`).not.toMatch(/dubai|real estate|property|apartment|villa/i)
+  })
+
   test('public widget cannot resolve an explicit bot from another business', async () => {
     const businessA = await createBotIsolationBusiness('QA Widget Business A', 'car_rental')
     const businessB = await createBotIsolationBusiness('QA Widget Business B', 'real_estate')
@@ -315,6 +337,69 @@ test.describe('Live Chat API production boundaries', () => {
     } finally {
       await cleanupTestAiBusiness(businessA.sb, businessA.businessId)
       await cleanupTestAiBusiness(businessB.sb, businessB.businessId)
+    }
+  })
+
+  test('public widget rejects stale same-business Dubai bot id when it is not website default', async () => {
+    const { sb, businessId } = await createBotIsolationBusiness('QA Same Business Stale Bot', 'car_rental')
+    try {
+      const staleDubaiBotId = await insertIsolationBot(sb, businessId, {
+        name: 'Dubai Real Estate Assistant',
+        persona: 'You are a Dubai luxury real estate assistant.',
+        objective: 'Sell luxury villas and apartments.',
+      })
+      const carBotId = await insertIsolationBot(sb, businessId, {
+        name: 'Car Rental Operations Assistant',
+        persona: 'You are a car rental operations assistant.',
+        objective: 'Help customers rent vehicles from the fleet.',
+        model: 'gemini-2.5-pro',
+      })
+
+      const stale = await resolveBotContext({
+        sb,
+        requestType: 'public_widget',
+        businessId,
+        botId: staleDubaiBotId,
+      })
+      expect(stale.ok).toBe(false)
+      if (!stale.ok) expect(stale.resolution).toBe('explicit_bot_not_default_for_widget')
+
+      const resolved = await resolveBotContext({ sb, requestType: 'public_widget', businessId })
+      expect(resolved.ok).toBe(true)
+      if (resolved.ok) {
+        expect(resolved.agent.id).toBe(carBotId)
+        expect(`${resolved.agent.persona} ${resolved.agent.objective}`).not.toMatch(/dubai|real estate/i)
+      }
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('widget config falls back to resolved website bot and sends no-store when a stale bot id is supplied', async () => {
+    const { sb, businessId } = await createBotIsolationBusiness('QA Widget Config Stale Bot', 'car_rental')
+    try {
+      const staleDubaiBotId = await insertIsolationBot(sb, businessId, {
+        name: 'Dubai Real Estate Assistant',
+        persona: 'You are a Dubai luxury real estate assistant.',
+        objective: 'Sell luxury villas and apartments.',
+      })
+      const carBotId = await insertIsolationBot(sb, businessId, {
+        name: 'Car Rental Operations Assistant',
+        persona: 'You are a car rental operations assistant.',
+        objective: 'Help customers rent vehicles from the fleet.',
+        model: 'gemini-2.5-pro',
+      })
+
+      const request = new NextRequest(`http://127.0.0.1:3106/api/live-chat/widget/config?business_id=${businessId}&bot_id=${staleDubaiBotId}`)
+      const response = await getWidgetConfig(request)
+      const body = await response.json() as { bot_id?: string; bot_name?: string; resolution_source?: string; prompt_preview?: string }
+      expect(response.headers.get('cache-control')).toContain('no-store')
+      expect(body.bot_id).toBe(carBotId)
+      expect(body.bot_name).toBe('Car Rental Operations Assistant')
+      expect(body.resolution_source).toContain('ignored_stale_explicit_bot')
+      expect(body.prompt_preview).not.toMatch(/dubai|real estate/i)
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
     }
   })
 

@@ -1583,7 +1583,7 @@ async function callAIProvider(
 
 export async function POST(req: NextRequest) {
   /* 1. Parse ─────────────────────────────────────────────────────────────── */
-  let body: { business_id?: unknown; bot_id?: unknown; conversation_id?: unknown; message?: unknown; attachment?: unknown; visitor_context?: unknown; debug?: unknown; test_ai?: unknown }
+  let body: { business_id?: unknown; bot_id?: unknown; conversation_id?: unknown; message?: unknown; attachment?: unknown; visitor_context?: unknown; debug?: unknown; test_ai?: unknown; channel?: unknown; host?: unknown }
   try { body = await req.json() }
   catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }) }
 
@@ -1603,6 +1603,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `message must be ${MAX_MESSAGE_LENGTH} characters or fewer` }, { status: 413 })
   }
   const messageText = message ?? attachmentResult?.attachment?.name ?? ''
+  const requestChannel = typeof body.channel === 'string' && body.channel.trim() ? body.channel.trim().slice(0, 40) : 'website'
+  const requestSourceHost = typeof body.host === 'string' && body.host.trim()
+    ? body.host.trim().toLowerCase().slice(0, 180)
+    : requestHost(req)
   const visitorContext = body.visitor_context && typeof body.visitor_context === 'object' && !Array.isArray(body.visitor_context)
     ? body.visitor_context as Record<string, unknown>
     : null
@@ -1647,6 +1651,62 @@ export async function POST(req: NextRequest) {
   /* 3. Supabase ───────────────────────────────────────────────────────────── */
   const sb = createAdminClient()
 
+  let conversationContext: {
+    id: string
+    business_id: string
+    status: string | null
+    metadata: Record<string, unknown>
+    botId: string | null
+  } | null = null
+
+  if (!testAiMode && conversation_id) {
+    const { data: existingConversation, error: existingConversationError } = await sb
+      .from('conversations')
+      .select('id,business_id,status,metadata')
+      .eq('id', conversation_id)
+      .maybeSingle()
+
+    if (existingConversationError) {
+      console.warn('[WidgetResolution] conversation lookup failed', {
+        host: requestHost(req),
+        conversation_id,
+        error: existingConversationError.message,
+      })
+    }
+
+    if (existingConversation?.id) {
+      const metadata = existingConversation.metadata && typeof existingConversation.metadata === 'object'
+        ? existingConversation.metadata as Record<string, unknown>
+        : {}
+      const metadataBotId = typeof metadata.bot_id === 'string' && metadata.bot_id.trim()
+        ? metadata.bot_id.trim()
+        : typeof metadata.agent_id === 'string' && metadata.agent_id.trim()
+          ? metadata.agent_id.trim()
+          : null
+      conversationContext = {
+        id: existingConversation.id,
+        business_id: existingConversation.business_id,
+        status: typeof existingConversation.status === 'string' ? existingConversation.status : null,
+        metadata,
+        botId: metadataBotId,
+      }
+      businessId = existingConversation.business_id
+      clientId = existingConversation.business_id
+      fallbackUsed = true
+      console.log('[WidgetResolution] existing conversation context', {
+        host: requestHost(req),
+        source_host: requestSourceHost,
+        conversation_id,
+        request_business_id: requestedBusinessId,
+        request_bot_id: requestedBotId,
+        conversation_business_id: conversationContext.business_id,
+        conversation_bot_id: conversationContext.botId,
+        resolved_business_id: businessId,
+        resolution_source: conversationContext.botId ? 'conversation_metadata_bot' : 'conversation_business_default_bot',
+      })
+    }
+  }
+
   const liveChatSettings = await getLiveChatSettings(sb, businessId)
   console.log('[LiveChatDebug] settings resolved', {
     host: requestHost(req),
@@ -1657,28 +1717,39 @@ export async function POST(req: NextRequest) {
   })
 
   let resolvedConversation: { convId: string; status: string | null; isNewConv: boolean } | null = null
+  let resolvedBotForConversation: {
+    id: string
+    name: string
+    businessType: string | null
+    model: string | null
+    resolution: string
+  } | null = null
+
+  function nextConversationMetadata(existing?: Record<string, unknown> | null) {
+    return {
+      ...(existing ?? {}),
+      ...(resolvedBotForConversation ? {
+        bot_id: resolvedBotForConversation.id,
+        agent_id: resolvedBotForConversation.id,
+        bot_name: resolvedBotForConversation.name,
+        business_type: resolvedBotForConversation.businessType,
+        model: resolvedBotForConversation.model,
+        bot_resolution_source: resolvedBotForConversation.resolution,
+      } : {}),
+      source_host: requestSourceHost,
+      widget_host: requestSourceHost,
+    }
+  }
+
   async function resolveConversation() {
     if (resolvedConversation) return resolvedConversation
 
     let convId: string
     let status: string | null = null
 
-    if (conversation_id) {
-      const { data: existing } = await sb
-        .from('conversations').select('id, business_id, status').eq('id', conversation_id).maybeSingle()
-      if (existing?.id && existing.business_id === businessId) {
-        convId = existing.id
-        status = typeof existing.status === 'string' ? existing.status : null
-      } else {
-        convId = crypto.randomUUID()
-        if (existing?.id) {
-          console.warn('[LiveChatDebug] ignored mismatched conversation_id', {
-            requested_conversation_id: conversation_id,
-            conversation_business_id: existing.business_id,
-            effective_business_id: businessId,
-          })
-        }
-      }
+    if (conversationContext?.id) {
+      convId = conversationContext.id
+      status = conversationContext.status
     } else {
       convId = crypto.randomUUID()
     }
@@ -1688,18 +1759,20 @@ export async function POST(req: NextRequest) {
       const { error: ce } = await sb.from('conversations').insert({
         id:              convId,
         business_id:     businessId,
-        channel:         'website',
+        channel:         requestChannel,
         status:          'ai_active',
         unread_count:    1,
         last_message_at: new Date().toISOString(),
+        metadata:        nextConversationMetadata(),
       })
       if (ce) {
         const { error: fallbackError } = await sb.from('conversations').insert({
           id:              convId,
           business_id:     businessId,
-          channel:         'website',
+          channel:         requestChannel,
           status:          'open',
           last_message_at: new Date().toISOString(),
+          metadata:        nextConversationMetadata(),
         })
         if (fallbackError) {
           console.error('[POST /api/chat] conversation insert failed:', JSON.stringify(fallbackError))
@@ -1710,7 +1783,10 @@ export async function POST(req: NextRequest) {
     } else {
       await sb
         .from('conversations')
-        .update({ last_message_at: new Date().toISOString() })
+        .update({
+          last_message_at: new Date().toISOString(),
+          metadata: nextConversationMetadata(conversationContext?.metadata ?? null),
+        })
         .eq('id', convId)
     }
 
@@ -1720,6 +1796,7 @@ export async function POST(req: NextRequest) {
       conversation_id: convId,
       status,
       is_new_conversation: isNewConv,
+      conversation_bot_id: resolvedBotForConversation?.id ?? conversationContext?.botId ?? null,
     })
     return resolvedConversation
   }
@@ -1850,6 +1927,7 @@ export async function POST(req: NextRequest) {
     requested_business_id: requestedBusinessId,
     body_business_id: business_id,
     requested_bot_id: requestedBotId,
+    conversation_bot_id: conversationContext?.botId ?? null,
     ai_auto_replies_enabled: liveChatSettings.ai_auto_replies_enabled,
     live_chat_enabled: liveChatSettings.live_chat_enabled,
     human_handover_enabled: liveChatSettings.human_handover_enabled,
@@ -1857,26 +1935,93 @@ export async function POST(req: NextRequest) {
   })
 
   const requestType = testAiMode ? 'test_ai' : 'public_widget'
-  const botContext = await resolveBotContext({
+  const botIdForResolution = testAiMode
+    ? requestedBotId
+    : conversationContext
+      ? conversationContext.botId
+      : requestedBotId
+  if (!testAiMode && conversationContext?.botId && requestedBotId && requestedBotId !== conversationContext.botId) {
+    console.warn('[WidgetResolution] ignored request bot mismatch for existing conversation', {
+      host: requestHost(req),
+      conversation_id: conversationContext.id,
+      request_bot_id: requestedBotId,
+      conversation_bot_id: conversationContext.botId,
+      conversation_business_id: conversationContext.business_id,
+    })
+  }
+  let botContext = await resolveBotContext({
     sb,
     requestType,
     businessId,
-    botId: requestedBotId,
+    botId: botIdForResolution,
     userId: sessionUserId,
     createDefaultForTestAi: testAiMode,
+    allowExplicitBotForExistingConversation: Boolean(!testAiMode && conversationContext?.botId),
   })
+  if (!testAiMode && !conversationContext && requestedBotId && !botContext.ok) {
+    const explicitFailure = botContext.resolution
+    const fallbackContext = await resolveBotContext({
+      sb,
+      requestType,
+      businessId,
+      botId: null,
+      userId: sessionUserId,
+    })
+    if (fallbackContext.ok) {
+      botContext = { ...fallbackContext, resolution: `ignored_stale_explicit_bot:${explicitFailure}` }
+    }
+  }
   logBotResolution({ requestType, userId: sessionUserId, businessId, result: botContext })
 
   if (!botContext.ok) {
+    console.warn('[WidgetResolution] bot resolution failed', {
+      host: requestHost(req),
+      source_host: requestSourceHost,
+      conversation_id: conversation_id ?? null,
+      request_business_id: requestedBusinessId,
+      request_bot_id: requestedBotId,
+      conversation_business_id: conversationContext?.business_id ?? null,
+      conversation_bot_id: conversationContext?.botId ?? null,
+      resolved_business_id: businessId,
+      fallback_reason: botContext.resolution,
+      request_type: requestType,
+    })
     return NextResponse.json({
       error: testAiMode ? botContext.adminMessage : botContext.publicMessage,
       details: testAiMode ? { businessId, botId: requestedBotId, resolution: botContext.resolution } : undefined,
-      reply: testAiMode ? undefined : botContext.publicMessage,
-    }, { status: botContext.status })
+      reply: !testAiMode && !conversationContext ? botContext.publicMessage : undefined,
+      conversation_id: conversationContext?.id ?? conversation_id ?? undefined,
+    }, {
+      status: botContext.status,
+      headers: { 'Cache-Control': 'no-store' },
+    })
   }
 
   const agent = botContext.agent as AgentRow
   const businessType = botContext.businessType
+  resolvedBotForConversation = {
+    id: agent.id,
+    name: agent.name,
+    businessType,
+    model: agent.model,
+    resolution: botContext.resolution,
+  }
+  console.log('[WidgetResolution] bot resolved for chat turn', {
+    host: requestHost(req),
+    source_host: requestSourceHost,
+    conversation_id: conversation_id ?? null,
+    request_business_id: requestedBusinessId,
+    request_bot_id: requestedBotId,
+    conversation_business_id: conversationContext?.business_id ?? null,
+    conversation_bot_id: conversationContext?.botId ?? null,
+    resolved_business_id: businessId,
+    resolved_bot_id: agent.id,
+    resolved_bot_name: agent.name,
+    business_type: businessType,
+    model: agent.model,
+    resolution_source: botContext.resolution,
+    instruction_preview: `${agent.persona ?? ''} ${agent.objective ?? ''}`.trim().slice(0, 80),
+  })
   const botDebug = {
     id: agent.id,
     name: agent.name,

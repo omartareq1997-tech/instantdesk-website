@@ -8,7 +8,8 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const conversationId = searchParams.get('conversation_id')
   const since = searchParams.get('since')
-  if (!conversationId) return NextResponse.json({ error: 'conversation_id is required' }, { status: 400 })
+  const noStore = { 'Cache-Control': 'no-store' }
+  if (!conversationId) return NextResponse.json({ error: 'conversation_id is required' }, { status: 400, headers: noStore })
 
   const sb = createAdminClient()
   const { data: conversation, error: convError } = await sb
@@ -17,8 +18,8 @@ export async function GET(request: NextRequest) {
     .eq('id', conversationId)
     .maybeSingle()
 
-  if (convError) return NextResponse.json({ error: convError.message }, { status: 500 })
-  if (!conversation) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
+  if (convError) return NextResponse.json({ error: convError.message }, { status: 500, headers: noStore })
+  if (!conversation) return NextResponse.json({ error: 'Conversation not found' }, { status: 404, headers: noStore })
 
   await sb
     .from('messages')
@@ -47,10 +48,10 @@ export async function GET(request: NextRequest) {
   }
 
   const { data, error } = messagesResult
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ error: error.message }, { status: 500, headers: noStore })
   return NextResponse.json({
     status: normalizeConversationStatus(conversation.status),
     messages: ((data ?? []) as { metadata?: { internal_note?: boolean } | null }[])
       .filter(message => !message.metadata?.internal_note),
-  })
+  }, { headers: noStore })
 }

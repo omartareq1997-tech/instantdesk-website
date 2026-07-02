@@ -43,6 +43,14 @@ type StoredChatState = {
   isOpen?: boolean
 }
 
+type WidgetConfig = {
+  business_id?: string
+  bot_id?: string | null
+  bot_name?: string | null
+  business_type?: string | null
+  ai_auto_replies_enabled?: boolean
+}
+
 function storageKey(businessId: string) {
   return `instantdesk_chat_${businessId}`
 }
@@ -109,6 +117,22 @@ function dateTime(iso?: string | null) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(iso))
+}
+
+function mergeServerMessages(existing: Msg[], incoming: Msg[]) {
+  if (!incoming.length) return existing
+  const incomingKeys = new Set(incoming.map(msg => `${msg.role}:${msg.text}:${msg.attachment?.name ?? ''}`))
+  const pendingLocal = existing.filter(msg => {
+    if (!msg.id.startsWith('local-')) return false
+    return !incomingKeys.has(`${msg.role}:${msg.text}:${msg.attachment?.name ?? ''}`)
+  })
+  const byId = new Map<string, Msg>()
+  for (const msg of [...incoming, ...pendingLocal]) byId.set(msg.id, msg)
+  return Array.from(byId.values()).sort((a, b) => {
+    const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0
+    const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0
+    return aTime - bTime
+  })
 }
 
 function Ticks({ msg }: { msg: Msg }) {
@@ -239,7 +263,9 @@ export default function ChatWidget() {
   const [presenceLabel, setPresenceLabel] = useState('online')
   const [dragActive, setDragActive] = useState(false)
   const [businessId, setBusinessId] = useState(DEFAULT_BUSINESS_ID)
-  const [botId, setBotId] = useState<string | null>(() => botIdFromUrl())
+  const [botId, setBotId] = useState<string | null>(null)
+  const [botName, setBotName] = useState<string | null>(null)
+  const [businessType, setBusinessType] = useState<string | null>(null)
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [aiAutoRepliesEnabled, setAiAutoRepliesEnabled] = useState(true)
 
@@ -269,22 +295,23 @@ export default function ChatWidget() {
     }
     setHandoverActive(data.status === 'handover_requested' || data.status === 'live_chat')
     if (data.messages?.length) {
-      setMessages(data.messages.map((msg) => ({
+      const incoming: Msg[] = data.messages.map((msg) => ({
         id: msg.id,
-        role: msg.role === 'user'
+        role: (msg.role === 'user'
           ? 'user'
           : msg.role === 'human' || msg.metadata?.sender_type === 'human'
             ? 'human'
             : msg.role === 'system'
               ? 'system'
-              : 'ai',
+              : 'ai') as Role,
         text: msg.content,
         createdAt: msg.created_at ?? null,
         readAt: msg.read_at ?? null,
         deliveryStatus: msg.delivery_status ?? null,
         attachment: msg.metadata?.attachment ?? null,
         reactions: Array.isArray(msg.metadata?.reactions) ? msg.metadata.reactions : [],
-      })))
+      }))
+      setMessages(prev => mergeServerMessages(prev, incoming))
     }
   }, [])
 
@@ -304,9 +331,24 @@ export default function ChatWidget() {
         if (explicitBotId) params.set('bot_id', explicitBotId)
         const res = await fetch(`/api/live-chat/widget/config${params.toString() ? `?${params.toString()}` : ''}`, { cache: 'no-store' })
         if (!res.ok) return
-        const data = await res.json() as { business_id?: string; bot_id?: string | null; ai_auto_replies_enabled?: boolean }
-        if (!cancelled && data.business_id) setBusinessId(data.business_id)
-        if (!cancelled) setBotId(data.bot_id && UUID_RE.test(data.bot_id) ? data.bot_id : null)
+        const data = await res.json() as WidgetConfig
+        if (!cancelled && data.business_id) {
+          setBusinessId(data.business_id)
+          try {
+            const serverKey = storageKey(data.business_id)
+            for (let i = window.localStorage.length - 1; i >= 0; i -= 1) {
+              const key = window.localStorage.key(i)
+              if (key?.startsWith('instantdesk_chat_') && key !== serverKey) {
+                window.localStorage.removeItem(key)
+              }
+            }
+          } catch { /* ignore unavailable storage */ }
+        }
+        if (!cancelled) {
+          setBotId(data.bot_id && UUID_RE.test(data.bot_id) ? data.bot_id : null)
+          setBotName(data.bot_name ?? null)
+          setBusinessType(data.business_type ?? null)
+        }
         if (!cancelled && typeof data.ai_auto_replies_enabled === 'boolean') {
           setAiAutoRepliesEnabled(data.ai_auto_replies_enabled)
         }
@@ -520,6 +562,8 @@ export default function ChatWidget() {
           business_id:     businessId,
           bot_id:          botId ?? undefined,
           conversation_id: conversationRef.current ?? undefined,
+          channel:         'website',
+          host:            window.location.hostname,
           message:         trimmed,
           attachment,
           visitor_context: visitorContext(),
@@ -562,7 +606,10 @@ export default function ChatWidget() {
         setHandoverActive(true)
       }
 
-      const replyText = data.reply ?? data.error
+      const normalizedError = data.error === 'This assistant is not configured yet.' && conversationRef.current
+        ? 'The assistant connection was interrupted. Please try again.'
+        : data.error
+      const replyText = data.reply ?? normalizedError
       if (replyText) {
         setMessages(prev => [...prev, { id: nextId(), role: 'ai', text: replyText }])
       }
@@ -575,7 +622,7 @@ export default function ChatWidget() {
     } finally {
       setIsTyping(false)
     }
-  }, [aiAutoRepliesEnabled, attachment, businessId, handoverActive, isTyping, persistChatState])
+  }, [aiAutoRepliesEnabled, attachment, botId, businessId, handoverActive, isTyping, persistChatState])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()

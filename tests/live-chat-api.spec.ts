@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server'
 import { expect, test } from './fixtures'
 import { POST as postChat } from '../app/api/chat/route'
 import { GET as getWidgetConfig } from '../app/api/live-chat/widget/config/route'
+import { GET as getConversationDebug } from '../app/api/debug/conversation-resolution/route'
 import { resolveBotContext } from '../app/lib/bot-context'
 
 const BUSINESS_ID = '59bd9987-46b9-48a3-ad14-cfe1ab733453'
@@ -400,6 +401,97 @@ test.describe('Live Chat API production boundaries', () => {
       expect(body.prompt_preview).not.toMatch(/dubai|real estate/i)
     } finally {
       await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('public widget continuation resolves the stored conversation bot instead of stale request context', async () => {
+    const { sb, businessId } = await createBotIsolationBusiness('QA Widget Continuation Car Rental', 'car_rental')
+    const foreign = await createBotIsolationBusiness('QA Widget Continuation Foreign', 'real_estate')
+    try {
+      await insertIsolationBot(sb, businessId, {
+        name: 'Dubai Real Estate Assistant',
+        persona: 'You are a Dubai luxury real estate assistant.',
+        objective: 'Sell luxury villas and apartments.',
+      })
+      const carBotId = await insertIsolationBot(sb, businessId, {
+        name: 'Car Rental Operations Assistant',
+        persona: 'You are a car rental operations assistant.',
+        objective: 'Help customers rent vehicles from the fleet and booking calendar.',
+        model: 'gemini-2.5-pro',
+      })
+      const foreignBotId = await insertIsolationBot(foreign.sb, foreign.businessId, {
+        name: 'Foreign Dubai Real Estate Assistant',
+        persona: 'You are a Dubai real estate assistant.',
+        objective: 'Sell property for another business.',
+      })
+
+      const first = await postChat(new NextRequest('http://127.0.0.1:3106/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          business_id: businessId,
+          bot_id: carBotId,
+          message: 'I want to rent a car tomorrow',
+          channel: 'website',
+          host: 'instantdesk.pl',
+          debug: true,
+        }),
+      }))
+      const firstBody = await first.json() as { conversation_id?: string; reply?: string; debug?: { bot?: { id?: string } } }
+      expect(first.status).toBe(200)
+      expect(firstBody.conversation_id).toBeTruthy()
+      expect(firstBody.reply ?? '').not.toMatch(/dubai|real estate|property|apartment|villa/i)
+
+      const { data: storedConversation } = await sb
+        .from('conversations')
+        .select('business_id,metadata')
+        .eq('id', firstBody.conversation_id)
+        .maybeSingle()
+      const storedMetadata = (storedConversation?.metadata ?? {}) as Record<string, unknown>
+      expect(storedConversation?.business_id).toBe(businessId)
+      expect(storedMetadata.bot_id).toBe(carBotId)
+      expect(storedMetadata.agent_id).toBe(carBotId)
+
+      const second = await postChat(new NextRequest('http://127.0.0.1:3106/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          business_id: foreign.businessId,
+          bot_id: foreignBotId,
+          conversation_id: firstBody.conversation_id,
+          message: 'I want to rent a car tomorrow',
+          channel: 'website',
+          host: 'instantdesk.pl',
+          debug: true,
+        }),
+      }))
+      const secondBody = await second.json() as { reply?: string; error?: string; conversation_id?: string; debug?: { bot?: { id?: string } } }
+      expect(second.status).toBe(200)
+      expect(secondBody.conversation_id).toBe(firstBody.conversation_id)
+      expect(secondBody.error).toBeFalsy()
+      expect(`${secondBody.reply ?? ''} ${secondBody.error ?? ''}`).not.toContain('This assistant is not configured yet')
+      expect(`${secondBody.reply ?? ''} ${secondBody.error ?? ''}`).not.toMatch(/dubai|real estate|property|apartment|villa/i)
+
+      const debug = await getConversationDebug(new NextRequest(`http://127.0.0.1:3106/api/debug/conversation-resolution?conversation_id=${firstBody.conversation_id}`))
+      const debugBody = await debug.json() as { stored_business_id?: string; stored_bot_id?: string; stored_agent_id?: string; resolved_bot_id?: string; resolved_business_type?: string }
+      expect(debug.status).toBe(200)
+      expect(debugBody.stored_business_id).toBe(businessId)
+      expect(debugBody.stored_bot_id).toBe(carBotId)
+      expect(debugBody.stored_agent_id).toBe(carBotId)
+      expect(debugBody.resolved_bot_id).toBe(carBotId)
+      expect(debugBody.resolved_business_type).toBe('car_rental')
+
+      const { data: messages } = await sb
+        .from('messages')
+        .select('role,content')
+        .eq('conversation_id', firstBody.conversation_id)
+        .order('created_at', { ascending: true })
+      const userMessages = (messages ?? []).filter(row => row.role === 'user')
+      expect(userMessages.length).toBeGreaterThanOrEqual(2)
+      expect((messages ?? []).map(row => row.content).join('\n')).not.toContain('This assistant is not configured yet')
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+      await cleanupTestAiBusiness(foreign.sb, foreign.businessId)
     }
   })
 

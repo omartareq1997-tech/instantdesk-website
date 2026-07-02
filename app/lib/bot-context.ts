@@ -46,6 +46,7 @@ type ResolveBotContextInput = {
   botId?: string | null
   userId?: string | null
   createDefaultForTestAi?: boolean
+  allowExplicitBotForExistingConversation?: boolean
 }
 
 function defaultAgentPayload(businessId: string, businessType: BusinessType) {
@@ -178,7 +179,7 @@ export async function resolveBotContext(input: ResolveBotContextInput): Promise<
     }
   }
 
-  if (requestType === 'public_widget' && explicitAgent) {
+  if (requestType === 'public_widget' && explicitAgent && !input.allowExplicitBotForExistingConversation) {
     if (explicitAgent.is_default_website_bot !== true) {
       return {
         ok: false,

@@ -5,6 +5,7 @@ import { POST as postChat } from '../app/api/chat/route'
 
 const BUSINESS_ID = '0616a47a-2c01-49ce-a798-385f8276b92b'
 const MISSING_OPENAI_KEY_MESSAGE = 'OPENAI_API_KEY is missing. Add it in Vercel Environment Variables and redeploy.'
+const MISSING_GEMINI_KEY_MESSAGE = 'GEMINI_API_KEY is missing. Add it in Vercel Environment Variables and redeploy.'
 
 process.loadEnvFile?.('.env.local')
 
@@ -28,6 +29,33 @@ async function createTestAiBusiness(options: { aiAutoRepliesEnabled: boolean; li
     tone: 'professional',
     fallback_msg: 'I do not know.',
     model: 'gpt-4o-mini',
+    temperature: 0.1,
+  })
+  await sb.from('live_chat_settings').insert({
+    business_id: businessId,
+    ai_auto_replies_enabled: options.aiAutoRepliesEnabled,
+    live_chat_enabled: options.liveChatEnabled,
+    human_handover_enabled: true,
+    trigger_customer_asks_human: true,
+    trigger_ai_cannot_answer: true,
+    trigger_phrases: ['human', 'agent', 'support'],
+  })
+  return { sb, businessId }
+}
+
+async function createGeminiTestAiBusiness(options: { aiAutoRepliesEnabled: boolean; liveChatEnabled: boolean }) {
+  const sb = adminClient()
+  const businessId = crypto.randomUUID()
+  await sb.from('businesses').insert({ id: businessId, name: 'QA Gemini Test AI Business', business_type: 'general_service' })
+  await sb.from('agents').insert({
+    business_id: businessId,
+    name: 'QA Gemini Test Agent',
+    active: true,
+    persona: 'You are a concise test assistant.',
+    objective: 'Answer direct Test AI prompts.',
+    tone: 'professional',
+    fallback_msg: 'I do not know.',
+    model: 'gemini-2.5-pro',
     temperature: 0.1,
   })
   await sb.from('live_chat_settings').insert({
@@ -101,6 +129,22 @@ async function postChatRouteWithMissingOpenAi(body: Record<string, unknown>) {
   } finally {
     if (previousKey === undefined) delete process.env.OPENAI_API_KEY
     else process.env.OPENAI_API_KEY = previousKey
+  }
+}
+
+async function postChatRouteWithMissingGemini(body: Record<string, unknown>) {
+  const previousKey = process.env.GEMINI_API_KEY
+  delete process.env.GEMINI_API_KEY
+  try {
+    const request = new NextRequest('http://127.0.0.1:3106/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return await postChat(request)
+  } finally {
+    if (previousKey === undefined) delete process.env.GEMINI_API_KEY
+    else process.env.GEMINI_API_KEY = previousKey
   }
 }
 
@@ -191,6 +235,26 @@ test.describe('Live Chat API production boundaries', () => {
 
       expect(response.status).toBe(500)
       expect(body.error).toBe(MISSING_OPENAI_KEY_MESSAGE)
+      expect(body.error).not.toBe('No response')
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('missing GEMINI_API_KEY returns the clear admin setup error for Gemini models', async () => {
+    const { sb, businessId } = await createGeminiTestAiBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
+
+    try {
+      const response = await postChatRouteWithMissingGemini({
+        business_id: businessId,
+        message: 'Hello from Test AI with no Gemini key.',
+        debug: true,
+        test_ai: true,
+      })
+      const body = await response.json() as { error?: string }
+
+      expect(response.status).toBe(500)
+      expect(body.error).toBe(MISSING_GEMINI_KEY_MESSAGE)
       expect(body.error).not.toBe('No response')
     } finally {
       await cleanupTestAiBusiness(sb, businessId)

@@ -38,6 +38,8 @@ const MODELS = [
   { id: 'gpt-4o',      label: 'GPT-4o',       desc: 'Most capable — recommended' },
   { id: 'gpt-4o-mini', label: 'GPT-4o Mini',  desc: 'Faster, lower cost'         },
   { id: 'gpt-4-turbo', label: 'GPT-4 Turbo',  desc: 'High quality, legacy'       },
+  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', desc: 'Google Gemini — strongest reasoning' },
+  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', desc: 'Google Gemini — faster and cheaper' },
 ]
 
 const DEFAULT_SLOT_DEFS: SlotDef[] = [
@@ -383,7 +385,7 @@ function AIInstructionsPage() {
             objective:    a.objective    ?? businessConfig.defaultObjective,
             tone:         a.tone         ?? 'professional',
             fallback_msg: a.fallback_msg ?? '',
-            model:        a.model        ?? 'gpt-4o',
+            model:        a.model        ?? (businessType === 'car_rental' ? 'gemini-2.5-pro' : 'gpt-4o'),
             temperature:  a.temperature  ?? 0.7,
           })
         }

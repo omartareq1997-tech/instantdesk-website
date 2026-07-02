@@ -56,6 +56,8 @@ test('prompt preview includes car rental module when businessType is car_rental'
   await expect(page.getByText('Instruction Prompt').first()).toBeVisible()
   await expect(page.getByText('Car Rental Operations Assistant').first()).toBeVisible()
   await expect(page.getByText('AI Model').first()).toBeVisible()
+  await expect(page.locator('select').first()).toContainText('Gemini 2.5 Pro')
+  await expect(page.locator('select').first()).toContainText('Gemini 2.5 Flash')
   await expect(page.getByText('Training Data').first()).toBeVisible()
   await expect(page.getByText('Answer Source Settings').first()).toBeVisible()
   await expect(page.getByText('Advanced').first()).toBeVisible()

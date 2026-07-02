@@ -213,7 +213,7 @@ function hasMeaningfulSlot(s: Slots): boolean {
   return Object.values(s).some(Boolean)
 }
 
-function defaultAgentPayload(businessId: string) {
+function defaultAgentPayload(businessId: string, businessType?: string | null) {
   return {
     business_id:  businessId,
     name:         'AI Assistant',
@@ -222,7 +222,7 @@ function defaultAgentPayload(businessId: string) {
     objective:    'Answer customer questions clearly, qualify leads, and help customers take the next step.',
     tone:         'professional',
     fallback_msg: 'I do not know that yet, but I can connect you with the team.',
-    model:        'gpt-4o-mini',
+    model:        normalizeBusinessType(businessType) === 'car_rental' ? 'gemini-2.5-pro' : 'gpt-4o-mini',
     temperature:  0.4,
   }
 }
@@ -230,6 +230,12 @@ function defaultAgentPayload(businessId: string) {
 interface OpenAiAdminErrorLogContext {
   businessId: string
   model: string
+}
+
+interface AiAdminErrorLogContext {
+  businessId: string
+  model: string
+  provider: 'openai' | 'gemini'
 }
 
 function openAiErrorDetails(error: unknown) {
@@ -338,6 +344,109 @@ function logOpenAiError(error: unknown, context: OpenAiAdminErrorLogContext) {
     http_status: classified.details.status,
     openai_error_code: classified.details.code,
     openai_error_type: classified.details.type,
+    complete_error_payload: classified.details.payload,
+  })
+  return classified
+}
+
+class GeminiApiError extends Error {
+  status: number | null
+  code: string | null
+  type: string | null
+  payload: unknown
+  constructor(message: string, status: number | null, code: string | null, type: string | null, payload: unknown) {
+    super(message)
+    this.name = 'GeminiApiError'
+    this.status = status
+    this.code = code
+    this.type = type
+    this.payload = payload
+  }
+}
+
+function isGeminiModel(model: string | null | undefined) {
+  return typeof model === 'string' && model.startsWith('gemini-')
+}
+
+function geminiErrorDetails(error: unknown) {
+  const err = error as { name?: unknown; message?: unknown; status?: unknown; code?: unknown; type?: unknown; payload?: unknown }
+  const payload = err.payload
+  const payloadObj = payload && typeof payload === 'object' ? payload as { error?: { message?: unknown; status?: unknown; code?: unknown } } : null
+  const status = typeof err.status === 'number'
+    ? err.status
+    : typeof payloadObj?.error?.code === 'number'
+      ? payloadObj.error.code
+      : null
+  const code = typeof err.code === 'string'
+    ? err.code
+    : typeof payloadObj?.error?.status === 'string'
+      ? payloadObj.error.status
+      : null
+  const type = typeof err.type === 'string' ? err.type : code
+  const message = typeof payloadObj?.error?.message === 'string'
+    ? payloadObj.error.message
+    : typeof err.message === 'string'
+      ? err.message
+      : 'Unexpected Gemini API error.'
+  return {
+    name: typeof err.name === 'string' ? err.name : null,
+    message,
+    status,
+    code,
+    type,
+    requestId: null as string | null,
+    payload: payload ?? { message, code, type },
+  }
+}
+
+function geminiAdminError(error: unknown) {
+  const details = geminiErrorDetails(error)
+  const status = details.status
+  const code = details.code ?? ''
+  const name = details.name ?? ''
+  const message = details.message
+  const lowerMessage = message.toLowerCase()
+  let adminMessage: string
+  let responseStatus = status && status >= 400 ? status : 502
+
+  if (!process.env.GEMINI_API_KEY) {
+    adminMessage = 'GEMINI_API_KEY is missing. Add it in Vercel Environment Variables and redeploy.'
+    responseStatus = 500
+  } else if ((status === 400 && (lowerMessage.includes('api key') || lowerMessage.includes('key not valid'))) || status === 401 || (status === 403 && lowerMessage.includes('api key'))) {
+    adminMessage = 'GEMINI_API_KEY is invalid.'
+    responseStatus = 500
+  } else if (status === 429 || code === 'RESOURCE_EXHAUSTED' || lowerMessage.includes('quota') || lowerMessage.includes('rate limit')) {
+    adminMessage = `Gemini quota/rate limit exceeded: ${message}`
+    responseStatus = 429
+  } else if (status === 404 || code === 'NOT_FOUND' || lowerMessage.includes('model') && lowerMessage.includes('not found')) {
+    adminMessage = `Gemini model not found or unavailable: ${message}`
+    responseStatus = 500
+  } else if (name.includes('AbortError') || name.includes('Timeout') || lowerMessage.includes('timeout')) {
+    adminMessage = `Gemini request timed out: ${message}`
+    responseStatus = 504
+  } else {
+    adminMessage = `Unexpected Gemini API error: ${message}`
+  }
+
+  return { adminMessage, responseStatus, details }
+}
+
+function logAiProviderError(error: unknown, context: AiAdminErrorLogContext) {
+  if (context.provider === 'openai') {
+    const classified = logOpenAiError(error, { businessId: context.businessId, model: context.model })
+    return classified
+  }
+  const classified = geminiAdminError(error)
+  console.error('[POST /api/chat] Gemini API failure', {
+    timestamp: new Date().toISOString(),
+    endpoint: '/api/chat',
+    business_id: context.businessId,
+    selected_model: context.model,
+    provider: 'gemini',
+    request_id: classified.details.requestId,
+    http_status: classified.details.status,
+    gemini_error_code: classified.details.code,
+    gemini_error_type: classified.details.type,
     complete_error_payload: classified.details.payload,
   })
   return classified
@@ -1104,6 +1213,78 @@ async function callOpenAI(
   return stripped
 }
 
+function stripModelReply(text: string) {
+  const stripped = text.replace(/^```(?:json)?\n?/i, '').replace(/```$/,'').trim()
+  try {
+    const parsed = JSON.parse(stripped) as Record<string, unknown>
+    if (typeof parsed.reply === 'string') return parsed.reply.trim()
+  } catch { /* not JSON */ }
+  return stripped
+}
+
+async function callGemini(
+  model: string,
+  temperature: number,
+  systemPrompt: string,
+  history: { role: 'user' | 'assistant'; content: string }[],
+  userMessage: string,
+): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY
+  if (!apiKey) {
+    throw new GeminiApiError('GEMINI_API_KEY is missing. Add it in Vercel Environment Variables and redeploy.', 500, 'MISSING_API_KEY', 'config_error', null)
+  }
+  const contents = [
+    ...history.map(message => ({
+      role: message.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: message.content }],
+    })),
+    { role: 'user', parts: [{ text: userMessage }] },
+  ]
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30_000)
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents,
+        generationConfig: {
+          temperature,
+          maxOutputTokens: 300,
+        },
+      }),
+    })
+    const payload = await res.json().catch(() => null) as {
+      error?: { message?: string; status?: string; code?: number }
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+    } | null
+    if (!res.ok) {
+      throw new GeminiApiError(payload?.error?.message ?? `Gemini request failed with HTTP ${res.status}`, res.status, payload?.error?.status ?? null, payload?.error?.status ?? null, payload)
+    }
+    const text = payload?.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('').trim() ?? ''
+    if (!text) throw new GeminiApiError('Empty Gemini response', 502, 'EMPTY_RESPONSE', 'empty_response', payload)
+    return stripModelReply(text)
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function callAIProvider(
+  client: OpenAI,
+  model: string,
+  temperature: number,
+  systemPrompt: string,
+  history: { role: 'user' | 'assistant'; content: string }[],
+  userMessage: string,
+) {
+  if (isGeminiModel(model)) {
+    return callGemini(model, temperature, systemPrompt, history, userMessage)
+  }
+  return callOpenAI(client, model, temperature, systemPrompt, history, userMessage)
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    MAIN ROUTE HANDLER
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -1383,6 +1564,16 @@ export async function POST(req: NextRequest) {
   })
   console.log('[POST /api/chat] agent lookup — session businessId:', businessId, '| body business_id:', business_id)
 
+  const { data: businessRow, error: businessTypeError } = await sb
+    .from('businesses')
+    .select('business_type')
+    .eq('id', businessId)
+    .maybeSingle()
+  if (businessTypeError && businessTypeError.code !== '42703') {
+    console.warn('[POST /api/chat] business_type lookup failed:', JSON.stringify(businessTypeError))
+  }
+  const businessType = normalizeBusinessType(typeof businessRow?.business_type === 'string' ? businessRow.business_type : null)
+
   let agentRow: AgentRow | null = null
   let agentLookupId = businessId
 
@@ -1455,7 +1646,7 @@ export async function POST(req: NextRequest) {
       } else {
         const { data: createdAgent, error: createErr } = await sb
           .from('agents')
-          .insert(defaultAgentPayload(businessId))
+          .insert(defaultAgentPayload(businessId, businessType))
           .select('*')
           .maybeSingle()
 
@@ -1495,16 +1686,6 @@ export async function POST(req: NextRequest) {
   }
   void agentLookupId  // consumed above
   const agent = agentRow as AgentRow
-
-  const { data: businessRow, error: businessTypeError } = await sb
-    .from('businesses')
-    .select('business_type')
-    .eq('id', businessId)
-    .maybeSingle()
-  if (businessTypeError && businessTypeError.code !== '42703') {
-    console.warn('[POST /api/chat] business_type lookup failed:', JSON.stringify(businessTypeError))
-  }
-  const businessType = normalizeBusinessType(typeof businessRow?.business_type === 'string' ? businessRow.business_type : null)
 
   /* 4. Retrieve relevant knowledge ───────────────────────────────────────── */
   // Priority: 1) vector chunks  2) capped fallback from knowledge_sources  3) empty
@@ -1838,14 +2019,21 @@ export async function POST(req: NextRequest) {
   }
 
   /* 10. Build prompt + call OpenAI ───────────────────────────────────────── */
+  const provider = isGeminiModel(agent.model) ? 'gemini' : 'openai'
   const openaiKey = process.env.OPENAI_API_KEY
-  if (!openaiKey) {
+  const geminiKey = process.env.GEMINI_API_KEY
+  if (provider === 'openai' && !openaiKey) {
     return NextResponse.json({
       error: 'OPENAI_API_KEY is missing. Add it in Vercel Environment Variables and redeploy.',
     }, { status: 500 })
   }
+  if (provider === 'gemini' && !geminiKey) {
+    return NextResponse.json({
+      error: 'GEMINI_API_KEY is missing. Add it in Vercel Environment Variables and redeploy.',
+    }, { status: 500 })
+  }
 
-  const openai       = new OpenAI({ apiKey: openaiKey })
+  const openai       = new OpenAI({ apiKey: openaiKey || 'unused-for-gemini' })
   const systemPrompt = buildSystemPrompt(agent, knowledge, confirmed, missing, qualificationStage, leadMemoryStr, businessType, operationalToolResults)
 
   console.log('[PROMPT] qualificationStage:', qualificationStage, '| nextField:', missing[0]?.label ?? 'none')
@@ -1863,9 +2051,9 @@ export async function POST(req: NextRequest) {
 
   let rawReply: string
   try {
-    rawReply = await callOpenAI(openai, agent.model, agent.temperature, systemPrompt, historyForLLM, messageText)
+    rawReply = await callAIProvider(openai, agent.model, agent.temperature, systemPrompt, historyForLLM, messageText)
   } catch (err) {
-    const classified = logOpenAiError(err, { businessId, model: agent.model })
+    const classified = logAiProviderError(err, { businessId, model: agent.model, provider })
     return NextResponse.json({ error: classified.adminMessage }, { status: classified.responseStatus })
   }
 

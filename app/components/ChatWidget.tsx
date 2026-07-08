@@ -121,18 +121,21 @@ function dateTime(iso?: string | null) {
 
 function mergeServerMessages(existing: Msg[], incoming: Msg[]) {
   if (!incoming.length) return existing
-  const incomingKeys = new Set(incoming.map(msg => `${msg.role}:${msg.text}:${msg.attachment?.name ?? ''}`))
-  const pendingLocal = existing.filter(msg => {
-    if (!msg.id.startsWith('local-')) return false
-    return !incomingKeys.has(`${msg.role}:${msg.text}:${msg.attachment?.name ?? ''}`)
-  })
+  const incomingKeys = new Set(incoming.map(serverConfirmationKey))
+  const pendingLocal = existing.filter(msg => msg.id.startsWith('local-') && !incomingKeys.has(serverConfirmationKey(msg)))
   const byId = new Map<string, Msg>()
-  for (const msg of [...incoming, ...pendingLocal]) byId.set(msg.id, msg)
+  for (const msg of existing.filter(msg => !msg.id.startsWith('local-'))) byId.set(msg.id, msg)
+  for (const msg of pendingLocal) byId.set(msg.id, msg)
+  for (const msg of incoming) byId.set(msg.id, msg)
   return Array.from(byId.values()).sort((a, b) => {
     const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0
     const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0
     return aTime - bTime
   })
+}
+
+function serverConfirmationKey(msg: Msg) {
+  return `${msg.role}:${msg.text}:${msg.attachment?.name ?? ''}`
 }
 
 function Ticks({ msg }: { msg: Msg }) {
@@ -611,7 +614,13 @@ export default function ChatWidget() {
         : data.error
       const replyText = data.reply ?? normalizedError
       if (replyText) {
-        setMessages(prev => [...prev, { id: nextId(), role: 'ai', text: replyText }])
+        setMessages(prev => mergeServerMessages(prev, [{
+          id: `local-ai-${nextId()}`,
+          role: 'ai',
+          text: replyText,
+          createdAt: new Date().toISOString(),
+          deliveryStatus: 'delivered',
+        }]))
       }
     } catch {
       setMessages(prev => [...prev, {

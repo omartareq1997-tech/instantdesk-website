@@ -466,6 +466,24 @@ async function createBooking(sb: SupabaseClient, context: AgentToolContext, tool
     .select('id,status')
     .single()
   if (error) return { tool: 'createBooking', ok: false, summary: 'Booking creation failed.', error: error.message }
+  const postInsertAvailability = await checkRentalAvailability({
+    businessId: context.businessId,
+    carId: car.id,
+    pickupAt,
+    dropoffAt,
+    pickupLocationId,
+    dropoffLocationId,
+    excludeBookingId: data.id,
+  })
+  if (!postInsertAvailability.available) {
+    await sb.from('rental_bookings').delete().eq('business_id', context.businessId).eq('id', data.id)
+    return {
+      tool: 'createBooking',
+      ok: false,
+      summary: `${car.name} is not available for those dates. Available options are: ${postInsertAvailability.availableCars.map(option => option.name).join(', ') || 'none for that exact period'}.`,
+      data: postInsertAvailability,
+    }
+  }
   const bookingNumber = `RB-${String(data.id).slice(0, 8).toUpperCase()}`
   return { tool: 'createBooking', ok: true, summary: `Created pending booking ${bookingNumber}.`, data: { bookingId: data.id, bookingNumber, status: data.status } }
 }

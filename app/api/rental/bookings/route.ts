@@ -5,6 +5,8 @@ import { checkRentalAvailability, normalizeRentalBooking } from '../../../lib/re
 
 export const dynamic = 'force-dynamic'
 
+const NO_STORE_HEADERS = { 'Cache-Control': 'no-store' }
+
 const VALID_STATUSES = new Set(['pending', 'confirmed', 'active', 'completed', 'cancelled', 'maintenance', 'unavailable'])
 
 function isMissingTable(error: unknown) {
@@ -60,11 +62,11 @@ export async function GET(request: Request) {
   if (to) query = query.lte('pickup_at', to)
 
   const result = await query
-  if (result.error) return NextResponse.json({ error: result.error.message }, { status: isMissingTable(result.error) ? 503 : 500 })
+  if (result.error) return NextResponse.json({ error: result.error.message }, { status: isMissingTable(result.error) ? 503 : 500, headers: NO_STORE_HEADERS })
   return NextResponse.json({
     bookings: (result.data ?? []).map((row: any) => normalizeRentalBooking(row, bufferMinutes)),
     bufferMinutes,
-  })
+  }, { headers: NO_STORE_HEADERS })
 }
 
 export async function POST(request: Request) {
@@ -73,7 +75,7 @@ export async function POST(request: Request) {
   const input = bookingInput(body)
 
   if (!input.carId || !input.customerName || !input.customerPhone || !input.customerEmail || !input.pickupLocationId || !input.dropoffLocationId || !input.pickupAt || !input.dropoffAt) {
-    return NextResponse.json({ error: 'car_id, customer_name, customer_phone, customer_email, pickup_location_id, dropoff_location_id, pickup_at, and dropoff_at are required' }, { status: 400 })
+    return NextResponse.json({ error: 'car_id, customer_name, customer_phone, customer_email, pickup_location_id, dropoff_location_id, pickup_at, and dropoff_at are required' }, { status: 400, headers: NO_STORE_HEADERS })
   }
 
   try {
@@ -92,7 +94,7 @@ export async function POST(request: Request) {
         available: false,
         available_cars: availability.availableCars,
         conflicts: availability.conflicts,
-      }, { status: 409 })
+      }, { status: 409, headers: NO_STORE_HEADERS })
     }
 
     const sb = createAdminClient()
@@ -113,6 +115,25 @@ export async function POST(request: Request) {
     }).select('id').single()
 
     if (result.error) throw result.error
+    const postInsertAvailability = await checkRentalAvailability({
+      businessId,
+      carId: input.carId,
+      pickupAt: input.pickupAt,
+      dropoffAt: input.dropoffAt,
+      pickupLocationId: input.pickupLocationId,
+      dropoffLocationId: input.dropoffLocationId,
+      excludeBookingId: result.data.id,
+    })
+    if (!postInsertAvailability.available) {
+      await sb.from('rental_bookings').delete().eq('business_id', businessId).eq('id', result.data.id)
+      return NextResponse.json({
+        success: false,
+        error: 'Car is not available for the requested pickup/drop-off window.',
+        available: false,
+        available_cars: postInsertAvailability.availableCars,
+        conflicts: postInsertAvailability.conflicts,
+      }, { status: 409, headers: NO_STORE_HEADERS })
+    }
     const bookingNumber = `RB-${String(result.data.id).slice(0, 8).toUpperCase()}`
     return NextResponse.json({
       success: true,
@@ -121,12 +142,12 @@ export async function POST(request: Request) {
       bookingNumber,
       confirmationUrl: '',
       whatsappMessage: `Booking ${bookingNumber} is ${input.status}. Pickup: ${input.pickupAt}. Drop-off: ${input.dropoffAt}.`,
-    })
+    }, { headers: NO_STORE_HEADERS })
   } catch (error) {
     return NextResponse.json({
       success: false,
       error: error instanceof Error ? error.message : 'Booking creation failed',
-    }, { status: isMissingTable(error) ? 503 : 400 })
+    }, { status: isMissingTable(error) ? 503 : 400, headers: NO_STORE_HEADERS })
   }
 }
 
@@ -134,7 +155,7 @@ export async function PATCH(request: Request) {
   const { businessId } = await getSessionBusinessId()
   const body = await request.json().catch(() => ({}))
   const id = clean(body.id)
-  if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
+  if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400, headers: NO_STORE_HEADERS })
   const status = statusValue(body.status)
   const sb = createAdminClient()
   const result = await sb
@@ -144,6 +165,6 @@ export async function PATCH(request: Request) {
     .eq('id', id)
     .select('id,status')
     .single()
-  if (result.error) return NextResponse.json({ error: result.error.message }, { status: isMissingTable(result.error) ? 503 : 500 })
-  return NextResponse.json({ success: true, booking: result.data })
+  if (result.error) return NextResponse.json({ error: result.error.message }, { status: isMissingTable(result.error) ? 503 : 500, headers: NO_STORE_HEADERS })
+  return NextResponse.json({ success: true, booking: result.data }, { headers: NO_STORE_HEADERS })
 }

@@ -248,6 +248,25 @@ export async function checkRentalAvailability(input: RentalAvailabilityInput): P
     }
   }
 
+  async function filterAvailable(candidateCars: RentalAvailabilityCar[]) {
+    const ids = candidateCars.map(car => car.id)
+    if (!ids.length) return []
+    const candidateBookingsRes = await sb
+      .from('rental_bookings')
+      .select('id,business_id,car_id,customer_name,customer_phone,customer_email,pickup_location_id,dropoff_location_id,pickup_at,dropoff_at,status,total_price,notes,created_at,updated_at,cars(name,daily_price,deposit,license_plate,car_classes(name),rental_locations(name)),pickup:rental_locations!rental_bookings_pickup_location_id_fkey(name),dropoff:rental_locations!rental_bookings_dropoff_location_id_fkey(name)')
+      .eq('business_id', input.businessId)
+      .in('car_id', ids)
+      .in('status', Array.from(BLOCKING_RENTAL_BOOKING_STATUSES))
+      .lt('pickup_at', input.dropoffAt)
+    if (candidateBookingsRes.error) return []
+    const candidateConflicts = (candidateBookingsRes.data ?? [])
+      .filter((row: any) => row.id !== input.excludeBookingId)
+      .map((row: any) => normalizeRentalBooking(row, bufferMinutes))
+      .filter(booking => rentalBookingBlocksWindow(booking, input.pickupAt, input.dropoffAt, bufferMinutes))
+    const candidateConflictIds = new Set(candidateConflicts.map(booking => booking.carId))
+    return candidateCars.filter(car => !candidateConflictIds.has(car.id))
+  }
+
   if (requestedCar) {
     let alternativesQuery = sb
       .from('cars')
@@ -255,24 +274,14 @@ export async function checkRentalAvailability(input: RentalAvailabilityInput): P
       .eq('business_id', input.businessId)
       .eq('active', true)
       .neq('id', requestedCar.id)
-    if (requestedCar.className) alternativesQuery = alternativesQuery.eq('car_classes.name', requestedCar.className)
     const alternativesRes = await alternativesQuery
     const alternatives = alternativesRes.error ? [] : (alternativesRes.data ?? []).map(normalizeCar)
-    const altIds = alternatives.map(car => car.id)
-    let availableAlternatives: RentalAvailabilityCar[] = []
-    if (altIds.length) {
-      const altBookingsRes = await sb
-        .from('rental_bookings')
-        .select('id,car_id,pickup_at,dropoff_at,status,customer_name,total_price')
-        .eq('business_id', input.businessId)
-        .in('car_id', altIds)
-        .in('status', Array.from(BLOCKING_RENTAL_BOOKING_STATUSES))
-        .lt('pickup_at', input.dropoffAt)
-      const altConflicts = (altBookingsRes.data ?? []).map((row: any) => normalizeRentalBooking(row, bufferMinutes))
-        .filter(booking => rentalBookingBlocksWindow(booking, input.pickupAt, input.dropoffAt, bufferMinutes))
-      const altConflictIds = new Set(altConflicts.map(booking => booking.carId))
-      availableAlternatives = alternatives.filter(car => !altConflictIds.has(car.id))
-    }
+    const availableAlternatives = (await filterAvailable(alternatives))
+      .sort((a, b) => {
+        const aSameClass = requestedCar.className && a.className === requestedCar.className ? 0 : 1
+        const bSameClass = requestedCar.className && b.className === requestedCar.className ? 0 : 1
+        return aSameClass - bSameClass || (a.dailyPrice ?? 0) - (b.dailyPrice ?? 0)
+      })
     return {
       available: false,
       requestedCar,
@@ -285,14 +294,30 @@ export async function checkRentalAvailability(input: RentalAvailabilityInput): P
     }
   }
 
+  let fallbackAvailableCars: RentalAvailabilityCar[] = []
+  if (!availableCars.length && input.carClass) {
+    const allCarsRes = await sb
+      .from('cars')
+      .select('id,name,model,transmission,seats,fuel_type,daily_price,deposit,status,license_plate,active,car_class_id,location_id,car_classes(name),rental_locations(name)')
+      .eq('business_id', input.businessId)
+      .eq('active', true)
+    if (!allCarsRes.error) {
+      fallbackAvailableCars = (await filterAvailable((allCarsRes.data ?? []).map(normalizeCar)))
+        .filter(car => car.className?.toLowerCase() !== input.carClass?.trim().toLowerCase())
+        .sort((a, b) => (a.dailyPrice ?? 0) - (b.dailyPrice ?? 0))
+    }
+  }
+
   return {
     available: availableCars.length > 0,
     requestedCar: null,
-    availableCars,
+    availableCars: availableCars.length ? availableCars : fallbackAvailableCars,
     conflicts,
     bufferMinutes,
     message: availableCars.length
       ? `Available cars in ${input.carClass}: ${availableCars.map(car => car.name).join(', ')}.`
-      : `No cars in ${input.carClass} are available for those dates.`,
+      : fallbackAvailableCars.length
+        ? `No cars in ${input.carClass} are available for those dates. Available alternatives: ${fallbackAvailableCars.map(car => car.name).join(', ')}.`
+        : `No cars in ${input.carClass} are available for those dates.`,
   }
 }

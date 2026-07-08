@@ -4348,6 +4348,11 @@ function bookingCustomerName(booking: RentalBooking) {
   return booking.customerName?.trim() || 'Manual booking'
 }
 
+function provided(value?: string | number | null) {
+  if (value === null || value === undefined || value === '') return 'Not provided'
+  return String(value)
+}
+
 function BookingHoverCard({ booking, car, settings }: { booking: RentalBooking; car?: RentalCar | null; settings: RentalSettings }) {
   const pickup = fmtDateTime(booking.pickupAt)
   const dropoff = fmtDateTime(booking.dropoffAt ?? booking.returnAt)
@@ -4357,22 +4362,22 @@ function BookingHoverCard({ booking, car, settings }: { booking: RentalBooking; 
   const reference = booking.bookingNumber || `RB-${booking.id.slice(0, 8).toUpperCase()}`
   const rows = [
     ['Customer', bookingCustomerName(booking)],
+    ['Phone', provided(booking.customerPhone)],
+    ['Email', provided(booking.customerEmail)],
+    ['Vehicle', provided(booking.carName || car?.name)],
     ['Reference', reference],
-    ['Car', booking.carName || car?.name || 'Rental car'],
     ['Status', RENTAL_STATUS_CFG[booking.status]?.label ?? booking.status],
     ['Pickup', pickup],
     ['Return', dropoff],
+    ['Pickup location', provided(booking.pickupLocation)],
+    ['Drop-off location', provided(booking.dropoffLocation)],
     ['Duration', days ? `${days} rental day${days === 1 ? '' : 's'}` : 'Not set'],
     ['Rental value', formatMoney(booking.totalPrice, settings.currency ?? 'PLN')],
     ['Daily price', dailyPrice ? formatMoney(dailyPrice, settings.currency ?? 'PLN') : 'Not set'],
     ['Deposit', deposit ? formatMoney(deposit, settings.currency ?? 'PLN') : 'Not set'],
-    ['Deposit status', booking.paymentStatus || 'not set'],
-    ['Phone', booking.customerPhone || 'Not set'],
-    ['Email', booking.customerEmail || 'Not set'],
-    ['Pickup location', booking.pickupLocation || 'Not set'],
-    ['Drop-off location', booking.dropoffLocation || 'Not set'],
+    ['Payment/deposit', provided(booking.paymentStatus)],
     ['Buffer until', booking.bufferUntil ? fmtDateTime(booking.bufferUntil) : `${settings.cleaningBufferMinutes ?? 120} min after return`],
-    ['Source', booking.source || 'manual'],
+    ['Notes', provided(booking.notes)],
   ]
   return (
     <div className="pointer-events-none absolute left-1/2 top-full z-40 mt-2 hidden w-80 -translate-x-1/2 rounded-2xl border border-white/10 bg-[#11100f] p-4 text-left shadow-2xl group-hover:block">
@@ -4384,7 +4389,7 @@ function BookingHoverCard({ booking, car, settings }: { booking: RentalBooking; 
         <RentalStatusBadge status={booking.status} />
       </div>
       <div className="grid gap-1.5 text-[11px]">
-        {rows.slice(2).map(([label, value]) => (
+        {rows.map(([label, value]) => (
           <div key={label} className="grid grid-cols-[94px_minmax(0,1fr)] gap-2">
             <span className="text-white/30">{label}</span>
             <span className="truncate font-semibold text-white/64">{value}</span>

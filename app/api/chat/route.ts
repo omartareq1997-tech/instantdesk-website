@@ -922,7 +922,7 @@ function buildConfirmedSlots(
   // Stable identity fields keep DB continuity; operational rental fields use
   // latest confirmed values so corrections update immediately.
   return {
-    name:          extracted.name       ?? fromDB.name             ?? null,
+    name:          fromDB.name          ?? extracted.name          ?? null,
     phone:         fromDB.phone         ?? extracted.phone         ?? null,
     email:         fromDB.email         ?? extracted.email         ?? null,
     company:       fromDB.company       ?? extracted.company       ?? null,
@@ -1151,6 +1151,10 @@ const REPEAT_CHECKS: RepeatCheck[] = [
   { keys: ['phone'],         patterns: [/phone number/i, /contact number/i, /mobile number/i, /telephone/i, /call you on/i] },
   { keys: ['email'],         patterns: [/email address/i, /your email/i, /email.*(?:reach|contact)/i] },
   { keys: ['viewing_time'],  patterns: [/when.*view/i, /schedule.*viewing/i, /(?:viewing|visit) time/i, /when.*(?:come|visit|see)/i, /best time.*view/i] },
+  { keys: ['pickup_datetime', 'return_datetime'], patterns: [/what pickup date and time/i, /what return date and time/i, /pickup date and time.*return date and time/i, /when.*pick.*up.*return/i] },
+  { keys: ['pickup_location'], patterns: [/what pickup location/i, /where.*pick.*up/i, /pickup location should i use/i] },
+  { keys: ['dropoff_location'], patterns: [/what drop-?off location/i, /where.*drop.*off/i, /drop-?off location should i use/i] },
+  { keys: ['selected_vehicle'], patterns: [/which one would you like/i, /which vehicle would you like/i, /which car would you like/i] },
 ]
 
 function guardReply(
@@ -1357,7 +1361,7 @@ function rentalToolReplyOverride(
     const deposit = price?.ok ? formatPln((price.data as { deposit?: number } | undefined)?.deposit) : null
     const window = formatCustomerRentalWindow(confirmed.pickup_datetime, confirmed.return_datetime)
     return [
-      `Your booking is confirmed ✅\nReference: ${data.bookingNumber}`,
+      `Your booking is confirmed. Reference: ${data.bookingNumber}.`,
       `${selected} is reserved${window ? ` ${window}` : ''}.`,
       priceLine ? priceLine.split(' Deposit:')[0] : null,
       deposit ? `Deposit: ${deposit}.` : null,
@@ -1375,6 +1379,10 @@ function rentalToolReplyOverride(
   }
 
   if (availability) {
+    const availabilityData = availability.data as { available?: boolean; requestedCar?: { name?: string | null } | null } | undefined
+    if (availability.ok && availabilityData?.requestedCar && availabilityData.available === false) {
+      return formatAvailabilityReply(availability, confirmed)
+    }
     const contactMissing = missing.find(field => ['name', 'phone', 'email'].includes(String(field.key)))
     if (contactMissing && confirmed.selected_vehicle) {
       const selectedNext = selectedVehicleNextStepReply(confirmed, missing, toolResults)
@@ -1388,7 +1396,6 @@ function rentalToolReplyOverride(
     const pieces = [formatAvailabilityReply(availability, confirmed)]
     if (price?.ok) pieces.push(formatPriceReply(price, userMessage))
     if (nextMissing) pieces.push(nextMissing.question)
-    const availabilityData = availability.data as { available?: boolean } | undefined
     if (!nextMissing && availabilityData?.available && price?.ok) {
       pieces.push('Would you like me to create the booking request?')
     }

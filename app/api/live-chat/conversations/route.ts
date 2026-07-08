@@ -4,9 +4,10 @@ import { getSessionBusinessId } from '../../../lib/getSessionBusinessId'
 import { normalizeConversationChannel, normalizeConversationStatus } from '../../../lib/live-chat'
 
 export const dynamic = 'force-dynamic'
+const NO_STORE_HEADERS = { 'Cache-Control': 'no-store' }
 
 function unauthorized() {
-  return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+  return NextResponse.json({ error: 'Authentication required' }, { status: 401, headers: NO_STORE_HEADERS })
 }
 
 interface ConversationRow {
@@ -88,7 +89,7 @@ export async function GET() {
   }
 
   const { data: conversations, error } = conversationsResult
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ error: error.message }, { status: 500, headers: NO_STORE_HEADERS })
 
   const rows = (conversations ?? []) as ConversationRow[]
   const ids = rows.map(c => c.id)
@@ -123,8 +124,8 @@ export async function GET() {
     leadsPromise(),
   ])
 
-  if (messagesResult.error) return NextResponse.json({ error: messagesResult.error.message }, { status: 500 })
-  if (leadsResult.error) return NextResponse.json({ error: leadsResult.error.message }, { status: 500 })
+  if (messagesResult.error) return NextResponse.json({ error: messagesResult.error.message }, { status: 500, headers: NO_STORE_HEADERS })
+  if (leadsResult.error) return NextResponse.json({ error: leadsResult.error.message }, { status: 500, headers: NO_STORE_HEADERS })
 
   const latestMessage = new Map<string, MessageRow>()
   const latestNonSystemMessage = new Map<string, MessageRow>()
@@ -231,5 +232,5 @@ export async function GET() {
     }
   })
 
-  return NextResponse.json({ conversations: items })
+  return NextResponse.json({ conversations: items }, { headers: NO_STORE_HEADERS })
 }

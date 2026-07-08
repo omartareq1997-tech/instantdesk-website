@@ -3,6 +3,7 @@ import { getSessionBusinessId } from '../../../../lib/getSessionBusinessId'
 import { checkRentalAvailability } from '../../../../lib/rentalAvailability'
 
 export const dynamic = 'force-dynamic'
+const NO_STORE_HEADERS = { 'Cache-Control': 'no-store' }
 
 function isMissingTable(error: unknown) {
   return typeof error === 'object' && error !== null && 'code' in error && ['42P01', 'PGRST205'].includes(String((error as { code?: string }).code))
@@ -45,11 +46,11 @@ export async function POST(request: Request) {
       conflicts: result.conflicts,
       bufferMinutes: result.bufferMinutes,
       message: result.message,
-    })
+    }, { headers: NO_STORE_HEADERS })
   } catch (error) {
     return NextResponse.json({
       success: false,
       error: error instanceof Error ? error.message : 'Availability check failed',
-    }, { status: isMissingTable(error) ? 503 : 400 })
+    }, { status: isMissingTable(error) ? 503 : 400, headers: NO_STORE_HEADERS })
   }
 }

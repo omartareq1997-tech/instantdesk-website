@@ -212,12 +212,31 @@ function conversationSearchText(conversation: ConversationItem, tags: string[] =
 }
 
 function mergeConversationSnapshot(current: ConversationItem, incoming: ConversationItem): ConversationItem {
+  const mergedCustomer = incoming.customer && current.customer
+    ? {
+        ...current.customer,
+        ...incoming.customer,
+        display_name: incoming.customer.display_name ?? current.customer.display_name,
+        primary_email: incoming.customer.primary_email ?? current.customer.primary_email,
+        primary_phone: incoming.customer.primary_phone ?? current.customer.primary_phone,
+        company: incoming.customer.company ?? current.customer.company,
+      }
+    : incoming.customer ?? current.customer
+  const mergedLead = incoming.lead && current.lead
+    ? {
+        ...current.lead,
+        ...incoming.lead,
+        name: incoming.lead.name ?? current.lead.name,
+        email: incoming.lead.email ?? current.lead.email,
+        phone: incoming.lead.phone ?? current.lead.phone,
+      }
+    : incoming.lead ?? current.lead
   return {
     ...current,
     ...incoming,
     customer_id: incoming.customer_id ?? current.customer_id,
-    customer: incoming.customer ?? current.customer,
-    lead: incoming.lead ?? current.lead,
+    customer: mergedCustomer,
+    lead: mergedLead,
     assigned_to: incoming.assigned_to ?? null,
     tags: incoming.tags ?? current.tags,
   }
@@ -231,6 +250,36 @@ function profileField(value: string | number | null | undefined, fallback = 'Unk
 function connectedChannels(conversation: ConversationItem, profile: CustomerProfileData | null) {
   const values = profile?.channels?.length ? profile.channels : conversation.customer?.channels?.length ? conversation.customer.channels : [conversation.channel]
   return Array.from(new Set(values.map(value => normalizeChannel(value))))
+}
+
+function profileFromSelectedConversation(selected: ConversationItem): CustomerProfileData | null {
+  const customerId = selected.customer?.id ?? selected.customer_id
+  if (!customerId) return null
+  const customer: CustomerProfileData['customer'] = {
+    ...(selected.customer ?? {
+      id: customerId,
+      display_name: null,
+      primary_email: null,
+      primary_phone: null,
+    }),
+    id: customerId,
+    display_name: selected.customer?.display_name ?? selected.lead?.name ?? null,
+    primary_email: selected.customer?.primary_email ?? selected.lead?.email ?? null,
+    primary_phone: selected.customer?.primary_phone ?? selected.lead?.phone ?? null,
+  }
+  return {
+    customer,
+    identities: [],
+    channels: customer.channels ?? [selected.channel],
+    status: customer.primary_email || customer.primary_phone ? 'Partial' : 'Unknown',
+    conversation_count: customer.conversation_count ?? 1,
+    lifetime_messages: 0,
+    first_seen_at: customer.first_seen_at ?? selected.last_message_at,
+    last_active_at: customer.last_seen_at ?? selected.last_message_at,
+    timeline: [],
+    duplicate_suggestions: [],
+    merge_history: [],
+  }
 }
 
 function canEditStaffMessage(message: ChatMessage, now = Date.now()) {
@@ -1062,7 +1111,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
   useLayoutEffect(() => {
     const customerId = selected?.customer?.id ?? selected?.customer_id ?? null
     setMergeOpen(false)
-    setCustomerProfile(null)
+    setCustomerProfile(selected ? profileFromSelectedConversation(selected) : null)
     setCustomerProfileId(customerId)
     activeProfileRequestRef.current = customerId
     if (!customerId) {

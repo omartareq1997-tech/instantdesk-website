@@ -453,12 +453,48 @@ test.describe('agent operational tool planner', () => {
       'car_rental',
       'yes please',
     ) ?? ''
-    expect(reply).toContain('Your booking is confirmed ✅')
-    expect(reply).toContain('Reference: RB-388E23B8')
+    expect(reply).toContain('Your booking is confirmed. Reference: RB-388E23B8.')
     expect(reply).toContain('Mercedes GLC is reserved from 3 July 2026 at 09:00 to 8 July 2026 at 22:00.')
     expect(reply).toContain('Estimated rental price: 1,800 PLN.')
     expect(reply).toContain('Deposit: 3,000 PLN.')
     expect(reply).not.toMatch(/team will contact|team will confirm/i)
     expect(reply).not.toMatch(/\d{4}-\d{2}-\d{2}T/)
+  })
+
+  test('selected unavailable car does not collect contact details and offers alternatives', () => {
+    const slots = {
+      selected_vehicle: 'Mercedes GLC',
+      car_class: 'SUV',
+      pickup_datetime: '2026-07-03T08:00:00+02:00',
+      return_datetime: '2026-07-11T10:00:00+02:00',
+      pickup_location: 'Kraków Bocheńska 2a',
+      dropoff_location: 'Kraków Bocheńska 2a',
+    } as any
+    const reply = __testRentalChatHelpers.rentalToolReplyOverride(
+      [
+        {
+          tool: 'checkAvailability',
+          ok: true,
+          summary: 'Mercedes GLC is blocked.',
+          data: {
+            available: false,
+            requestedCar: { name: 'Mercedes GLC' },
+            availableCars: [{ name: 'BMW X5' }],
+          },
+        },
+      ],
+      slots,
+      [
+        { key: 'name', label: 'Name', question: 'Could you please provide your name?', required: true },
+        { key: 'phone', label: 'Phone', question: 'What is your phone number?', required: true },
+        { key: 'email', label: 'Email', question: 'What is your email address?', required: true },
+      ],
+      'car_rental',
+      'I will go with the GLC',
+    ) ?? ''
+    expect(reply).toContain('The Mercedes GLC is not available for those dates')
+    expect(reply).toContain('BMW X5')
+    expect(reply).not.toMatch(/name|phone|email/i)
+    expect(reply).not.toContain('Great')
   })
 })

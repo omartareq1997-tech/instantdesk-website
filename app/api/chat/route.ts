@@ -237,7 +237,13 @@ function looksMidSentence(text: string) {
 }
 
 function safeAiFallback(agent?: Pick<AgentRow, 'fallback_msg'> | null) {
-  return agent?.fallback_msg?.trim() || 'I had trouble completing that reply. Please send one more message and I will continue from the saved conversation details.'
+  return agent?.fallback_msg?.trim() || 'I can continue from the details already saved. Let me verify the next booking detail.'
+}
+
+function safeRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
 }
 
 function defaultAgentPayload(businessId: string, businessType?: string | null) {
@@ -787,6 +793,10 @@ function extractServiceInterest(text: string): string | null {
 
 function extractFromText(text: string, existingSlots: Partial<Slots> = {}): Partial<Slots> {
   const carRentalIntent = /\b(car|vehicle|fleet|pickup|pick-up|drop[-\s]?off|return|corolla|camry|x5|bmw|mercedes|skoda|suv|automatic|manual)\b/i.test(text)
+  const asksLocationQuestion =
+    /\b(?:what|which|where).{0,60}(?:pick\s*up|pickup|pick-up|drop\s*off|dropoff|return)?.{0,35}locations?\b/i.test(text) ||
+    /\bwhat\s+pick\s*up\s+location\b/i.test(text) ||
+    /\bwhere\s+can\s+i\s+pick/i.test(text)
   const returnOnlyCorrection =
     /\b(?:return|drop(?:off|-off)?)\b/i.test(text) &&
     /\b(?:wrong|preferred|correct|change|update)\b/i.test(text) &&
@@ -796,10 +806,10 @@ function extractFromText(text: string, existingSlots: Partial<Slots> = {}): Part
   const seats = text.match(/\b(\d+)\s*(?:seats?|people|passengers)\b/i)?.[1]
   const bookingNumber = text.match(/\b(?:CR|ID|BK)-?\d{4,8}\b/i)?.[0]
   const airportMention = /\bairport|terminal\b/i.test(text)
-  const pickupLocation = text.match(/\bpick(?:up|-up)?\s+location\s+([^.\n,]+?)(?:[.\n,]|$)/i)?.[1]
-    ?? text.match(/\bpick(?:up|-up)?\s+(?:at|from)\s+([^,.]+?)(?:\s+(?:tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at)|[,.]|$)/i)?.[1]
-  const dropoffLocation = text.match(/\b(?:drop(?:off|-off)?)\s+location\s+([^.\n,]+?)(?:[.\n,]|$)/i)?.[1]
-    ?? text.match(/\b(?:drop(?:off|-off)?|return)\s+(?:at|to)\s+([^,.]+?)(?:\s+(?:tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at)|[,.]|$)/i)?.[1]
+  const pickupLocation = asksLocationQuestion ? undefined : text.match(/\bpick(?:\s*up|-up)?\s+location\s+([^.\n,]+?)(?:[.\n,]|$)/i)?.[1]
+    ?? text.match(/\bpick(?:\s*up|-up)?\s+(?:at|from)\s+([^,.]+?)(?:\s+(?:tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at)|[,.]|$)/i)?.[1]
+  const dropoffLocation = asksLocationQuestion ? undefined : text.match(/\b(?:drop(?:\s*off|-off)?)\s+location\s+([^.\n,]+?)(?:[.\n,]|$)/i)?.[1]
+    ?? text.match(/\b(?:drop(?:\s*off|-off)?|return)\s+(?:at|to)\s+([^,.]+?)(?:\s+(?:tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at)|[,.]|$)/i)?.[1]
   const rentalWindow = parseRentalDateWindow(text, existingSlots)
 
   return {
@@ -845,6 +855,116 @@ function latestExtractedSlots(userTexts: string[]): Partial<Slots> {
   }, {})
 }
 
+function slotsFromConversationAgentState(metadata: Record<string, unknown> | null | undefined): Partial<Slots> {
+  const agentState = safeRecord(metadata?.agent_state)
+  const state = safeRecord(agentState.state)
+  const slots = safeRecord(agentState.slots)
+  const source = Object.keys(slots).length ? slots : state
+  const out: Partial<Slots> = {}
+  const slotKeys: (keyof Slots)[] = [
+    'name','phone','email','company','notes','service_interest','city','area','budget',
+    'property_type','rooms','deal_type','viewing_time','pickup_location','dropoff_location',
+    'pickup_date','return_date','pickup_datetime','return_datetime','selected_vehicle',
+    'car_class','transmission','seats','extras','booking_number','extension_request',
+  ]
+  for (const key of slotKeys) {
+    const value = strOrNull(source[key])
+    if (value) out[key] = value
+  }
+  return out
+}
+
+type RentalUserIntent =
+  | 'ASK_LOCATIONS'
+  | 'ACCEPT_LOCATION'
+  | 'CONFIRM_BOOKING'
+  | 'ASK_PRICE'
+  | 'SELECT_VEHICLE'
+  | 'ASK_FLEET'
+  | 'PROVIDE_CONTACT'
+  | 'CORRECTION'
+  | 'OTHER'
+
+function detectRentalUserIntent(text: string, confirmed: Slots): RentalUserIntent {
+  const lower = text.toLowerCase()
+  if (/\b(?:what|which|where).{0,50}(?:pick\s*up|pickup|pick-up|drop\s*off|dropoff|return)?.{0,30}locations?\b/i.test(text) ||
+      /\bwhat\s+pick\s*up\s+location\b/i.test(text) ||
+      /\bwhere\s+can\s+i\s+pick/i.test(text)) return 'ASK_LOCATIONS'
+  if (isLocationAffirmation(text) && /\b(?:use it|for both|same|that location|there)\b/i.test(text)) return 'ACCEPT_LOCATION'
+  if (/\b(?:change|update|actually|instead|correction|wrong)\b/i.test(text)) return 'CORRECTION'
+  if (/\b(?:how much|price|cost|deposit|total)\b/i.test(text)) return 'ASK_PRICE'
+  if (extractRentalVehicleName(text) || /\b(?:i will take|i'll take|interested in|go with|choose)\b/i.test(text) && confirmed.car_class) return 'SELECT_VEHICLE'
+  if (/\b(?:economy|economical|cheap|budget|suv|available cars|what cars|which cars|fleet)\b/i.test(text)) return 'ASK_FLEET'
+  if (wantsRentalBookingConfirmation(text)) return 'CONFIRM_BOOKING'
+  if (extractName(text) || extractPhone(text) || extractEmail(text) || plainNameAnswer(text)) return 'PROVIDE_CONTACT'
+  return 'OTHER'
+}
+
+function wantsRentalBookingConfirmation(text: string) {
+  return /\b(?:yes|yeah|yep|ok|okay|please|go ahead|confirm|create|book|reserve)\b/i.test(text)
+}
+
+function locationListFromTool(toolResults: AgentToolResult[]) {
+  const locations = toolResults.find(result => result.tool === 'getLocations' && result.ok)
+  const data = locations?.data as { locations?: { name?: string | null; address?: string | null }[] } | undefined
+  return data?.locations ?? []
+}
+
+function locationOptionsReply(toolResults: AgentToolResult[]) {
+  const locations = locationListFromTool(toolResults)
+  if (locations.length === 1) {
+    const location = locations[0]
+    const label = Array.from(new Set([location.name, location.address].filter(Boolean))).join(', ') || 'the configured location'
+    return `We currently offer pickup at ${label}. You can also return the car there. Would you like me to use that location for both pickup and drop-off?`
+  }
+  if (locations.length > 1) {
+    const listed = locations.map(location => Array.from(new Set([location.name, location.address].filter(Boolean))).join(', ')).join('; ')
+    return `We currently offer these pickup and drop-off locations: ${listed}. Which pickup and return location should I use?`
+  }
+  return 'I can help set the pickup and drop-off location. Which location should I use for pickup and return?'
+}
+
+function deterministicRentalNextActionReply(
+  confirmed: Slots,
+  missing: SlotDef[],
+  toolResults: AgentToolResult[],
+  businessType?: string | null,
+  userMessage = '',
+): string | null {
+  if (normalizeBusinessType(businessType) !== 'car_rental') return null
+  const intent = detectRentalUserIntent(userMessage, confirmed)
+  const missingKeys = new Set(missing.map(field => field.key))
+
+  if (intent === 'ASK_LOCATIONS') return locationOptionsReply(toolResults)
+
+  if (intent === 'CONFIRM_BOOKING' && (missingKeys.has('pickup_location') || missingKeys.has('dropoff_location'))) {
+    const prefix = confirmed.name ? `Thanks, ${confirmed.name}. ` : ''
+    return `${prefix}I just need the pickup and return locations before I can create the booking. ${locationOptionsReply(toolResults)}`
+  }
+
+  if (
+    (intent === 'PROVIDE_CONTACT' || intent === 'OTHER') &&
+    confirmed.selected_vehicle &&
+    confirmed.pickup_datetime &&
+    confirmed.return_datetime &&
+    confirmed.name &&
+    confirmed.phone &&
+    confirmed.email &&
+    (missingKeys.has('pickup_location') || missingKeys.has('dropoff_location'))
+  ) {
+    return `Thanks, ${confirmed.name}. I just need the pickup and return locations before I can confirm the booking. ${locationOptionsReply(toolResults)}`
+  }
+
+  if (confirmed.selected_vehicle) {
+    const intro = selectedVehicleIntro(confirmed)
+    if (missingKeys.has('name') && intent === 'PROVIDE_CONTACT') return `${intro} What name should we put on the booking?`
+    if (missingKeys.has('phone') && confirmed.name) return `Thanks, ${confirmed.name}. What's your phone number?`
+    if (missingKeys.has('email') && confirmed.name && confirmed.phone) return `Thanks, ${confirmed.name}. What's your email address?`
+  }
+
+  return null
+}
+
 function isLocationAffirmation(text: string) {
   return /\b(yes|yeah|yep|ok|okay|fine|correct|that location|same location|works|sounds good)\b/i.test(text)
 }
@@ -857,6 +977,8 @@ function assistantAskedForName(history: { role: string; content: string }[]) {
 function normalizeRentalLocationText(value: string | null | undefined, fallback?: string | null) {
   const raw = value?.trim()
   if (!raw) return null
+  if (/^\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?(?:\s+(?:return|drop(?:off|-off)?|to|until)\b.*)?$/i.test(raw)) return null
+  if (/\b\d{1,2}:\d{2}\b/.test(raw) && /\b(?:return|drop(?:off|-off)?)\b/i.test(raw)) return null
   if (/\b(?:same as pick\s*up|same as pickup|same pickup|same location|there|your location|the location)\b/i.test(raw)) {
     return fallback?.trim() || null
   }
@@ -877,6 +999,7 @@ function latestAssistantSuggestedLocation(history: { role: string; content: stri
   for (const content of assistantMessages) {
     const known = content.match(/\bKrak[oó]w\s+Boche[ńn]ska\s+2a\b/i)?.[0]
     if (known) return known
+    if (/\bBoche[ńn]ska\s+2a\b/i.test(content)) return 'Kraków Bocheńska 2a'
     const labelled = content.match(/\b(?:pickup|pick-up)\s+location(?: is|:)?\s+([^.\n]+?)(?:[.\n]|$)/i)?.[1]?.trim()
     if (labelled && labelled.length <= 90) return labelled
   }
@@ -892,37 +1015,39 @@ function buildConfirmedSlots(
   existingLead:  ExistingLead | null,
   history:       { role: string; content: string }[],
   currentMsg:    string,
+  canonicalSlots: Partial<Slots> = {},
 ): Slots {
   const meta = (existingLead?.metadata ?? {}) as Record<string, unknown>
+  const canonical = canonicalSlots ?? {}
 
   // Base: what's already persisted in the lead row
   const fromDB: Slots = {
-    name:          strOrNull(existingLead?.name),
-    phone:         strOrNull(existingLead?.phone),
-    email:         strOrNull(existingLead?.email),
-    company:       strOrNull(meta.company),
-    notes:         strOrNull(meta.notes),
-    service_interest: strOrNull(meta.service_interest),
-    city:          strOrNull(meta.city),
-    area:          strOrNull(meta.area),
-    budget:        strOrNull(meta.budget),
-    property_type: strOrNull(meta.property_type),
-    rooms:         strOrNull(meta.rooms),
-    deal_type:     strOrNull(meta.deal_type),
-    viewing_time:  strOrNull(meta.viewing_time),
-    pickup_location: strOrNull(meta.pickup_location),
-    dropoff_location: strOrNull(meta.dropoff_location),
-    pickup_date: strOrNull(meta.pickup_date),
-    return_date: strOrNull(meta.return_date),
-    pickup_datetime: strOrNull(meta.pickup_datetime),
-    return_datetime: strOrNull(meta.return_datetime),
-    selected_vehicle: strOrNull(meta.selected_vehicle),
-    car_class: strOrNull(meta.car_class),
-    transmission: strOrNull(meta.transmission),
-    seats: strOrNull(meta.seats),
-    extras: strOrNull(meta.extras),
-    booking_number: strOrNull(meta.booking_number),
-    extension_request: strOrNull(meta.extension_request),
+    name:          strOrNull(canonical.name) ?? strOrNull(existingLead?.name) ?? strOrNull(meta.name),
+    phone:         strOrNull(canonical.phone) ?? strOrNull(existingLead?.phone) ?? strOrNull(meta.phone),
+    email:         strOrNull(canonical.email) ?? strOrNull(existingLead?.email) ?? strOrNull(meta.email),
+    company:       strOrNull(canonical.company) ?? strOrNull(meta.company),
+    notes:         strOrNull(canonical.notes) ?? strOrNull(meta.notes),
+    service_interest: strOrNull(canonical.service_interest) ?? strOrNull(meta.service_interest),
+    city:          strOrNull(canonical.city) ?? strOrNull(meta.city),
+    area:          strOrNull(canonical.area) ?? strOrNull(meta.area),
+    budget:        strOrNull(canonical.budget) ?? strOrNull(meta.budget),
+    property_type: strOrNull(canonical.property_type) ?? strOrNull(meta.property_type),
+    rooms:         strOrNull(canonical.rooms) ?? strOrNull(meta.rooms),
+    deal_type:     strOrNull(canonical.deal_type) ?? strOrNull(meta.deal_type),
+    viewing_time:  strOrNull(canonical.viewing_time) ?? strOrNull(meta.viewing_time),
+    pickup_location: strOrNull(canonical.pickup_location) ?? strOrNull(meta.pickup_location),
+    dropoff_location: strOrNull(canonical.dropoff_location) ?? strOrNull(meta.dropoff_location),
+    pickup_date: strOrNull(canonical.pickup_date) ?? strOrNull(meta.pickup_date),
+    return_date: strOrNull(canonical.return_date) ?? strOrNull(meta.return_date),
+    pickup_datetime: strOrNull(canonical.pickup_datetime) ?? strOrNull(meta.pickup_datetime),
+    return_datetime: strOrNull(canonical.return_datetime) ?? strOrNull(meta.return_datetime),
+    selected_vehicle: strOrNull(canonical.selected_vehicle) ?? strOrNull(meta.selected_vehicle),
+    car_class: strOrNull(canonical.car_class) ?? strOrNull(meta.car_class),
+    transmission: strOrNull(canonical.transmission) ?? strOrNull(meta.transmission),
+    seats: strOrNull(canonical.seats) ?? strOrNull(meta.seats),
+    extras: strOrNull(canonical.extras) ?? strOrNull(meta.extras),
+    booking_number: strOrNull(canonical.booking_number) ?? strOrNull(meta.booking_number),
+    extension_request: strOrNull(canonical.extension_request) ?? strOrNull(meta.extension_request),
   }
 
   const userTexts = [
@@ -940,9 +1065,16 @@ function buildConfirmedSlots(
     const answeredName = plainNameAnswer(currentMsg)
     if (answeredName) extracted.name = answeredName
   }
+  if (!extracted.name && !fromDB.name && fromDB.selected_vehicle) {
+    const answeredName = plainNameAnswer(currentMsg)
+    if (answeredName) extracted.name = answeredName
+  }
   if (!currentExtracted.pickup_location && isLocationAffirmation(currentMsg)) {
     const suggestedLocation = latestAssistantSuggestedLocation(history)
-    if (suggestedLocation) extracted.pickup_location = suggestedLocation
+    if (suggestedLocation) {
+      extracted.pickup_location = suggestedLocation
+      if (/\b(?:both|same|there|that location|it)\b/i.test(currentMsg)) extracted.dropoff_location = suggestedLocation
+    }
   }
   if (!currentExtracted.pickup_location && mentionsCanonicalRentalLocation(currentMsg) && /\bpick\s*up\b/i.test(currentMsg)) {
     extracted.pickup_location = 'Kraków Bocheńska 2a'
@@ -958,8 +1090,16 @@ function buildConfirmedSlots(
   if (!currentExtracted.dropoff_location && /\bboche[ńn]ska\s*2a\b/i.test(currentMsg)) {
     extracted.dropoff_location = 'Kraków Bocheńska 2a'
   }
-  if (extracted.pickup_location) extracted.pickup_location = normalizeRentalLocationText(extracted.pickup_location, fromDB.pickup_location ?? null) ?? extracted.pickup_location
-  if (extracted.dropoff_location) extracted.dropoff_location = normalizeRentalLocationText(extracted.dropoff_location, extracted.pickup_location ?? fromDB.pickup_location ?? null) ?? extracted.dropoff_location
+  if (extracted.pickup_location) {
+    const normalized = normalizeRentalLocationText(extracted.pickup_location, fromDB.pickup_location ?? null)
+    if (normalized) extracted.pickup_location = normalized
+    else delete extracted.pickup_location
+  }
+  if (extracted.dropoff_location) {
+    const normalized = normalizeRentalLocationText(extracted.dropoff_location, extracted.pickup_location ?? fromDB.pickup_location ?? null)
+    if (normalized) extracted.dropoff_location = normalized
+    else delete extracted.dropoff_location
+  }
 
   // Stable identity fields keep DB continuity; operational rental fields use
   // latest confirmed values so corrections update immediately.
@@ -1357,7 +1497,7 @@ function formatAvailabilityReply(availability: AgentToolResult, confirmed: Slots
       ? `The ${selected} is not available for those dates, but these similar cars are available: ${alternatives}.`
       : `The ${selected} is not available for those dates.`
   }
-  return availability.summary
+  return 'I could not complete the live availability check yet. Let me verify the rental details first.'
 }
 
 function locationAcceptanceReply(confirmed: Slots, missing: SlotDef[], userMessage: string) {
@@ -1431,12 +1571,19 @@ function rentalToolReplyOverride(
   }
 
   if (create && !create.ok) {
+    if (/pickup|drop-?off|location/i.test(create.summary)) {
+      return locationOptionsReply(toolResults)
+    }
+    if (/missing required/i.test(create.summary)) {
+      const missingLocation = missing.find(field => field.key === 'pickup_location' || field.key === 'dropoff_location')
+      if (missingLocation) return locationOptionsReply(toolResults)
+    }
     const requiredOrder = ['dropoff_location', 'pickup_location', 'pickup_datetime', 'return_datetime', 'selected_vehicle', 'car_class', 'name', 'phone', 'email']
     const nextMissing = requiredOrder
       .map(key => missing.find(field => field.key === key))
       .find(Boolean)
-    if (nextMissing) return `${create.summary} ${nextMissing.question}`
-    return create.error ? `${create.summary} ${create.error}` : create.summary
+    if (nextMissing) return nextMissing.question
+    return 'I could not create the booking safely yet. Let me verify the missing booking detail first.'
   }
 
   if (availability) {
@@ -1454,7 +1601,7 @@ function rentalToolReplyOverride(
     }
     if (!availability.ok) {
       const nextMissing = missing.find(field => ['dropoff_location', 'pickup_location', 'pickup_datetime', 'return_datetime', 'selected_vehicle', 'car_class'].includes(String(field.key)))
-      return nextMissing ? `${availability.summary} ${nextMissing.question}` : availability.summary
+      return nextMissing ? nextMissing.question : 'I could not complete the live availability check yet. Let me verify the rental details first.'
     }
     const nextMissing = missing.find(field => ['name', 'phone', 'email', 'dropoff_location', 'pickup_location'].includes(String(field.key)))
     const pieces = [formatAvailabilityReply(availability, confirmed)]
@@ -1539,6 +1686,9 @@ export const __testRentalChatHelpers = {
   formatCustomerDateTime,
   formatPriceReply,
   rentalToolReplyOverride,
+  deterministicRentalNextActionReply,
+  detectRentalUserIntent,
+  slotsFromConversationAgentState,
   normalizeRentalLocationText,
   plainNameAnswer,
   looksMidSentence,
@@ -1703,7 +1853,7 @@ async function callGemini(
     code: lastIncomplete?.code ?? null,
     message: lastIncomplete?.message ?? null,
   })
-  return 'I have the conversation details saved, but I had trouble completing that reply. Please send one more message and I will continue from the saved rental details.'
+  throw lastIncomplete ?? new GeminiIncompleteResponseError('Gemini response did not finish cleanly.', 'INCOMPLETE_RESPONSE', null)
 }
 
 async function callAIProvider(
@@ -2055,6 +2205,117 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  let latestConversationMetadata: Record<string, unknown> = conversationContext?.metadata ?? {}
+
+  function pendingActionFromMissing(missingFields: SlotDef[]) {
+    const next = missingFields[0]?.key
+    if (!next) return 'ready'
+    if (next === 'pickup_datetime') return 'ask_pickup_time'
+    if (next === 'return_datetime') return 'ask_return_time'
+    if (next === 'car_class') return 'ask_car_class'
+    if (next === 'selected_vehicle') return 'ask_selected_vehicle'
+    if (next === 'pickup_location') return 'ask_pickup_location'
+    if (next === 'dropoff_location') return 'ask_dropoff_location'
+    if (next === 'name') return 'ask_customer_name'
+    if (next === 'phone') return 'ask_phone'
+    if (next === 'email') return 'ask_email'
+    return `ask_${String(next)}`
+  }
+
+  function agentStatePayload(
+    confirmedState: Slots,
+    missingFields: SlotDef[],
+    qualificationState: string,
+    userIntent: RentalUserIntent | 'NON_RENTAL',
+    toolResults: AgentToolResult[] = [],
+  ) {
+    const previousAgentState = safeRecord(latestConversationMetadata.agent_state)
+    const previousState = safeRecord(previousAgentState.state)
+    const price = toolResults.find(result => result.tool === 'calculatePrice' && result.ok)?.data as {
+      rentalSubtotal?: number
+      rentalDays?: number
+      dailyPrice?: number
+      deposit?: number
+    } | undefined
+    const availability = toolResults.find(result => result.tool === 'checkAvailability' && result.ok)?.data as {
+      available?: boolean
+      requestedCar?: { id?: string | null; name?: string | null } | null
+    } | undefined
+    const booking = toolResults.find(result => result.tool === 'createBooking' && result.ok)?.data as {
+      bookingId?: string
+      bookingNumber?: string
+      status?: string
+    } | undefined
+    const previousAvailabilityStillApplies =
+      previousState.availability_checked_pickup === confirmedState.pickup_datetime &&
+      previousState.availability_checked_return === confirmedState.return_datetime &&
+      (
+        !previousState.availability_checked_for_vehicle_id ||
+        previousState.availability_checked_for_vehicle_id === confirmedState.selected_vehicle ||
+        previousState.selected_vehicle === confirmedState.selected_vehicle
+      )
+    return {
+      version: 1,
+      business_id: businessId,
+      bot_id: resolvedBotForConversation?.id ?? conversationContext?.botId ?? null,
+      conversation_id: resolvedConversation?.convId ?? conversationContext?.id ?? conversation_id ?? null,
+      business_type: normalizeBusinessType(businessType),
+      timezone: 'Europe/Warsaw',
+      slots: confirmedState,
+      state: {
+        ...confirmedState,
+        customer_name: confirmedState.name,
+        quote_total: price?.rentalSubtotal ?? previousState.quote_total ?? null,
+        quote_days: price?.rentalDays ?? previousState.quote_days ?? null,
+        daily_rate: price?.dailyPrice ?? previousState.daily_rate ?? null,
+        deposit_amount: price?.deposit ?? previousState.deposit_amount ?? null,
+        availability_status: typeof availability?.available === 'boolean'
+          ? (availability.available ? 'available' : 'unavailable')
+          : previousAvailabilityStillApplies ? previousState.availability_status ?? null : null,
+        availability_checked_for_vehicle_id: availability?.requestedCar?.id ?? (previousAvailabilityStillApplies ? previousState.availability_checked_for_vehicle_id ?? null : null),
+        availability_checked_pickup: availability ? confirmedState.pickup_datetime : previousAvailabilityStillApplies ? previousState.availability_checked_pickup ?? null : null,
+        availability_checked_return: availability ? confirmedState.return_datetime : previousAvailabilityStillApplies ? previousState.availability_checked_return ?? null : null,
+        pending_action: pendingActionFromMissing(missingFields),
+        pending_question: missingFields[0]?.question ?? null,
+        last_completed_step: missingFields.length ? null : 'ready',
+        booking_id: booking?.bookingId ?? previousState.booking_id ?? null,
+        booking_reference: booking?.bookingNumber ?? previousState.booking_reference ?? null,
+        booking_confirmation_intent: userIntent === 'CONFIRM_BOOKING',
+        last_user_intent: userIntent,
+        last_turn_id: turnId,
+      },
+      missing: missingFields.map(field => field.key),
+      updated_at: new Date().toISOString(),
+    }
+  }
+
+  async function persistConversationAgentState(
+    convId: string,
+    confirmedState: Slots,
+    missingFields: SlotDef[],
+    qualificationState: string,
+    userIntent: RentalUserIntent | 'NON_RENTAL',
+    toolResults: AgentToolResult[] = [],
+  ) {
+    const metadata = nextConversationMetadata({
+      ...latestConversationMetadata,
+      agent_state: agentStatePayload(confirmedState, missingFields, qualificationState, userIntent, toolResults),
+    })
+    latestConversationMetadata = metadata
+    if (conversationContext) conversationContext.metadata = metadata
+    const { error } = await sb
+      .from('conversations')
+      .update({ metadata })
+      .eq('id', convId)
+      .eq('business_id', businessId)
+    if (error) console.warn('[AGENT STATE] conversation metadata persist failed', {
+      conversation_id: convId,
+      business_id: businessId,
+      code: error.code,
+      message: error.message,
+    })
+  }
+
   async function resolveConversation() {
     if (resolvedConversation) return resolvedConversation
 
@@ -2070,6 +2331,7 @@ export async function POST(req: NextRequest) {
 
     const isNewConv = convId !== conversation_id
     if (isNewConv) {
+      const metadata = nextConversationMetadata()
       const { error: ce } = await sb.from('conversations').insert({
         id:              convId,
         business_id:     businessId,
@@ -2077,7 +2339,7 @@ export async function POST(req: NextRequest) {
         status:          'ai_active',
         unread_count:    1,
         last_message_at: new Date().toISOString(),
-        metadata:        nextConversationMetadata(),
+        metadata,
       })
       if (ce) {
         const { error: fallbackError } = await sb.from('conversations').insert({
@@ -2086,7 +2348,7 @@ export async function POST(req: NextRequest) {
           channel:         requestChannel,
           status:          'open',
           last_message_at: new Date().toISOString(),
-          metadata:        nextConversationMetadata(),
+          metadata,
         })
         if (fallbackError) {
           console.error('[POST /api/chat] conversation insert failed:', JSON.stringify(fallbackError))
@@ -2094,14 +2356,18 @@ export async function POST(req: NextRequest) {
         }
       }
       status = 'ai_active'
+      latestConversationMetadata = metadata
     } else {
+      const metadata = nextConversationMetadata(conversationContext?.metadata ?? latestConversationMetadata)
       await sb
         .from('conversations')
         .update({
           last_message_at: new Date().toISOString(),
-          metadata: nextConversationMetadata(conversationContext?.metadata ?? null),
+          metadata,
         })
         .eq('id', convId)
+      latestConversationMetadata = metadata
+      if (conversationContext) conversationContext.metadata = metadata
     }
 
     resolvedConversation = { convId, status, isNewConv }
@@ -2502,10 +2768,15 @@ export async function POST(req: NextRequest) {
     : defaultSlotDefsForBusinessType(businessType)
 
   /* 7. Build confirmedSlots deterministically ─────────────────────────────── */
-  let confirmed            = buildConfirmedSlots(existingLead, history, messageText)
+  const canonicalConversationSlots = slotsFromConversationAgentState(latestConversationMetadata)
+  let confirmed            = buildConfirmedSlots(existingLead, history, messageText, canonicalConversationSlots)
   confirmed                = await hydrateSelectedRentalVehicle(sb, businessId, confirmed, businessType)
   const missing            = computeMissingSlots(confirmed, slotDefs)
   const qualificationStage = computeQualificationStage(confirmed, missing)
+  const rentalUserIntent: RentalUserIntent | 'NON_RENTAL' = normalizeBusinessType(businessType) === 'car_rental'
+    ? detectRentalUserIntent(messageText, confirmed)
+    : 'NON_RENTAL'
+  await persistConversationAgentState(convId, confirmed, missing, qualificationStage, rentalUserIntent)
 
   /* 7a. Load lead memory (non-blocking — null if table missing or no row yet) */
   let leadMemoryStr = ''
@@ -2548,6 +2819,9 @@ export async function POST(req: NextRequest) {
     message: messageText,
     slots: confirmed,
   })
+  if (operationalToolResults.length > 0 || normalizeBusinessType(businessType) === 'car_rental') {
+    await persistConversationAgentState(convId, confirmed, missing, qualificationStage, rentalUserIntent, operationalToolResults)
+  }
   if (operationalToolResults.length > 0) {
     console.log('[AGENT TOOLS] executed', operationalToolResults.map(result => ({
       tool: result.tool,
@@ -2673,6 +2947,7 @@ export async function POST(req: NextRequest) {
   await incrementUnread(convId)
 
   const deterministicRentalReply =
+    deterministicRentalNextActionReply(confirmed, missing, operationalToolResults, businessType, messageText) ??
     rentalToolReplyOverride(operationalToolResults, confirmed, missing, businessType, messageText) ??
     rentalClarificationReply(confirmed, missing, businessType, messageText)
 
@@ -2762,8 +3037,22 @@ export async function POST(req: NextRequest) {
   try {
     rawReply = await callAIProvider(openai, agent.model, agent.temperature, systemPrompt, historyForLLM, messageText, turnId)
   } catch (err) {
+    if (err instanceof GeminiIncompleteResponseError) {
+      rawReply =
+        deterministicRentalNextActionReply(confirmed, missing, operationalToolResults, businessType, messageText) ??
+        rentalToolReplyOverride(operationalToolResults, confirmed, missing, businessType, messageText) ??
+        rentalClarificationReply(confirmed, missing, businessType, messageText) ??
+        (missing[0]?.question ? `Thanks. ${missing[0].question}` : 'Thanks. I have the details saved and can continue from here.')
+      console.warn('[AI_DIAG] using deterministic provider recovery reply', {
+        business_id: businessId,
+        conversation_id: convId,
+        turn_id: turnId,
+        code: err.code,
+      })
+    } else {
     const classified = logAiProviderError(err, { businessId, model: agent.model, provider })
     return NextResponse.json({ error: classified.adminMessage }, { status: classified.responseStatus })
+    }
   }
 
   /* 11. Guard reply — block stale/holding answers and repeated questions ─── */

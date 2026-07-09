@@ -166,6 +166,12 @@ export function planOperationalTools(context: AgentToolContext): AgentToolName[]
   if (includesAny(text, ['where can i pick', 'where is your location', "what's your location", 'what is your location', 'pickup location', 'pick up location', 'drop off', 'airport', 'deliver', 'delivery area', 'locations'])) {
     tools.push('getLocations')
   }
+  if (
+    !context.slots.pickup_location || !context.slots.dropoff_location
+  ) {
+    const contactComplete = Boolean(context.slots.selected_vehicle && context.slots.pickup_datetime && context.slots.return_datetime && context.slots.name && context.slots.phone && context.slots.email)
+    if (contactComplete || wantsBookingCreation(text)) tools.push('getLocations')
+  }
   if (fleetSearchIntent) {
     tools.push('searchFleet')
   }
@@ -616,7 +622,6 @@ export function formatToolResultsForPrompt(results: AgentToolResult[]) {
   if (!results.length) return ''
   return results.map(result => {
     const data = result.data ? `\nData: ${JSON.stringify(result.data).slice(0, 4000)}` : ''
-    const error = result.error ? `\nError: ${result.error}` : ''
-    return `Tool: ${result.tool}\nStatus: ${result.ok ? 'ok' : 'failed'}\nSummary: ${result.summary}${error}${data}`
+    return `Tool: ${result.tool}\nStatus: ${result.ok ? 'ok' : 'failed'}\nSummary: ${result.summary}${data}`
   }).join('\n\n')
 }

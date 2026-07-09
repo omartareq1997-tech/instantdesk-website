@@ -219,6 +219,23 @@ test.describe('agent operational tool planner', () => {
     expect(tools).not.toContain('createBooking')
   })
 
+  test('booking confirmation with missing locations fetches locations and does not call createBooking', () => {
+    const tools = planOperationalTools({
+      ...baseContext,
+      slots: {
+        selected_vehicle: 'Skoda Superb',
+        pickup_datetime: '2026-07-09T20:00:00+02:00',
+        return_datetime: '2026-07-12T21:00:00+02:00',
+        name: 'Justyna',
+        phone: '510 555 444',
+        email: 'justyna@gmail.com',
+      },
+      message: 'yes please',
+    })
+    expect(tools).toContain('getLocations')
+    expect(tools).not.toContain('createBooking')
+  })
+
   test('parses tomorrow and explicit July return dates as business-time ISO values', () => {
     const parsed = parseRentalDateWindow(
       'I want to pick up tomorrow at 9am and return on 9 July at 10pm.',
@@ -476,6 +493,124 @@ test.describe('agent operational tool planner', () => {
       'Sam Marty',
     )
     expect(slots.name).toBe('Sam Marty')
+  })
+
+  test('accepts and preserves single-word customer name from canonical conversation state', () => {
+    const slots = __testRentalChatHelpers.buildConfirmedSlots(
+      { id: 'lead-1', name: null, phone: '510 555 444', email: 'justyna@gmail.com', interest: null, status: null, metadata: {} },
+      [],
+      'what pickup locations do you have?',
+      { name: 'Justyna', selected_vehicle: 'Skoda Superb' },
+    )
+    expect(slots.name).toBe('Justyna')
+    expect(slots.phone).toBe('510 555 444')
+    expect(slots.email).toBe('justyna@gmail.com')
+    expect(slots.selected_vehicle).toBe('Skoda Superb')
+  })
+
+  test('hydrates canonical state from conversation metadata after reconnect or inactivity', () => {
+    const slots = __testRentalChatHelpers.slotsFromConversationAgentState({
+      agent_state: {
+        slots: {
+          name: 'Justyna',
+          phone: '510555444',
+          email: 'justyna@gmail.com',
+          selected_vehicle: 'Skoda Superb',
+          pickup_datetime: '2026-07-09T20:00:00+02:00',
+          return_datetime: '2026-07-12T21:00:00+02:00',
+        },
+      },
+    })
+    expect(slots.name).toBe('Justyna')
+    expect(slots.selected_vehicle).toBe('Skoda Superb')
+    expect(slots.pickup_datetime).toBe('2026-07-09T20:00:00+02:00')
+  })
+
+  test('exact Justyna transcript keeps name after email and asks for locations, not name again', () => {
+    const slots = __testRentalChatHelpers.buildConfirmedSlots(
+      {
+        id: 'lead-1',
+        name: null,
+        phone: '510 555 444',
+        email: null,
+        interest: null,
+        status: null,
+        metadata: {
+          name: 'Justyna',
+          selected_vehicle: 'Skoda Superb',
+          car_class: 'economy',
+          pickup_datetime: '2026-07-09T20:00:00+02:00',
+          return_datetime: '2026-07-12T21:00:00+02:00',
+        },
+      },
+      [
+        { role: 'assistant', content: 'The Skoda Superb is available from 9 July 2026 at 20:00 to 12 July 2026 at 21:00. What name should we put on the booking?' },
+        { role: 'user', content: 'Justyna' },
+        { role: 'assistant', content: "Thanks, Justyna. What's your phone number?" },
+        { role: 'user', content: '510 555 444' },
+        { role: 'assistant', content: "Thanks, Justyna. What's your email address?" },
+      ],
+      'justyna@gmail.com',
+    )
+    expect(slots.name).toBe('Justyna')
+    expect(slots.phone).toBe('510 555 444')
+    expect(slots.email).toBe('justyna@gmail.com')
+
+    const reply = __testRentalChatHelpers.deterministicRentalNextActionReply(
+      slots,
+      [
+        { key: 'pickup_location', label: 'Pickup location', question: 'Where would you like to pick up the car?', required: true },
+        { key: 'dropoff_location', label: 'Drop-off location', question: 'Where would you like to return the car?', required: true },
+      ],
+      [{ tool: 'getLocations', ok: true, summary: 'Found 1 active pickup/drop-off location(s).', data: { locations: [{ name: 'Kraków Bocheńska 2a', address: 'Kraków Bocheńska 2a' }] } }],
+      'car_rental',
+      'justyna@gmail.com',
+    ) ?? ''
+    expect(reply).toContain('Thanks, Justyna')
+    expect(reply).toContain('Bocheńska 2a')
+    expect(reply).not.toMatch(/customer name|share your name|provide your name/i)
+  })
+
+  test('location question interrupts pending confirmation and does not replay quote', () => {
+    const slots = {
+      name: 'Justyna',
+      phone: '510 555 444',
+      email: 'justyna@gmail.com',
+      selected_vehicle: 'Skoda Superb',
+      pickup_datetime: '2026-07-09T20:00:00+02:00',
+      return_datetime: '2026-07-12T21:00:00+02:00',
+    } as any
+    expect(__testRentalChatHelpers.detectRentalUserIntent('what pick up location do you have in krakow', slots)).toBe('ASK_LOCATIONS')
+    const reply = __testRentalChatHelpers.deterministicRentalNextActionReply(
+      slots,
+      [
+        { key: 'pickup_location', label: 'Pickup location', question: 'Where would you like to pick up the car?', required: true },
+        { key: 'dropoff_location', label: 'Drop-off location', question: 'Where would you like to return the car?', required: true },
+      ],
+      [{ tool: 'getLocations', ok: true, summary: 'Found 1 active pickup/drop-off location(s).', data: { locations: [{ name: 'Kraków Bocheńska 2a', address: 'Kraków Bocheńska 2a' }] } }],
+      'car_rental',
+      'what pick up location do you have in krakow',
+    ) ?? ''
+    expect(reply).toContain('Bocheńska 2a')
+    expect(reply).not.toMatch(/Estimated rental price|Would you like me to create/i)
+  })
+
+  test('booking precondition failure maps to natural location request, not raw tool error', () => {
+    const reply = __testRentalChatHelpers.rentalToolReplyOverride(
+      [
+        { tool: 'getLocations', ok: true, summary: 'Found 1 active pickup/drop-off location(s).', data: { locations: [{ name: 'Kraków Bocheńska 2a', address: 'Kraków Bocheńska 2a' }] } },
+        { tool: 'createBooking', ok: false, summary: 'Booking creation needs valid pickup and drop-off locations first.' },
+      ],
+      { name: 'Justyna', phone: '510 555 444', email: 'justyna@gmail.com', selected_vehicle: 'Skoda Superb' } as any,
+      [
+        { key: 'pickup_location', label: 'Pickup location', question: 'Where would you like to pick up the car?', required: true },
+        { key: 'dropoff_location', label: 'Drop-off location', question: 'Where would you like to return the car?', required: true },
+      ],
+      'car_rental',
+      'yes please',
+    ) ?? ''
+    expect(reply).toContain('Bocheńska 2a')
+    expect(reply).not.toMatch(/Booking creation needs|Missing required|failed/i)
   })
 
   test('extracts same pickup drop-off as canonical business location', () => {

@@ -73,6 +73,66 @@ async function createGeminiTestAiBusiness(options: { aiAutoRepliesEnabled: boole
   return { sb, businessId }
 }
 
+async function createGeminiCarRentalBusiness(options: { aiAutoRepliesEnabled: boolean; liveChatEnabled: boolean }) {
+  const sb = adminClient()
+  const businessId = crypto.randomUUID()
+  await sb.from('businesses').insert({ id: businessId, name: 'QA Rental Runtime Business', business_type: 'car_rental' })
+  await sb.from('agents').insert({
+    business_id: businessId,
+    name: 'QA Rental Runtime Agent',
+    active: true,
+    persona: 'You are a car rental operations assistant.',
+    objective: 'Check live fleet availability, collect booking details, and create safe bookings.',
+    tone: 'professional',
+    fallback_msg: 'I can continue from the saved rental details.',
+    model: 'gemini-2.5-pro',
+    temperature: 0.1,
+  })
+  await sb.from('live_chat_settings').insert({
+    business_id: businessId,
+    ai_auto_replies_enabled: options.aiAutoRepliesEnabled,
+    live_chat_enabled: options.liveChatEnabled,
+    human_handover_enabled: true,
+    trigger_customer_asks_human: true,
+    trigger_ai_cannot_answer: true,
+    trigger_phrases: ['human', 'agent', 'support'],
+  })
+  const { data: economy } = await sb.from('car_classes').insert({ business_id: businessId, name: 'Economy' }).select('id').single()
+  const { data: location } = await sb.from('rental_locations').insert({
+    business_id: businessId,
+    name: 'Kraków Bocheńska 2a',
+    address: 'Kraków Bocheńska 2a',
+    active: true,
+  }).select('id').single()
+  await sb.from('cars').insert([
+    {
+      business_id: businessId,
+      name: 'Skoda Superb',
+      model: 'Superb',
+      transmission: 'automatic',
+      daily_price: 150,
+      deposit: 1500,
+      status: 'available',
+      active: true,
+      car_class_id: economy?.id,
+      location_id: location?.id,
+    },
+    {
+      business_id: businessId,
+      name: 'Toyota Corolla',
+      model: 'Corolla',
+      transmission: 'automatic',
+      daily_price: 140,
+      deposit: 1200,
+      status: 'available',
+      active: true,
+      car_class_id: economy?.id,
+      location_id: location?.id,
+    },
+  ])
+  return { sb, businessId }
+}
+
 async function createTestAiBusinessWithoutAgent(options: { aiAutoRepliesEnabled: boolean; liveChatEnabled: boolean }) {
   const sb = adminClient()
   const businessId = crypto.randomUUID()
@@ -114,6 +174,10 @@ async function cleanupTestAiBusiness(sb: ReturnType<typeof adminClient>, busines
     await sb.from('leads').delete().in('conversation_id', conversationIds)
     await sb.from('conversations').delete().in('id', conversationIds)
   }
+  await sb.from('rental_bookings').delete().eq('business_id', businessId)
+  await sb.from('cars').delete().eq('business_id', businessId)
+  await sb.from('car_classes').delete().eq('business_id', businessId)
+  await sb.from('rental_locations').delete().eq('business_id', businessId)
   await sb.from('live_chat_settings').delete().eq('business_id', businessId)
   await sb.from('agents').delete().eq('business_id', businessId)
   await sb.from('businesses').delete().eq('id', businessId)
@@ -656,12 +720,90 @@ test.describe('Live Chat API production boundaries', () => {
       const body = await response.json() as { reply?: string; conversation_id?: string }
       expect(response.status).toBe(200)
       expect(geminiCalls).toBe(2)
-      expect(body.reply).toContain('I have the conversation details saved')
+      expect(body.reply).not.toContain('send one more message')
+      expect(body.reply).not.toContain('trouble completing')
+      expect(body.reply?.trim()).toBeTruthy()
       expect(body.reply).not.toBe('Your')
       expect(body.reply).not.toBe('The reply is still')
       const { data: assistants } = await sb.from('messages').select('id,content').eq('conversation_id', body.conversation_id).eq('role', 'assistant')
       expect(assistants).toHaveLength(1)
       expect(assistants?.[0]?.content).toBe(body.reply)
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('rental runtime preserves Justyna state and interrupts confirmation for location questions', async () => {
+    const { sb, businessId } = await createGeminiCarRentalBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
+    let conversationId: string | undefined
+    async function send(message: string, suffix: string) {
+      const { response } = await postChatRouteWithMockedGemini({
+        business_id: businessId,
+        conversation_id: conversationId,
+        message,
+        debug: true,
+        test_ai: false,
+        turn_id: `justyna-${suffix}`,
+        client_message_id: `justyna-client-${suffix}`,
+      }, [
+        { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Runtime fallback should not dominate this rental workflow.' }] } }] },
+      ])
+      const body = await response.json() as {
+        reply?: string
+        conversation_id?: string
+        debug?: { confirmedSlots?: Record<string, unknown>; operationalTools?: Array<{ tool: string; ok: boolean }> }
+      }
+      expect(response.status).toBe(200)
+      conversationId = body.conversation_id
+      return body
+    }
+    try {
+      await send('yes, i want to rent a car today until 12/07', 'dates')
+      await send('pick at 20:00 return at 21:00', 'times')
+      const fleet = await send('im looking for economical car', 'class')
+      expect(fleet.reply).toMatch(/Skoda Superb|Toyota Corolla|economy|car/i)
+
+      const selected = await send('i will take the skoda', 'vehicle')
+      expect(selected.debug?.confirmedSlots?.selected_vehicle).toBe('Skoda Superb')
+      expect(selected.reply).not.toMatch(/pickup date|return date/i)
+
+      const name = await send('Justyna', 'name')
+      expect(name.debug?.confirmedSlots?.name).toBe('Justyna')
+      expect(name.reply).toMatch(/phone/i)
+
+      const phone = await send('510 555 444', 'phone')
+      expect(phone.debug?.confirmedSlots?.name).toBe('Justyna')
+      expect(phone.debug?.confirmedSlots?.phone).toBe('510 555 444')
+      expect(phone.reply).toMatch(/email/i)
+
+      const email = await send('justyna@gmail.com', 'email')
+      expect(email.debug?.confirmedSlots?.name).toBe('Justyna')
+      expect(email.debug?.confirmedSlots?.phone).toBe('510 555 444')
+      expect(email.debug?.confirmedSlots?.email).toBe('justyna@gmail.com')
+      expect(email.reply).toContain('Bocheńska 2a')
+      expect(email.reply).not.toMatch(/customer name|share your name|provide your name|send one more message|trouble completing/i)
+
+      const confirmWithoutLocations = await send('yes please', 'confirm-missing-location')
+      expect(confirmWithoutLocations.reply).toContain('Bocheńska 2a')
+      expect(confirmWithoutLocations.reply).not.toMatch(/Booking creation needs|Missing required|failed/i)
+      expect(confirmWithoutLocations.debug?.operationalTools?.some(tool => tool.tool === 'createBooking')).toBe(false)
+
+      const locationQuestion = await send('what pick up location do you have in krakow', 'ask-location')
+      expect(locationQuestion.reply).toContain('Bocheńska 2a')
+      expect(locationQuestion.reply).not.toMatch(/Estimated rental price|Would you like me to create/i)
+
+      const acceptLocation = await send('yes use it for both', 'accept-location')
+      expect(acceptLocation.debug?.confirmedSlots?.pickup_location).toBe('Kraków Bocheńska 2a')
+      expect(acceptLocation.debug?.confirmedSlots?.dropoff_location).toBe('Kraków Bocheńska 2a')
+
+      const { data: conversation } = await sb.from('conversations').select('metadata').eq('id', conversationId).single()
+      const agentState = (conversation?.metadata as { agent_state?: { slots?: Record<string, unknown> } } | null)?.agent_state
+      expect(agentState?.slots?.name).toBe('Justyna')
+      expect(agentState?.slots?.phone).toBe('510 555 444')
+      expect(agentState?.slots?.email).toBe('justyna@gmail.com')
+      expect(agentState?.slots?.selected_vehicle).toBe('Skoda Superb')
+      expect(agentState?.slots?.pickup_location).toBe('Kraków Bocheńska 2a')
+      expect(agentState?.slots?.dropoff_location).toBe('Kraków Bocheńska 2a')
     } finally {
       await cleanupTestAiBusiness(sb, businessId)
     }

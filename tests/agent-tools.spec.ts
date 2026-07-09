@@ -622,6 +622,191 @@ test.describe('agent operational tool planner', () => {
     expect(slots.dropoff_location).toBe('Kraków Bocheńska 2a')
   })
 
+  test('same-location explicit phrase copies pickup location id to drop-off', () => {
+    const slots = __testRentalChatHelpers.buildConfirmedSlots(
+      { id: 'lead-1', name: null, phone: null, email: null, interest: null, status: null, metadata: { pickup_location: 'Configured Depot', pickup_location_id: 'loc-1' } },
+      [],
+      'drop off is the same as pick up',
+    )
+    expect(slots.dropoff_location).toBe('Configured Depot')
+    expect(slots.dropoff_location_id).toBe('loc-1')
+  })
+
+  test('offered configured location maps yes/use-both acceptance to both location ids', () => {
+    const slots = __testRentalChatHelpers.applyConfiguredLocationAcceptance(
+      {
+        pickup_location: 'Configured Depot',
+        dropoff_location: null,
+        pickup_location_id: null,
+        dropoff_location_id: null,
+      } as any,
+      'yes use it for both',
+      [{ tool: 'getLocations', ok: true, summary: 'Found 1 active pickup/drop-off location(s).', data: { locations: [{ id: 'loc-1', name: 'Configured Depot', address: '1 Main Street' }] } }],
+    )
+    expect(slots.pickup_location).toBe('Configured Depot, 1 Main Street')
+    expect(slots.dropoff_location).toBe('Configured Depot, 1 Main Street')
+    expect(slots.pickup_location_id).toBe('loc-1')
+    expect(slots.dropoff_location_id).toBe('loc-1')
+  })
+
+  test('combined time and use-both message preserves datetimes and binds both configured locations', () => {
+    const parsed = __testRentalChatHelpers.buildConfirmedSlots(
+      {
+        id: 'lead-1',
+        name: null,
+        phone: null,
+        email: null,
+        interest: null,
+        status: null,
+        metadata: {
+          pickup_date: '2026-07-09',
+          return_date: '2026-07-12',
+        },
+      },
+      [{ role: 'assistant', content: 'We currently offer pickup at Configured Depot, 1 Main Street. You can also return the car there. Would you like me to use that location for both pickup and drop-off?' }],
+      'pick at 20:00 return at 21:00, yes i will use that location for both pickup and drop-off',
+    )
+    const slots = __testRentalChatHelpers.applyConfiguredLocationAcceptance(
+      parsed,
+      'pick at 20:00 return at 21:00, yes i will use that location for both pickup and drop-off',
+      [{ tool: 'getLocations', ok: true, summary: 'Found 1 active pickup/drop-off location(s).', data: { locations: [{ id: 'loc-1', name: 'Configured Depot', address: '1 Main Street' }] } }],
+    )
+    expect(slots.pickup_datetime).toBe('2026-07-09T20:00:00+02:00')
+    expect(slots.return_datetime).toBe('2026-07-12T21:00:00+02:00')
+    expect(slots.pickup_location_id).toBe('loc-1')
+    expect(slots.dropoff_location_id).toBe('loc-1')
+    expect(slots.dropoff_location).toBe('Configured Depot, 1 Main Street')
+  })
+
+  test('same-location natural variants are treated as same-location intent', () => {
+    for (const text of ['same place', 'use it for both', 'yes for both', 'return it there']) {
+      expect(__testRentalChatHelpers.sameLocationIntent(text)).toBe(true)
+    }
+  })
+
+  test('semantic reducer applies unseen same-location meaning without reading phrase text', () => {
+    const slots = __testRentalChatHelpers.reduceRentalState(
+      {
+        pickup_location: 'Configured Depot',
+        pickup_location_id: 'loc-1',
+        dropoff_location: null,
+        dropoff_location_id: null,
+      } as any,
+      __testRentalChatHelpers.normalizeSemanticInterpretation({
+        intent: 'UPDATE_RENTAL_DETAILS',
+        state_patch: {},
+        relations: [{ type: 'SAME_AS', source: 'pickup_location', target: 'dropoff_location' }],
+        references: [{ expression: "I'll leave it wherever I got it from", resolved_to: 'pickup_location', field: 'dropoff_location' }],
+        corrections: [],
+        question: null,
+        confirmation: null,
+        confidence: 0.96,
+      }, 'llm'),
+    )
+    expect(slots.dropoff_location).toBe('Configured Depot')
+    expect(slots.dropoff_location_id).toBe('loc-1')
+  })
+
+  test('semantic reducer applies broad same-location relation from LLM output', () => {
+    const slots = __testRentalChatHelpers.reduceRentalState(
+      {
+        pickup_location: 'Configured Depot',
+        pickup_location_id: 'loc-1',
+        dropoff_location: null,
+        dropoff_location_id: null,
+      } as any,
+      __testRentalChatHelpers.normalizeSemanticInterpretation({
+        intent: 'UPDATE_RENTAL_DETAILS',
+        state_patch: {},
+        relations: [{ type: 'SAME_LOCATION', fields: ['pickup_location', 'dropoff_location'] }],
+        references: [{ expression: 'same joint both ways bro', resolved_to: 'last_offered_location' }],
+        corrections: [],
+        confidence: 0.91,
+      }, 'llm'),
+    )
+    expect(slots.pickup_location_id).toBe('loc-1')
+    expect(slots.dropoff_location_id).toBe('loc-1')
+  })
+
+  test('semantic reducer applies contextual return-time corrections with newest patch winning', () => {
+    const first = __testRentalChatHelpers.reduceRentalState(
+      {
+        return_date: '2026-07-12',
+        return_datetime: '2026-07-12T21:00:00+02:00',
+      } as any,
+      __testRentalChatHelpers.normalizeSemanticInterpretation({
+        intent: 'CORRECT_RENTAL_DETAILS',
+        state_patch: { return_time: '22:00' },
+        corrections: [{ field: 'return_datetime', operation: 'REPLACE' }],
+        relations: [],
+        references: [{ expression: 'actually make it ten at night', resolved_to: 'return_datetime' }],
+        confidence: 0.96,
+      }, 'llm'),
+    )
+    expect(first.return_datetime).toBe('2026-07-12T22:00:00+02:00')
+
+    const second = __testRentalChatHelpers.reduceRentalState(
+      first,
+      __testRentalChatHelpers.normalizeSemanticInterpretation({
+        intent: 'CORRECT_RENTAL_DETAILS',
+        state_patch: { return_time: '21:00' },
+        corrections: [{ field: 'return_datetime', operation: 'REPLACE' }],
+        relations: [],
+        references: [{ expression: 'forget that, make it nine', resolved_to: 'return_datetime' }],
+        confidence: 0.94,
+      }, 'llm'),
+    )
+    expect(second.return_datetime).toBe('2026-07-12T21:00:00+02:00')
+  })
+
+  test('semantic references resolve offered vehicle order and price through backend data', () => {
+    const first = __testRentalChatHelpers.reduceRentalState(
+      {} as any,
+      __testRentalChatHelpers.normalizeSemanticInterpretation({
+        intent: 'SELECT_VEHICLE',
+        state_patch: {},
+        relations: [],
+        references: [{ expression: "I'll take the first one", resolved_to: 'first_offered_vehicle' }],
+        confidence: 0.9,
+      }, 'llm'),
+      [],
+      [{ tool: 'searchFleet', ok: true, summary: 'fleet', data: { cars: [
+        { name: 'Toyota Corolla', dailyPrice: 140 },
+        { name: 'Skoda Superb', dailyPrice: 150 },
+      ] } }],
+    )
+    expect(first.selected_vehicle).toBe('Toyota Corolla')
+
+    const cheapest = __testRentalChatHelpers.reduceRentalState(
+      {} as any,
+      __testRentalChatHelpers.normalizeSemanticInterpretation({
+        intent: 'SELECT_VEHICLE',
+        state_patch: {},
+        relations: [],
+        references: [{ expression: 'give me the cheaper one', resolved_to: 'cheapest_offered_vehicle' }],
+        confidence: 0.92,
+      }, 'llm'),
+      [],
+      [{ tool: 'searchFleet', ok: true, summary: 'fleet', data: { cars: [
+        { name: 'Skoda Superb', dailyPrice: 150 },
+        { name: 'Toyota Corolla', dailyPrice: 140 },
+      ] } }],
+    )
+    expect(cheapest.selected_vehicle).toBe('Toyota Corolla')
+  })
+
+  test('semantic intent interrupts stale confirmation workflow for location questions', () => {
+    const semantics = __testRentalChatHelpers.normalizeSemanticInterpretation({
+      intent: 'ASK_LOCATION',
+      state_patch: {},
+      relations: [],
+      references: [],
+      confidence: 0.95,
+    }, 'llm')
+    expect(__testRentalChatHelpers.rentalSemanticIntentToUserIntent(semantics.intent)).toBe('ASK_LOCATIONS')
+    expect(__testRentalChatHelpers.semanticNeedsLocationTool(semantics)).toBe(true)
+  })
+
   test('normalizes Bocheńska drop-off mentions to the canonical business location', () => {
     const slots = __testRentalChatHelpers.buildConfirmedSlots(
       { id: 'lead-1', name: null, phone: null, email: null, interest: null, status: null, metadata: { pickup_location: 'Kraków Bocheńska 2a' } },
@@ -647,7 +832,7 @@ test.describe('agent operational tool planner', () => {
       'car_rental',
       'OK will pick up and drop off the car at Kraków Bocheńska 2a',
     )
-    expect(reply).toBe('Perfect — pickup and drop-off will be at Bocheńska 2a in Kraków. What type of car would you prefer?')
+    expect(reply).toBe('Perfect — pickup and return will both be at Kraków Bocheńska 2a. What type of car would you prefer?')
     expect(reply).not.toContain('Our pickup location')
   })
 
@@ -686,7 +871,20 @@ test.describe('agent operational tool planner', () => {
     expect(reply).not.toMatch(/\d{4}-\d{2}-\d{2}T/)
   })
 
-  test('final booking confirmation includes reference, formatted price, and no team confirmation copy', () => {
+  test('rental reply guard replaces raw ISO datetimes with customer-facing dates', () => {
+    const reply = __testRentalChatHelpers.replaceRentalIsoDateTimes(
+      'Pickup: 2026-07-09T20:00:00+02:00. Return: 2026-07-12T21:00:00+02:00.',
+      {
+        pickup_datetime: '2026-07-09T20:00:00+02:00',
+        return_datetime: '2026-07-12T21:00:00+02:00',
+      } as any,
+    )
+    expect(reply).toContain('Pickup: 9 July 2026 at 20:00.')
+    expect(reply).toContain('Return: 12 July 2026 at 21:00.')
+    expect(reply).not.toMatch(/\d{4}-\d{2}-\d{2}T/)
+  })
+
+  test('final pending booking reply includes reference, formatted price, truthful status, and no team confirmation copy', () => {
     const reply = __testRentalChatHelpers.rentalToolReplyOverride(
       [
         { tool: 'calculatePrice', ok: true, summary: 'raw', data: { rentalDays: 6, dailyPrice: 300, rentalSubtotal: 1800, deposit: 3000 } },
@@ -701,8 +899,8 @@ test.describe('agent operational tool planner', () => {
       'car_rental',
       'yes please',
     ) ?? ''
-    expect(reply).toContain('Your booking is confirmed. Reference: RB-388E23B8.')
-    expect(reply).toContain('Mercedes GLC is reserved from 3 July 2026 at 09:00 to 8 July 2026 at 22:00.')
+    expect(reply).toContain('Your booking request has been created successfully. Reference: RB-388E23B8.')
+    expect(reply).toContain('Mercedes GLC is requested from 3 July 2026 at 09:00 to 8 July 2026 at 22:00.')
     expect(reply).toContain('Estimated rental price: 1,800 PLN.')
     expect(reply).toContain('Deposit: 3,000 PLN.')
     expect(reply).not.toMatch(/team will contact|team will confirm/i)

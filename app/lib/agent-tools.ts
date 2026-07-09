@@ -28,6 +28,7 @@ export type AgentToolContext = {
   businessType: string | null
   conversationId: string
   message: string
+  semanticIntent?: string | null
   slots: {
     name?: string | null
     phone?: string | null
@@ -35,6 +36,8 @@ export type AgentToolContext = {
     booking_number?: string | null
     pickup_location?: string | null
     dropoff_location?: string | null
+    pickup_location_id?: string | null
+    dropoff_location_id?: string | null
     pickup_date?: string | null
     return_date?: string | null
     pickup_datetime?: string | null
@@ -154,16 +157,17 @@ export function planOperationalTools(context: AgentToolContext): AgentToolName[]
   const businessType = context.businessType
   if (businessType !== 'car_rental') return []
   const text = norm(context.message)
+  const semanticIntent = context.semanticIntent ?? null
   const tools: AgentToolName[] = []
   const hasCompleteBookingData = hasBookingInputs(context)
   const canCheckAvailability = hasAvailabilityInputs(context)
   const hasCustomerContact = Boolean(context.slots.name && context.slots.phone && context.slots.email)
   const explicitAvailabilityQuestion = includesAny(text, ['available', 'availability', 'free'])
   const fleetSearchIntent = includesAny(text, ['what cars', 'which cars', 'do you have', 'available cars', 'automatic cars', 'economy', 'economical', 'cheap', 'budget', 'suv', 'fleet', 'corolla', 'camry', 'toyota', 'bmw', 'x5', 'mercedes', 'glc', 'skoda', 'superb'])
-  if (includesAny(text, ['policy', 'deposit', 'documents', 'license', 'insurance', 'mileage', 'late fee', 'cancel', 'cancellation', 'age requirement'])) {
+  if (semanticIntent === 'ASK_POLICY' || semanticIntent === 'ASK_DEPOSIT' || includesAny(text, ['policy', 'deposit', 'documents', 'license', 'insurance', 'mileage', 'late fee', 'cancel', 'cancellation', 'age requirement'])) {
     tools.push('getBusinessPolicies')
   }
-  if (includesAny(text, ['where can i pick', 'where is your location', "what's your location", 'what is your location', 'pickup location', 'pick up location', 'drop off', 'airport', 'deliver', 'delivery area', 'locations'])) {
+  if (semanticIntent === 'ASK_LOCATION' || includesAny(text, ['where can i pick', 'where is your location', "what's your location", 'what is your location', 'pickup location', 'pick up location', 'drop off', 'airport', 'deliver', 'delivery area', 'locations'])) {
     tools.push('getLocations')
   }
   if (
@@ -172,7 +176,7 @@ export function planOperationalTools(context: AgentToolContext): AgentToolName[]
     const contactComplete = Boolean(context.slots.selected_vehicle && context.slots.pickup_datetime && context.slots.return_datetime && context.slots.name && context.slots.phone && context.slots.email)
     if (contactComplete || wantsBookingCreation(text)) tools.push('getLocations')
   }
-  if (fleetSearchIntent) {
+  if (semanticIntent === 'ASK_AVAILABLE_VEHICLES' || semanticIntent === 'ASK_AVAILABLE_VEHICLES_BY_CLASS' || semanticIntent === 'SELECT_VEHICLE' || fleetSearchIntent) {
     tools.push('searchFleet')
   }
   if (wantsCancellation(text)) {
@@ -196,7 +200,7 @@ export function planOperationalTools(context: AgentToolContext): AgentToolName[]
     if (!tools.includes('checkAvailability')) tools.push('checkAvailability')
     if (!tools.includes('calculatePrice')) tools.push('calculatePrice')
   }
-  if (hasCompleteBookingData && wantsBookingCreation(text)) {
+  if (hasCompleteBookingData && (semanticIntent === 'CONFIRM_BOOKING' || wantsBookingCreation(text))) {
     if (!tools.includes('searchFleet')) tools.push('searchFleet')
     if (!tools.includes('checkAvailability')) tools.push('checkAvailability')
     if (!tools.includes('calculatePrice')) tools.push('calculatePrice')
@@ -206,7 +210,7 @@ export function planOperationalTools(context: AgentToolContext): AgentToolName[]
     if (!tools.includes('searchFleet')) tools.push('searchFleet')
     if (!tools.includes('checkAvailability')) tools.push('checkAvailability')
   }
-  if (includesAny(text, ['how much', 'cost', 'price', 'total', 'deposit', 'fee'])) {
+  if (semanticIntent === 'ASK_PRICE' || semanticIntent === 'ASK_DEPOSIT' || includesAny(text, ['how much', 'cost', 'price', 'total', 'deposit', 'fee'])) {
     if (!tools.includes('searchFleet')) tools.push('searchFleet')
     tools.push('calculatePrice')
   }
@@ -427,8 +431,8 @@ async function createBooking(sb: SupabaseClient, context: AgentToolContext, tool
   if (!context.slots.name || !context.slots.phone || !context.slots.email) {
     return { tool: 'createBooking', ok: false, summary: 'Booking creation needs customer name, phone number, and email first.' }
   }
-  const pickupLocationId = await resolveLocationId(sb, context.businessId, context.slots.pickup_location)
-  const dropoffLocationId = await resolveLocationId(sb, context.businessId, context.slots.dropoff_location)
+  const pickupLocationId = context.slots.pickup_location_id ?? await resolveLocationId(sb, context.businessId, context.slots.pickup_location)
+  const dropoffLocationId = context.slots.dropoff_location_id ?? await resolveLocationId(sb, context.businessId, context.slots.dropoff_location)
   if (!pickupLocationId || !dropoffLocationId) {
     return { tool: 'createBooking', ok: false, summary: 'Booking creation needs valid pickup and drop-off locations first.' }
   }

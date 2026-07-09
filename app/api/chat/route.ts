@@ -81,6 +81,8 @@ interface Slots {
   viewing_time:  string | null
   pickup_location: string | null
   dropoff_location: string | null
+  pickup_location_id: string | null
+  dropoff_location_id: string | null
   pickup_date: string | null
   return_date: string | null
   pickup_datetime: string | null
@@ -864,6 +866,7 @@ function slotsFromConversationAgentState(metadata: Record<string, unknown> | nul
   const slotKeys: (keyof Slots)[] = [
     'name','phone','email','company','notes','service_interest','city','area','budget',
     'property_type','rooms','deal_type','viewing_time','pickup_location','dropoff_location',
+    'pickup_location_id','dropoff_location_id',
     'pickup_date','return_date','pickup_datetime','return_datetime','selected_vehicle',
     'car_class','transmission','seats','extras','booking_number','extension_request',
   ]
@@ -885,6 +888,365 @@ type RentalUserIntent =
   | 'CORRECTION'
   | 'OTHER'
 
+type RentalSemanticIntent =
+  | 'START_RENTAL'
+  | 'UPDATE_RENTAL_DETAILS'
+  | 'CORRECT_RENTAL_DETAILS'
+  | 'ASK_AVAILABLE_VEHICLES'
+  | 'ASK_AVAILABLE_VEHICLES_BY_CLASS'
+  | 'SELECT_VEHICLE'
+  | 'ASK_LOCATION'
+  | 'ASK_PRICE'
+  | 'ASK_DEPOSIT'
+  | 'ASK_POLICY'
+  | 'CONFIRM_BOOKING'
+  | 'CANCEL_BOOKING'
+  | 'EXTEND_BOOKING'
+  | 'UPDATE_BOOKING'
+  | 'PROVIDE_CUSTOMER_DETAILS'
+  | 'GENERAL_QUESTION'
+  | 'UNKNOWN'
+
+type RentalSemanticField =
+  | 'pickup_location'
+  | 'dropoff_location'
+  | 'pickup_datetime'
+  | 'return_datetime'
+  | 'pickup_date'
+  | 'return_date'
+  | 'pickup_time'
+  | 'return_time'
+  | 'selected_vehicle'
+  | 'car_class'
+  | 'transmission'
+  | 'name'
+  | 'phone'
+  | 'email'
+
+type RentalSemanticRelation =
+  | { type: 'SAME_AS'; source: RentalSemanticField; target: RentalSemanticField }
+  | { type: 'SAME_LOCATION'; fields: RentalSemanticField[] }
+
+type RentalSemanticReference = {
+  expression?: string
+  resolved_to?: 'last_offered_location' | 'pickup_location' | 'dropoff_location' | 'last_offered_vehicle' | 'first_offered_vehicle' | 'cheapest_offered_vehicle' | 'ambiguous' | string
+  field?: RentalSemanticField
+}
+
+type RentalSemanticCorrection = {
+  field: RentalSemanticField
+  operation?: 'REPLACE' | 'CLEAR' | 'SET'
+}
+
+type RentalSemanticInterpretation = {
+  intent: RentalSemanticIntent
+  state_patch: Partial<Slots> & {
+    selected_vehicle_name?: string | null
+    pickup_time?: string | null
+    return_time?: string | null
+  }
+  relations: RentalSemanticRelation[]
+  references: RentalSemanticReference[]
+  corrections: RentalSemanticCorrection[]
+  question: string | null
+  confirmation: 'yes' | 'no' | null
+  confidence: number
+  source: 'llm' | 'fallback' | 'none'
+}
+
+const EMPTY_RENTAL_SEMANTICS: RentalSemanticInterpretation = {
+  intent: 'UNKNOWN',
+  state_patch: {},
+  relations: [],
+  references: [],
+  corrections: [],
+  question: null,
+  confirmation: null,
+  confidence: 0,
+  source: 'none',
+}
+
+function asRentalSemanticIntent(value: unknown): RentalSemanticIntent {
+  const allowed: RentalSemanticIntent[] = [
+    'START_RENTAL',
+    'UPDATE_RENTAL_DETAILS',
+    'CORRECT_RENTAL_DETAILS',
+    'ASK_AVAILABLE_VEHICLES',
+    'ASK_AVAILABLE_VEHICLES_BY_CLASS',
+    'SELECT_VEHICLE',
+    'ASK_LOCATION',
+    'ASK_PRICE',
+    'ASK_DEPOSIT',
+    'ASK_POLICY',
+    'CONFIRM_BOOKING',
+    'CANCEL_BOOKING',
+    'EXTEND_BOOKING',
+    'UPDATE_BOOKING',
+    'PROVIDE_CUSTOMER_DETAILS',
+    'GENERAL_QUESTION',
+    'UNKNOWN',
+  ]
+  return typeof value === 'string' && allowed.includes(value as RentalSemanticIntent) ? value as RentalSemanticIntent : 'UNKNOWN'
+}
+
+function asRentalSemanticField(value: unknown): RentalSemanticField | null {
+  const allowed: RentalSemanticField[] = [
+    'pickup_location',
+    'dropoff_location',
+    'pickup_datetime',
+    'return_datetime',
+    'pickup_date',
+    'return_date',
+    'pickup_time',
+    'return_time',
+    'selected_vehicle',
+    'car_class',
+    'transmission',
+    'name',
+    'phone',
+    'email',
+  ]
+  return typeof value === 'string' && allowed.includes(value as RentalSemanticField) ? value as RentalSemanticField : null
+}
+
+function rentalSemanticIntentToUserIntent(intent: RentalSemanticIntent): RentalUserIntent | 'NON_RENTAL' {
+  if (intent === 'ASK_LOCATION') return 'ASK_LOCATIONS'
+  if (intent === 'CONFIRM_BOOKING') return 'CONFIRM_BOOKING'
+  if (intent === 'ASK_PRICE' || intent === 'ASK_DEPOSIT') return 'ASK_PRICE'
+  if (intent === 'SELECT_VEHICLE') return 'SELECT_VEHICLE'
+  if (intent === 'ASK_AVAILABLE_VEHICLES' || intent === 'ASK_AVAILABLE_VEHICLES_BY_CLASS') return 'ASK_FLEET'
+  if (intent === 'PROVIDE_CUSTOMER_DETAILS') return 'PROVIDE_CONTACT'
+  if (intent === 'CORRECT_RENTAL_DETAILS' || intent === 'UPDATE_RENTAL_DETAILS') return 'CORRECTION'
+  if (intent === 'UNKNOWN' || intent === 'GENERAL_QUESTION') return 'OTHER'
+  return 'OTHER'
+}
+
+function normalizeSemanticInterpretation(value: unknown, source: RentalSemanticInterpretation['source']): RentalSemanticInterpretation {
+  const record = safeRecord(value)
+  const rawPatch = safeRecord(record.state_patch)
+  const state_patch: RentalSemanticInterpretation['state_patch'] = {}
+  const patchKeys: (keyof RentalSemanticInterpretation['state_patch'])[] = [
+    'name',
+    'phone',
+    'email',
+    'pickup_location',
+    'dropoff_location',
+    'pickup_date',
+    'return_date',
+    'pickup_datetime',
+    'return_datetime',
+    'selected_vehicle',
+    'selected_vehicle_name',
+    'car_class',
+    'transmission',
+    'pickup_time',
+    'return_time',
+  ]
+  for (const key of patchKeys) {
+    const next = strOrNull(rawPatch[key])
+    if (next) state_patch[key] = next
+  }
+  const relations: RentalSemanticRelation[] = Array.isArray(record.relations)
+    ? record.relations.flatMap((item): RentalSemanticRelation[] => {
+      const relation = safeRecord(item)
+      if (relation.type === 'SAME_AS') {
+        const sourceField = asRentalSemanticField(relation.source)
+        const targetField = asRentalSemanticField(relation.target)
+        return sourceField && targetField ? [{ type: 'SAME_AS' as const, source: sourceField, target: targetField }] : []
+      }
+      if (relation.type === 'SAME_LOCATION') {
+        const fields = Array.isArray(relation.fields)
+          ? relation.fields.map(asRentalSemanticField).filter(Boolean) as RentalSemanticField[]
+          : []
+        return fields.length >= 2 ? [{ type: 'SAME_LOCATION' as const, fields }] : []
+      }
+      return []
+    })
+    : []
+  const references = Array.isArray(record.references)
+    ? record.references.map(item => {
+      const ref = safeRecord(item)
+      return {
+        expression: strOrNull(ref.expression) ?? undefined,
+        resolved_to: strOrNull(ref.resolved_to) ?? undefined,
+        field: asRentalSemanticField(ref.field) ?? undefined,
+      }
+    })
+    : []
+  const corrections: RentalSemanticCorrection[] = Array.isArray(record.corrections)
+    ? record.corrections.flatMap((item): RentalSemanticCorrection[] => {
+      const correction = safeRecord(item)
+      const field = asRentalSemanticField(correction.field)
+      if (!field) return []
+      const operation: RentalSemanticCorrection['operation'] = correction.operation === 'CLEAR' || correction.operation === 'REPLACE' || correction.operation === 'SET'
+        ? correction.operation
+        : undefined
+      return [{ field, operation }]
+    })
+    : []
+  const confidence = typeof record.confidence === 'number'
+    ? Math.max(0, Math.min(1, record.confidence))
+    : Number.isFinite(Number(record.confidence)) ? Math.max(0, Math.min(1, Number(record.confidence))) : 0
+  const confirmation = record.confirmation === 'yes' || record.confirmation === 'no' ? record.confirmation : null
+  return {
+    intent: asRentalSemanticIntent(record.intent),
+    state_patch,
+    relations,
+    references,
+    corrections,
+    question: strOrNull(record.question),
+    confirmation,
+    confidence,
+    source,
+  }
+}
+
+function deterministicSemanticFallback(message: string, confirmed: Slots): RentalSemanticInterpretation {
+  const patch = extractFromText(message, confirmed)
+  if (patch.pickup_location && !normalizeRentalLocationText(patch.pickup_location, confirmed.pickup_location)) delete patch.pickup_location
+  if (patch.dropoff_location && !normalizeRentalLocationText(patch.dropoff_location, confirmed.pickup_location)) delete patch.dropoff_location
+  const intent = detectRentalUserIntent(message, confirmed)
+  const mapped: RentalSemanticIntent =
+    intent === 'ASK_LOCATIONS' ? 'ASK_LOCATION' :
+    intent === 'CONFIRM_BOOKING' ? 'CONFIRM_BOOKING' :
+    intent === 'ASK_PRICE' ? 'ASK_PRICE' :
+    intent === 'SELECT_VEHICLE' ? 'SELECT_VEHICLE' :
+    intent === 'ASK_FLEET' ? 'ASK_AVAILABLE_VEHICLES' :
+    intent === 'PROVIDE_CONTACT' ? 'PROVIDE_CUSTOMER_DETAILS' :
+    intent === 'CORRECTION' ? 'CORRECT_RENTAL_DETAILS' :
+    'UNKNOWN'
+  return {
+    ...EMPTY_RENTAL_SEMANTICS,
+    intent: mapped,
+    state_patch: patch,
+    confirmation: wantsRentalBookingConfirmation(message) ? 'yes' : null,
+    confidence: Object.keys(patch).length || mapped !== 'UNKNOWN' ? 0.55 : 0.2,
+    source: 'fallback',
+  }
+}
+
+function semanticRelationInvolvesLocation(semantics: RentalSemanticInterpretation) {
+  return semantics.relations.some(relation => {
+    if (relation.type === 'SAME_AS') return relation.source.includes('location') || relation.target.includes('location')
+    return relation.fields.some(field => field.includes('location'))
+  })
+}
+
+function latestAssistantOfferedVehicleNames(history: { role: string; content: string }[]) {
+  const lastAssistant = [...history].reverse().find(message => message.role === 'assistant')?.content ?? ''
+  const candidates = ['Skoda Superb', 'Toyota Corolla', 'Toyota Camry', 'BMW X5', 'Mercedes GLC']
+  return candidates.filter(name => new RegExp(`\\b${name.replace(/\s+/g, '\\s+')}\\b`, 'i').test(lastAssistant))
+}
+
+function resolveSemanticVehicleReference(semantics: RentalSemanticInterpretation, history: { role: string; content: string }[], toolResults: AgentToolResult[] = []) {
+  const fleet = toolResults.find(result => result.tool === 'searchFleet' && result.ok)?.data as { cars?: FleetReplyCar[] } | undefined
+  const cars: FleetReplyCar[] = fleet?.cars ?? latestAssistantOfferedVehicleNames(history).map(name => ({ name }))
+  if (!cars.length) return null
+  const firstReference = semantics.references.find(ref => ref.resolved_to === 'first_offered_vehicle')
+  if (firstReference) return cars[0]?.name ?? null
+  const cheaperReference = semantics.references.find(ref => ref.resolved_to === 'cheapest_offered_vehicle')
+  if (cheaperReference) {
+    const priced = cars.filter(car => typeof car.dailyPrice === 'number')
+    if (priced.length) return [...priced].sort((a, b) => Number(a.dailyPrice) - Number(b.dailyPrice))[0]?.name ?? null
+  }
+  return null
+}
+
+function copyRentalLocationField(next: Slots, source: RentalSemanticField, target: RentalSemanticField) {
+  if (source === 'pickup_location' && target === 'dropoff_location' && next.pickup_location) {
+    next.dropoff_location = next.pickup_location
+    next.dropoff_location_id = next.pickup_location_id
+  }
+  if (source === 'dropoff_location' && target === 'pickup_location' && next.dropoff_location) {
+    next.pickup_location = next.dropoff_location
+    next.pickup_location_id = next.dropoff_location_id
+  }
+}
+
+function mergeSemanticTimePatch(next: Slots, field: 'pickup_time' | 'return_time', value: string | null | undefined) {
+  if (!value) return
+  const normalized = value.match(/\b([01]?\d|2[0-3])(?::?([0-5]\d))?\b/)?.[0]
+  if (!normalized) return
+  const [hourRaw, minuteRaw = '00'] = normalized.includes(':') ? normalized.split(':') : [normalized, '00']
+  const hour = hourRaw.padStart(2, '0')
+  const minute = minuteRaw.padStart(2, '0')
+  const date = field === 'pickup_time'
+    ? next.pickup_date ?? next.pickup_datetime?.slice(0, 10)
+    : next.return_date ?? next.return_datetime?.slice(0, 10)
+  if (!date) return
+  const iso = `${date}T${hour}:${minute}:00+02:00`
+  if (field === 'pickup_time') next.pickup_datetime = iso
+  else next.return_datetime = iso
+}
+
+function reduceRentalState(
+  previous: Slots,
+  semantics: RentalSemanticInterpretation,
+  history: { role: string; content: string }[] = [],
+  toolResults: AgentToolResult[] = [],
+) {
+  const next: Slots = { ...previous }
+  const patch = semantics.state_patch
+  const patchMap: Partial<Record<keyof Slots, string | null | undefined>> = {
+    name: patch.name,
+    phone: patch.phone,
+    email: patch.email,
+    pickup_location: patch.pickup_location,
+    dropoff_location: patch.dropoff_location,
+    pickup_date: patch.pickup_date,
+    return_date: patch.return_date,
+    pickup_datetime: patch.pickup_datetime,
+    return_datetime: patch.return_datetime,
+    selected_vehicle: patch.selected_vehicle ?? patch.selected_vehicle_name,
+    car_class: patch.car_class,
+    transmission: patch.transmission,
+  }
+  for (const [key, value] of Object.entries(patchMap) as [keyof Slots, string | null | undefined][]) {
+    if (value) next[key] = value
+  }
+  mergeSemanticTimePatch(next, 'pickup_time', patch.pickup_time)
+  mergeSemanticTimePatch(next, 'return_time', patch.return_time)
+
+  for (const correction of semantics.corrections) {
+    if (correction.operation === 'CLEAR') {
+      if (correction.field === 'selected_vehicle') next.selected_vehicle = null
+      if (correction.field === 'pickup_location') {
+        next.pickup_location = null
+        next.pickup_location_id = null
+      }
+      if (correction.field === 'dropoff_location') {
+        next.dropoff_location = null
+        next.dropoff_location_id = null
+      }
+    }
+  }
+
+  for (const relation of semantics.relations) {
+    if (relation.type === 'SAME_AS') copyRentalLocationField(next, relation.source, relation.target)
+    if (relation.type === 'SAME_LOCATION' && relation.fields.includes('pickup_location') && relation.fields.includes('dropoff_location')) {
+      if (next.pickup_location) {
+        next.dropoff_location = next.pickup_location
+        next.dropoff_location_id = next.pickup_location_id
+      } else if (next.dropoff_location) {
+        next.pickup_location = next.dropoff_location
+        next.pickup_location_id = next.dropoff_location_id
+      }
+    }
+  }
+
+  if (!next.selected_vehicle) {
+    const referencedVehicle = resolveSemanticVehicleReference(semantics, history, toolResults)
+    if (referencedVehicle) next.selected_vehicle = referencedVehicle
+  }
+  return next
+}
+
+function semanticNeedsLocationTool(semantics: RentalSemanticInterpretation) {
+  return semantics.intent === 'ASK_LOCATION' ||
+    semanticRelationInvolvesLocation(semantics) ||
+    semantics.references.some(ref => ref.resolved_to === 'last_offered_location')
+}
+
 function detectRentalUserIntent(text: string, confirmed: Slots): RentalUserIntent {
   const lower = text.toLowerCase()
   if (/\b(?:what|which|where).{0,50}(?:pick\s*up|pickup|pick-up|drop\s*off|dropoff|return)?.{0,30}locations?\b/i.test(text) ||
@@ -904,24 +1266,110 @@ function wantsRentalBookingConfirmation(text: string) {
   return /\b(?:yes|yeah|yep|ok|okay|please|go ahead|confirm|create|book|reserve)\b/i.test(text)
 }
 
+type RentalToolLocation = { id?: string | null; name?: string | null; address?: string | null }
+
 function locationListFromTool(toolResults: AgentToolResult[]) {
   const locations = toolResults.find(result => result.tool === 'getLocations' && result.ok)
-  const data = locations?.data as { locations?: { name?: string | null; address?: string | null }[] } | undefined
+  const data = locations?.data as { locations?: RentalToolLocation[] } | undefined
   return data?.locations ?? []
+}
+
+function normalizedLocationLabel(location: RentalToolLocation) {
+  return Array.from(new Set([location.name, location.address].filter(Boolean))).join(', ') || 'the configured location'
+}
+
+function sameLocationIntent(text: string) {
+  return /\b(?:same\s+(?:as\s+)?(?:pick\s*up|pickup|drop\s*off|dropoff|place|location)|same place|same location|for both|both there|use (?:it|that location) for both|pickup and return there|pick\s*up and drop\s*off there|drop (?:it )?off there|return (?:it )?there|both at the same place)\b/i.test(text)
+}
+
+function dropoffSameAsPickupIntent(text: string) {
+  return /\b(?:drop\s*off|dropoff|return)(?:\s+\w+){0,4}\s+(?:same as|there|same place|same location)|same as pick\s*up|same as pickup|pickup and return there|pick\s*up and drop\s*off there|drop (?:it )?off there|return (?:it )?there\b/i.test(text)
+}
+
+function pickupSameAsDropoffIntent(text: string) {
+  return /\b(?:pick\s*up|pickup)(?:\s+\w+){0,4}\s+same as (?:drop\s*off|dropoff|return)|same as (?:drop\s*off|dropoff|return)\b/i.test(text)
+}
+
+function wantsBothLocations(text: string) {
+  return sameLocationIntent(text) && /\b(?:both|same|there|that location|it|pick\s*up|pickup|drop\s*off|dropoff|return)\b/i.test(text)
+}
+
+function locationMatchesText(location: RentalToolLocation, text: string | null | undefined) {
+  const wanted = text?.trim().toLowerCase()
+  if (!wanted) return false
+  const name = location.name?.trim().toLowerCase() ?? ''
+  const address = location.address?.trim().toLowerCase() ?? ''
+  return Boolean(
+    name && (name === wanted || name.includes(wanted) || wanted.includes(name)) ||
+    address && (address === wanted || address.includes(wanted) || wanted.includes(address))
+  )
 }
 
 function locationOptionsReply(toolResults: AgentToolResult[]) {
   const locations = locationListFromTool(toolResults)
   if (locations.length === 1) {
     const location = locations[0]
-    const label = Array.from(new Set([location.name, location.address].filter(Boolean))).join(', ') || 'the configured location'
+    const label = normalizedLocationLabel(location)
     return `We currently offer pickup at ${label}. You can also return the car there. Would you like me to use that location for both pickup and drop-off?`
   }
   if (locations.length > 1) {
-    const listed = locations.map(location => Array.from(new Set([location.name, location.address].filter(Boolean))).join(', ')).join('; ')
+    const listed = locations.map(location => normalizedLocationLabel(location)).join('; ')
     return `We currently offer these pickup and drop-off locations: ${listed}. Which pickup and return location should I use?`
   }
   return 'I can help set the pickup and drop-off location. Which location should I use for pickup and return?'
+}
+
+function applyConfiguredLocationAcceptance(confirmed: Slots, userMessage: string, toolResults: AgentToolResult[], semantics: RentalSemanticInterpretation = EMPTY_RENTAL_SEMANTICS) {
+  const locations = locationListFromTool(toolResults)
+  if (!locations.length) return confirmed
+  const next: Slots = { ...confirmed }
+  const acceptedBoth =
+    semantics.intent === 'UPDATE_RENTAL_DETAILS' && semanticRelationInvolvesLocation(semantics) ||
+    semantics.references.some(ref => ref.resolved_to === 'last_offered_location') ||
+    wantsBothLocations(userMessage) ||
+    detectRentalUserIntent(userMessage, confirmed) === 'ACCEPT_LOCATION'
+  const singleOffered = locations.length === 1 ? locations[0] : null
+  const pickupMatch = locations.find(location => locationMatchesText(location, next.pickup_location))
+  const dropoffMatch = locations.find(location => locationMatchesText(location, next.dropoff_location))
+  const acceptedLocation = singleOffered && (acceptedBoth || isLocationAffirmation(userMessage)) ? singleOffered : null
+
+  if (acceptedLocation && acceptedBoth) {
+    const label = normalizedLocationLabel(acceptedLocation)
+    next.pickup_location = label
+    next.dropoff_location = label
+    next.pickup_location_id = acceptedLocation.id ?? next.pickup_location_id
+    next.dropoff_location_id = acceptedLocation.id ?? next.dropoff_location_id
+    return next
+  }
+
+  if (pickupMatch && !next.pickup_location_id) next.pickup_location_id = pickupMatch.id ?? null
+  if (dropoffMatch && !next.dropoff_location_id) next.dropoff_location_id = dropoffMatch.id ?? null
+
+  const semanticDropoffSamePickup = semantics.relations.some(relation =>
+    relation.type === 'SAME_AS' && relation.source === 'pickup_location' && relation.target === 'dropoff_location' ||
+    relation.type === 'SAME_LOCATION' && relation.fields.includes('pickup_location') && relation.fields.includes('dropoff_location'),
+  )
+  const semanticPickupSameDropoff = semantics.relations.some(relation =>
+    relation.type === 'SAME_AS' && relation.source === 'dropoff_location' && relation.target === 'pickup_location' ||
+    relation.type === 'SAME_LOCATION' && relation.fields.includes('pickup_location') && relation.fields.includes('dropoff_location'),
+  )
+
+  if ((semanticDropoffSamePickup || dropoffSameAsPickupIntent(userMessage) || acceptedBoth) && next.pickup_location && !next.dropoff_location) {
+    next.dropoff_location = next.pickup_location
+    next.dropoff_location_id = next.pickup_location_id ?? pickupMatch?.id ?? null
+  }
+  if ((semanticPickupSameDropoff || pickupSameAsDropoffIntent(userMessage) || acceptedBoth) && next.dropoff_location && !next.pickup_location) {
+    next.pickup_location = next.dropoff_location
+    next.pickup_location_id = next.dropoff_location_id ?? dropoffMatch?.id ?? null
+  }
+  if (next.pickup_location && next.dropoff_location && next.pickup_location === next.dropoff_location) {
+    const match = pickupMatch ?? dropoffMatch ?? acceptedLocation
+    if (match?.id) {
+      next.pickup_location_id = next.pickup_location_id ?? match.id
+      next.dropoff_location_id = next.dropoff_location_id ?? match.id
+    }
+  }
+  return next
 }
 
 function deterministicRentalNextActionReply(
@@ -966,7 +1414,7 @@ function deterministicRentalNextActionReply(
 }
 
 function isLocationAffirmation(text: string) {
-  return /\b(yes|yeah|yep|ok|okay|fine|correct|that location|same location|works|sounds good)\b/i.test(text)
+  return /\b(yes|yeah|yep|ok|okay|fine|correct|that location|same location|same place|for both|both there|works|sounds good)\b/i.test(text) || sameLocationIntent(text)
 }
 
 function assistantAskedForName(history: { role: string; content: string }[]) {
@@ -1037,6 +1485,8 @@ function buildConfirmedSlots(
     viewing_time:  strOrNull(canonical.viewing_time) ?? strOrNull(meta.viewing_time),
     pickup_location: strOrNull(canonical.pickup_location) ?? strOrNull(meta.pickup_location),
     dropoff_location: strOrNull(canonical.dropoff_location) ?? strOrNull(meta.dropoff_location),
+    pickup_location_id: strOrNull(canonical.pickup_location_id) ?? strOrNull(meta.pickup_location_id),
+    dropoff_location_id: strOrNull(canonical.dropoff_location_id) ?? strOrNull(meta.dropoff_location_id),
     pickup_date: strOrNull(canonical.pickup_date) ?? strOrNull(meta.pickup_date),
     return_date: strOrNull(canonical.return_date) ?? strOrNull(meta.return_date),
     pickup_datetime: strOrNull(canonical.pickup_datetime) ?? strOrNull(meta.pickup_datetime),
@@ -1073,7 +1523,13 @@ function buildConfirmedSlots(
     const suggestedLocation = latestAssistantSuggestedLocation(history)
     if (suggestedLocation) {
       extracted.pickup_location = suggestedLocation
-      if (/\b(?:both|same|there|that location|it)\b/i.test(currentMsg)) extracted.dropoff_location = suggestedLocation
+      if (wantsBothLocations(currentMsg)) {
+        extracted.dropoff_location = suggestedLocation
+        if (fromDB.pickup_location_id) {
+          extracted.pickup_location_id = fromDB.pickup_location_id
+          extracted.dropoff_location_id = fromDB.pickup_location_id
+        }
+      }
     }
   }
   if (!currentExtracted.pickup_location && mentionsCanonicalRentalLocation(currentMsg) && /\bpick\s*up\b/i.test(currentMsg)) {
@@ -1083,9 +1539,17 @@ function buildConfirmedSlots(
     extracted.pickup_location = 'Kraków Bocheńska 2a'
     extracted.dropoff_location = 'Kraków Bocheńska 2a'
   }
-  if (!currentExtracted.dropoff_location && /\b(?:same as pick\s*up|same as pickup|same pickup|same location|there|your location|the location)\b/i.test(currentMsg)) {
+  if (!currentExtracted.dropoff_location && (dropoffSameAsPickupIntent(currentMsg) || /\b(?:same as pick\s*up|same as pickup|same pickup|same location|same place|there|your location|the location)\b/i.test(currentMsg))) {
     const pickupLocation = extracted.pickup_location ?? fromDB.pickup_location
     if (pickupLocation) extracted.dropoff_location = pickupLocation
+    const pickupLocationId = extracted.pickup_location_id ?? fromDB.pickup_location_id
+    if (pickupLocationId) extracted.dropoff_location_id = pickupLocationId
+  }
+  if (!currentExtracted.pickup_location && pickupSameAsDropoffIntent(currentMsg)) {
+    const dropoffLocation = extracted.dropoff_location ?? fromDB.dropoff_location
+    if (dropoffLocation) extracted.pickup_location = dropoffLocation
+    const dropoffLocationId = extracted.dropoff_location_id ?? fromDB.dropoff_location_id
+    if (dropoffLocationId) extracted.pickup_location_id = dropoffLocationId
   }
   if (!currentExtracted.dropoff_location && /\bboche[ńn]ska\s*2a\b/i.test(currentMsg)) {
     extracted.dropoff_location = 'Kraków Bocheńska 2a'
@@ -1099,6 +1563,16 @@ function buildConfirmedSlots(
     const normalized = normalizeRentalLocationText(extracted.dropoff_location, extracted.pickup_location ?? fromDB.pickup_location ?? null)
     if (normalized) extracted.dropoff_location = normalized
     else delete extracted.dropoff_location
+  }
+  if (
+    (extracted.pickup_location ?? fromDB.pickup_location) &&
+    (extracted.pickup_location ?? fromDB.pickup_location) === (extracted.dropoff_location ?? fromDB.dropoff_location)
+  ) {
+    const sharedId = extracted.pickup_location_id ?? fromDB.pickup_location_id ?? extracted.dropoff_location_id ?? fromDB.dropoff_location_id
+    if (sharedId) {
+      extracted.pickup_location_id = sharedId
+      extracted.dropoff_location_id = sharedId
+    }
   }
 
   // Stable identity fields keep DB continuity; operational rental fields use
@@ -1119,6 +1593,8 @@ function buildConfirmedSlots(
     viewing_time:  fromDB.viewing_time  ?? extracted.viewing_time  ?? null,
     pickup_location: extracted.pickup_location ?? fromDB.pickup_location ?? null,
     dropoff_location: extracted.dropoff_location ?? fromDB.dropoff_location ?? null,
+    pickup_location_id: extracted.pickup_location_id ?? fromDB.pickup_location_id ?? null,
+    dropoff_location_id: extracted.dropoff_location_id ?? fromDB.dropoff_location_id ?? null,
     pickup_date: extracted.pickup_date ?? fromDB.pickup_date ?? null,
     return_date: extracted.return_date ?? fromDB.return_date ?? null,
     pickup_datetime: extracted.pickup_datetime ?? fromDB.pickup_datetime ?? null,
@@ -1348,6 +1824,9 @@ function guardReply(
   confirmed: Slots,
   missing:   SlotDef[],
 ): { reply: string; blocked: boolean } {
+  reply = (confirmed.pickup_datetime || confirmed.return_datetime)
+    ? replaceRentalIsoDateTimes(reply, confirmed)
+    : reply
   for (const check of REPEAT_CHECKS) {
     const allConfirmed = check.keys.every(k => !!confirmed[k])
     if (!allConfirmed) continue
@@ -1445,6 +1924,18 @@ function formatCustomerRentalWindow(pickupAt: string | null | undefined, returnA
   return ''
 }
 
+function replaceRentalIsoDateTimes(reply: string, confirmed: Slots) {
+  let next = reply
+  const replacements = [
+    [confirmed.pickup_datetime, formatCustomerDateTime(confirmed.pickup_datetime)],
+    [confirmed.return_datetime, formatCustomerDateTime(confirmed.return_datetime)],
+  ] as const
+  for (const [raw, formatted] of replacements) {
+    if (raw && formatted) next = next.split(raw).join(formatted)
+  }
+  return next.replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:[+-]\d{2}:\d{2}|Z)?\b/g, value => formatCustomerDateTime(value) ?? value)
+}
+
 function formatPln(value: unknown) {
   const amount = Number(value)
   if (!Number.isFinite(amount)) return null
@@ -1502,9 +1993,12 @@ function formatAvailabilityReply(availability: AgentToolResult, confirmed: Slots
 
 function locationAcceptanceReply(confirmed: Slots, missing: SlotDef[], userMessage: string) {
   if (!confirmed.pickup_location || !confirmed.dropoff_location) return null
-  if (!mentionsCanonicalRentalLocation(userMessage) && !/\b(?:same as pick\s*up|same as pickup|same location|there|your location|the location)\b/i.test(userMessage)) return null
+  if (!mentionsCanonicalRentalLocation(userMessage) && !sameLocationIntent(userMessage) && !/\b(?:same as pick\s*up|same as pickup|same location|there|your location|the location)\b/i.test(userMessage)) return null
   const missingKeys = new Set(missing.map(field => field.key))
-  const prefix = 'Perfect — pickup and drop-off will be at Bocheńska 2a in Kraków.'
+  const sameLocation = confirmed.pickup_location === confirmed.dropoff_location
+  const prefix = sameLocation
+    ? `Perfect — pickup and return will both be at ${confirmed.pickup_location}.`
+    : `Perfect — pickup will be at ${confirmed.pickup_location} and return will be at ${confirmed.dropoff_location}.`
   if (missingKeys.has('selected_vehicle') || missingKeys.has('car_class')) return `${prefix} What type of car would you prefer?`
   if (missingKeys.has('pickup_datetime') || missingKeys.has('return_datetime')) return `${prefix} What pickup date and time should I use, and what return date and time should I use?`
   if (missingKeys.has('name')) return `${prefix} Could you please provide your name?`
@@ -1525,8 +2019,10 @@ function rentalToolReplyOverride(
   if (missingDropoff && /\b(?:return|date|time|automatic|manual|correct|wrong|preferred)\b/i.test(userMessage)) {
     const pieces = ['Thanks, I updated the rental details.']
     if (confirmed.selected_vehicle) pieces.push(`Vehicle: ${confirmed.selected_vehicle}.`)
-    if (confirmed.pickup_datetime) pieces.push(`Pickup: ${confirmed.pickup_datetime}.`)
-    if (confirmed.return_datetime) pieces.push(`Return: ${confirmed.return_datetime}.`)
+    const pickup = formatCustomerDateTime(confirmed.pickup_datetime)
+    const dropoff = formatCustomerDateTime(confirmed.return_datetime)
+    if (pickup) pieces.push(`Pickup: ${pickup}.`)
+    if (dropoff) pieces.push(`Return: ${dropoff}.`)
     if (confirmed.transmission) pieces.push(`Transmission: ${confirmed.transmission}.`)
     pieces.push('I still need the drop-off location before I can check final availability and create the booking.')
     return pieces.join(' ')
@@ -1561,9 +2057,16 @@ function rentalToolReplyOverride(
     const priceLine = price?.ok ? formatPriceReply(price, userMessage) : null
     const deposit = price?.ok ? formatPln((price.data as { deposit?: number } | undefined)?.deposit) : null
     const window = formatCustomerRentalWindow(confirmed.pickup_datetime, confirmed.return_datetime)
+    const status = String(data.status ?? '').toLowerCase()
+    const opening = status === 'confirmed'
+      ? `Your booking is confirmed. Reference: ${data.bookingNumber}.`
+      : `Your booking request has been created successfully. Reference: ${data.bookingNumber}.`
+    const reservationLine = status === 'confirmed'
+      ? `${selected} is reserved${window ? ` ${window}` : ''}.`
+      : `${selected} is requested${window ? ` ${window}` : ''}.`
     return [
-      `Your booking is confirmed. Reference: ${data.bookingNumber}.`,
-      `${selected} is reserved${window ? ` ${window}` : ''}.`,
+      opening,
+      reservationLine,
       priceLine ? priceLine.split(' Deposit:')[0] : null,
       deposit ? `Deposit: ${deposit}.` : null,
       'Payment and deposit will be handled at pickup.',
@@ -1688,8 +2191,16 @@ export const __testRentalChatHelpers = {
   rentalToolReplyOverride,
   deterministicRentalNextActionReply,
   detectRentalUserIntent,
+  applyConfiguredLocationAcceptance,
+  sameLocationIntent,
+  dropoffSameAsPickupIntent,
+  normalizeSemanticInterpretation,
+  reduceRentalState,
+  semanticNeedsLocationTool,
+  rentalSemanticIntentToUserIntent,
   slotsFromConversationAgentState,
   normalizeRentalLocationText,
+  replaceRentalIsoDateTimes,
   plainNameAnswer,
   looksMidSentence,
 }
@@ -1856,6 +2367,81 @@ async function callGemini(
   throw lastIncomplete ?? new GeminiIncompleteResponseError('Gemini response did not finish cleanly.', 'INCOMPLETE_RESPONSE', null)
 }
 
+async function interpretRentalSemanticsWithGemini(input: {
+  model: string
+  agent: AgentRow
+  currentState: Slots
+  history: { role: 'user' | 'assistant'; content: string }[]
+  userMessage: string
+  qualificationStage: string
+  missing: SlotDef[]
+  correlationId: string
+}): Promise<RentalSemanticInterpretation | null> {
+  const apiKey = process.env.GEMINI_API_KEY
+  if (!apiKey || !isGeminiModel(input.model)) return null
+  const recentHistory = input.history.slice(-10)
+  const prompt = [
+    'You are the semantic interpreter for a car-rental operations agent.',
+    'Do not write a customer-facing reply.',
+    'Return only JSON matching this shape:',
+    '{"intent":"...","state_patch":{},"relations":[],"references":[],"corrections":[],"question":null,"confirmation":null,"confidence":0.0}',
+    'Let language understanding be broad and contextual. Do not require exact phrases.',
+    'Use relations for contextual references, for example SAME_AS pickup_location -> dropoff_location.',
+    'Use references for "first one", "cheaper one", "there", "that place", and similar contextual references.',
+    'Never invent database IDs. Vehicle/location names are allowed; IDs are backend-only.',
+    'If the message is ambiguous, set intent UNKNOWN or GENERAL_QUESTION with low confidence.',
+    'Configured bot instructions for tone/context:',
+    `${input.agent.persona ?? ''}\n${input.agent.objective ?? ''}\nTone: ${input.agent.tone ?? ''}`.trim(),
+    `Workflow stage: ${input.qualificationStage}`,
+    `Missing fields: ${input.missing.map(field => field.key).join(', ') || 'none'}`,
+    `Current canonical state JSON: ${JSON.stringify(input.currentState)}`,
+    `Recent history JSON: ${JSON.stringify(recentHistory)}`,
+    `Latest customer message: ${input.userMessage}`,
+  ].join('\n\n')
+  const controller = new AbortController()
+  const startedAt = Date.now()
+  const timeout = setTimeout(() => controller.abort(), 12_000)
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 500,
+          responseMimeType: 'application/json',
+        },
+      }),
+    })
+    const payload = await res.json().catch(() => null) as {
+      candidates?: Array<{ finishReason?: string; content?: { parts?: Array<{ text?: string }> } }>
+      error?: { message?: string; status?: string; code?: number }
+    } | null
+    const candidate = payload?.candidates?.[0]
+    const text = candidate?.content?.parts?.map(part => part.text ?? '').join('').trim() ?? ''
+    console.log('[SEMANTIC_DIAG] rental interpreter response', {
+      correlation_id: input.correlationId,
+      finish_reason: candidate?.finishReason ?? null,
+      output_chars: text.length,
+      latency_ms: Date.now() - startedAt,
+    })
+    if (!res.ok || !text || candidate?.finishReason && !['STOP', 'FINISH_REASON_UNSPECIFIED'].includes(candidate.finishReason)) return null
+    const parsed = JSON.parse(text) as unknown
+    return normalizeSemanticInterpretation(parsed, 'llm')
+  } catch (error) {
+    console.warn('[SEMANTIC_DIAG] rental interpreter fallback', {
+      correlation_id: input.correlationId,
+      message: error instanceof Error ? error.message : String(error),
+      latency_ms: Date.now() - startedAt,
+    })
+    return null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 async function callAIProvider(
   client: OpenAI,
   model: string,
@@ -1869,6 +2455,59 @@ async function callAIProvider(
     return callGemini(model, temperature, systemPrompt, history, userMessage, correlationId)
   }
   return callOpenAI(client, model, temperature, systemPrompt, history, userMessage)
+}
+
+async function generateRentalNaturalReply(input: {
+  agent: AgentRow
+  draftReply: string
+  userMessage: string
+  semantics: RentalSemanticInterpretation
+  confirmed: Slots
+  missing: SlotDef[]
+  toolResults: AgentToolResult[]
+  history: { role: 'user' | 'assistant'; content: string }[]
+  correlationId: string
+}) {
+  if (!isGeminiModel(input.agent.model) || input.semantics.source !== 'llm') return null
+  const toolBlock = formatToolResultsForPrompt(input.toolResults)
+  const systemPrompt = [
+    'You generate the final customer-facing reply for a car-rental operations assistant.',
+    'The backend state and tool results below are authoritative. Do not invent availability, prices, booking references, statuses, vehicle IDs, or location IDs.',
+    'Use the configured bot instructions for tone and language, but safety/business facts override style.',
+    'Do not expose ISO datetimes, raw tool errors, internal IDs, JSON, or backend diagnostics.',
+    'Do not ask for information already present in canonical state.',
+    'If the operational draft says a booking request was created, keep the same status meaning unless the tool result says confirmed.',
+    `Bot instructions:\n${input.agent.persona ?? ''}\n${input.agent.objective ?? ''}\nTone: ${input.agent.tone ?? ''}`,
+    `Canonical state JSON:\n${JSON.stringify(input.confirmed)}`,
+    `Semantic interpretation JSON:\n${JSON.stringify(input.semantics)}`,
+    `Missing fields: ${input.missing.map(field => field.key).join(', ') || 'none'}`,
+    `Tool results:\n${toolBlock || '(none)'}`,
+    `Operational draft to preserve factually:\n${input.draftReply}`,
+  ].join('\n\n')
+  const startedAt = Date.now()
+  try {
+    const reply = await callGemini(
+      input.agent.model,
+      Math.min(input.agent.temperature ?? 0.3, 0.4),
+      systemPrompt,
+      input.history.slice(-8),
+      input.userMessage,
+      `${input.correlationId}:response`,
+    )
+    console.log('[SEMANTIC_DIAG] rental response generator accepted', {
+      correlation_id: input.correlationId,
+      latency_ms: Date.now() - startedAt,
+      output_chars: reply.length,
+    })
+    return reply
+  } catch (error) {
+    console.warn('[SEMANTIC_DIAG] rental response generator fallback', {
+      correlation_id: input.correlationId,
+      message: error instanceof Error ? error.message : String(error),
+      latency_ms: Date.now() - startedAt,
+    })
+    return null
+  }
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -2771,10 +3410,28 @@ export async function POST(req: NextRequest) {
   const canonicalConversationSlots = slotsFromConversationAgentState(latestConversationMetadata)
   let confirmed            = buildConfirmedSlots(existingLead, history, messageText, canonicalConversationSlots)
   confirmed                = await hydrateSelectedRentalVehicle(sb, businessId, confirmed, businessType)
-  const missing            = computeMissingSlots(confirmed, slotDefs)
-  const qualificationStage = computeQualificationStage(confirmed, missing)
+  let missing              = computeMissingSlots(confirmed, slotDefs)
+  let qualificationStage   = computeQualificationStage(confirmed, missing)
+  let rentalSemantics: RentalSemanticInterpretation = EMPTY_RENTAL_SEMANTICS
+  if (normalizeBusinessType(businessType) === 'car_rental') {
+    const interpreted = await interpretRentalSemanticsWithGemini({
+      model: agent.model,
+      agent,
+      currentState: confirmed,
+      history: history.map(r => ({ role: r.role === 'assistant' ? 'assistant' : 'user', content: r.content })),
+      userMessage: messageText,
+      qualificationStage,
+      missing,
+      correlationId: turnId,
+    })
+    rentalSemantics = interpreted ?? deterministicSemanticFallback(messageText, confirmed)
+    const reduced = reduceRentalState(confirmed, rentalSemantics, history.map(r => ({ role: r.role === 'assistant' ? 'assistant' : 'user', content: r.content })))
+    confirmed = await hydrateSelectedRentalVehicle(sb, businessId, reduced, businessType)
+    missing = computeMissingSlots(confirmed, slotDefs)
+    qualificationStage = computeQualificationStage(confirmed, missing)
+  }
   const rentalUserIntent: RentalUserIntent | 'NON_RENTAL' = normalizeBusinessType(businessType) === 'car_rental'
-    ? detectRentalUserIntent(messageText, confirmed)
+    ? rentalSemanticIntentToUserIntent(rentalSemantics.intent)
     : 'NON_RENTAL'
   await persistConversationAgentState(convId, confirmed, missing, qualificationStage, rentalUserIntent)
 
@@ -2817,8 +3474,22 @@ export async function POST(req: NextRequest) {
     businessType,
     conversationId: convId,
     message: messageText,
+    semanticIntent: rentalSemantics.intent,
     slots: confirmed,
   })
+  if (normalizeBusinessType(businessType) === 'car_rental' && operationalToolResults.some(result => result.tool === 'getLocations' && result.ok)) {
+    const mergedLocations = applyConfiguredLocationAcceptance(confirmed, messageText, operationalToolResults, rentalSemantics)
+    if (
+      mergedLocations.pickup_location !== confirmed.pickup_location ||
+      mergedLocations.dropoff_location !== confirmed.dropoff_location ||
+      mergedLocations.pickup_location_id !== confirmed.pickup_location_id ||
+      mergedLocations.dropoff_location_id !== confirmed.dropoff_location_id
+    ) {
+      confirmed = mergedLocations
+      missing = computeMissingSlots(confirmed, slotDefs)
+      qualificationStage = computeQualificationStage(confirmed, missing)
+    }
+  }
   if (operationalToolResults.length > 0 || normalizeBusinessType(businessType) === 'car_rental') {
     await persistConversationAgentState(convId, confirmed, missing, qualificationStage, rentalUserIntent, operationalToolResults)
   }
@@ -2952,7 +3623,18 @@ export async function POST(req: NextRequest) {
     rentalClarificationReply(confirmed, missing, businessType, messageText)
 
   if (deterministicRentalReply) {
-    const { reply: finalReply, blocked } = guardReply(deterministicRentalReply, confirmed, missing)
+    const naturalReply = await generateRentalNaturalReply({
+      agent,
+      draftReply: deterministicRentalReply,
+      userMessage: messageText,
+      semantics: rentalSemantics,
+      confirmed,
+      missing,
+      toolResults: operationalToolResults,
+      history: history.map(r => ({ role: r.role === 'assistant' ? 'assistant' as const : 'user' as const, content: r.content })),
+      correlationId: turnId,
+    })
+    const { reply: finalReply, blocked } = guardReply(naturalReply ?? deterministicRentalReply, confirmed, missing)
     const assistantInsert = await insertMessageOnce({
       conversationId: convId,
       businessId,
@@ -3285,8 +3967,10 @@ async function persistLead(
     const carPart = confirmed.selected_vehicle ?? (confirmed.car_class ? `${confirmed.car_class} car` : 'car rental')
     const pickupPart = confirmed.pickup_location ? ` from ${confirmed.pickup_location}` : ''
     const dropoffPart = confirmed.dropoff_location ? ` to ${confirmed.dropoff_location}` : ''
+    const pickupDisplay = formatCustomerDateTime(confirmed.pickup_datetime) ?? 'pickup TBD'
+    const returnDisplay = formatCustomerDateTime(confirmed.return_datetime) ?? 'return TBD'
     const datesPart = confirmed.pickup_datetime || confirmed.return_datetime
-      ? `, ${confirmed.pickup_datetime ?? 'pickup TBD'} to ${confirmed.return_datetime ?? 'return TBD'}`
+      ? `, ${pickupDisplay} to ${returnDisplay}`
       : ''
     summary = `${namePart} asked about ${carPart}${pickupPart}${dropoffPart}${datesPart}.`
   } else if (namePart && normalizedBusinessType === 'real_estate') {
@@ -3337,6 +4021,8 @@ async function persistLead(
       ...(confirmed.viewing_time  && { viewing_time:  confirmed.viewing_time  }),
       ...(confirmed.pickup_location && { pickup_location: confirmed.pickup_location }),
       ...(confirmed.dropoff_location && { dropoff_location: confirmed.dropoff_location }),
+      ...(confirmed.pickup_location_id && { pickup_location_id: confirmed.pickup_location_id }),
+      ...(confirmed.dropoff_location_id && { dropoff_location_id: confirmed.dropoff_location_id }),
       ...(confirmed.pickup_date && { pickup_date: confirmed.pickup_date }),
       ...(confirmed.return_date && { return_date: confirmed.return_date }),
       ...(confirmed.pickup_datetime && { pickup_datetime: confirmed.pickup_datetime }),

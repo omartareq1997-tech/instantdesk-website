@@ -5522,14 +5522,16 @@ function RentalOperationsSection() {
                   <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
                     <h4 className="text-sm font-black text-white">Booked intervals</h4>
                     <div className="mt-3 max-h-80 space-y-3 overflow-y-auto pr-1">
-                      {calendarLoading ? (
+                      {calendarLoading && (
                         <div className="space-y-3">
                           <div className="h-20 animate-pulse rounded-xl bg-white/[0.04]" />
                           <div className="h-20 animate-pulse rounded-xl bg-white/[0.04]" />
                         </div>
-                      ) : activeCalendarBookings.length === 0 ? (
+                      )}
+                      {!calendarLoading && activeCalendarBookings.length === 0 && nonBlockingCalendarBookings.length === 0 && (
                         <p className="text-sm text-white/42">No bookings for this car.</p>
-                      ) : activeCalendarBookings.map(booking => (
+                      )}
+                      {!calendarLoading && activeCalendarBookings.map(booking => (
                         <div key={booking.id} className="rounded-xl border border-white/8 bg-black/20 p-3">
                           <div className="flex items-center justify-between gap-3">
                             <p className="text-sm font-black text-white">{bookingCustomerName(booking)}</p>
@@ -5540,7 +5542,7 @@ function RentalOperationsSection() {
                           <p className="mt-2 text-xs text-white/36">{booking.customerPhone ?? 'No phone'} · {booking.pickupLocation ?? 'Pickup'} → {booking.dropoffLocation ?? 'Drop-off'}</p>
                         </div>
                       ))}
-                      {nonBlockingCalendarBookings.length > 0 && (
+                      {!calendarLoading && nonBlockingCalendarBookings.length > 0 && (
                         <div className="rounded-xl border border-white/8 bg-white/[0.02] p-3">
                           <p className="text-xs font-black uppercase tracking-[0.14em] text-white/38">Past / cancelled bookings</p>
                           <div className="mt-3 space-y-2">

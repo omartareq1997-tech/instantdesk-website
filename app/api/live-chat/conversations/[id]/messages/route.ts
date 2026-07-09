@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '../../../../../lib/supabase-server'
 import { getSessionBusinessId } from '../../../../../lib/getSessionBusinessId'
 import { markConversationStatus } from '../../../../../lib/live-chat'
+import { cookies } from 'next/headers'
+import { MEMBER_COOKIE_NAME, verifyMemberToken } from '../../../../../lib/auth'
 
 export const dynamic = 'force-dynamic'
 const MAX_HUMAN_MESSAGE_LENGTH = 4000
@@ -46,13 +48,33 @@ function unauthorized() {
   return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
 }
 
+async function resolveConversationBusinessId(request: NextRequest, fallbackBusinessId: string, sb: ReturnType<typeof createAdminClient>) {
+  const requestedBusinessId = new URL(request.url).searchParams.get('business_id')
+  if (!requestedBusinessId || requestedBusinessId === fallbackBusinessId) return fallbackBusinessId
+  try {
+    const rawToken = (await cookies()).get(MEMBER_COOKIE_NAME)?.value
+    const member = await verifyMemberToken(rawToken)
+    if (!member?.id) return fallbackBusinessId
+    const { data } = await sb
+      .from('team_members')
+      .select('client_id')
+      .eq('id', member.id)
+      .maybeSingle()
+    const row = data as { client_id?: string | null } | null
+    if (row?.client_id === requestedBusinessId) return requestedBusinessId
+  } catch {
+    return fallbackBusinessId
+  }
+  return fallbackBusinessId
+}
+
 export async function GET(request: NextRequest, context: RouteContext<'/api/live-chat/conversations/[id]/messages'>) {
   const { id } = await context.params
   const since = new URL(request.url).searchParams.get('since')
   const session = await getSessionBusinessId()
   if (!session.fromSession) return unauthorized()
-  const { businessId } = session
   const sb = createAdminClient()
+  const businessId = await resolveConversationBusinessId(request, session.businessId, sb)
 
   const { data: conversation, error: convError } = await sb
     .from('conversations')
@@ -63,15 +85,6 @@ export async function GET(request: NextRequest, context: RouteContext<'/api/live
 
   if (convError) return NextResponse.json({ error: convError.message }, { status: 500 })
   if (!conversation) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
-
-  await sb.from('conversations').update({ unread_count: 0 }).eq('id', id).eq('business_id', businessId)
-  await sb
-    .from('messages')
-    .update({ read_at: new Date().toISOString() })
-    .eq('conversation_id', id)
-    .eq('business_id', businessId)
-    .eq('role', 'user')
-    .is('read_at', null)
 
   let query = sb
     .from('messages')
@@ -93,7 +106,17 @@ export async function GET(request: NextRequest, context: RouteContext<'/api/live
 
   const { data, error } = messagesResult
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ messages: data ?? [], conversation })
+  void Promise.all([
+    sb.from('conversations').update({ unread_count: 0 }).eq('id', id).eq('business_id', businessId),
+    sb
+      .from('messages')
+      .update({ read_at: new Date().toISOString() })
+      .eq('conversation_id', id)
+      .eq('business_id', businessId)
+      .eq('role', 'user')
+      .is('read_at', null),
+  ]).catch(error => console.warn('[LiveChatMessages] read receipt update failed', error))
+  return NextResponse.json({ messages: data ?? [], conversation }, { headers: { 'Cache-Control': 'no-store' } })
 }
 
 export async function POST(request: NextRequest, context: RouteContext<'/api/live-chat/conversations/[id]/messages'>) {

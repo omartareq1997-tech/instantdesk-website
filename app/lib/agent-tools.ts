@@ -35,6 +35,8 @@ export type AgentToolContext = {
     booking_number?: string | null
     pickup_location?: string | null
     dropoff_location?: string | null
+    pickup_date?: string | null
+    return_date?: string | null
     pickup_datetime?: string | null
     return_datetime?: string | null
     selected_vehicle?: string | null

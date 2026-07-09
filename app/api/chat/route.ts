@@ -81,6 +81,8 @@ interface Slots {
   viewing_time:  string | null
   pickup_location: string | null
   dropoff_location: string | null
+  pickup_date: string | null
+  return_date: string | null
   pickup_datetime: string | null
   return_datetime: string | null
   selected_vehicle: string | null
@@ -137,6 +139,16 @@ interface AttachmentPayload {
   type?: unknown
   size?: unknown
   dataUrl?: unknown
+}
+
+type PersistedChatMessage = {
+  id: string
+  role: string
+  content: string
+  created_at?: string | null
+  read_at?: string | null
+  delivery_status?: string | null
+  metadata?: Record<string, unknown> | null
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -213,6 +225,19 @@ function hasAnySlot(s: Slots): boolean {
 
 function hasMeaningfulSlot(s: Slots): boolean {
   return Object.values(s).some(Boolean)
+}
+
+function looksMidSentence(text: string) {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  if (/[.!?。！？)"'\]]$/.test(trimmed)) return false
+  if (trimmed.length < 24) return true
+  const tail = trimmed.split(/\s+/).slice(-5).join(' ').toLowerCase()
+  return /\b(?:at|to|from|until|and|or|the|a|an|your|my|our|would you like me|you mentioned pickup)\b$/.test(tail)
+}
+
+function safeAiFallback(agent?: Pick<AgentRow, 'fallback_msg'> | null) {
+  return agent?.fallback_msg?.trim() || 'I had trouble completing that reply. Please send one more message and I will continue from the saved conversation details.'
 }
 
 function defaultAgentPayload(businessId: string, businessType?: string | null) {
@@ -363,6 +388,13 @@ class GeminiApiError extends Error {
     this.code = code
     this.type = type
     this.payload = payload
+  }
+}
+
+class GeminiIncompleteResponseError extends GeminiApiError {
+  constructor(message: string, code: string, payload: unknown) {
+    super(message, 502, code, 'incomplete_response', payload)
+    this.name = 'GeminiIncompleteResponseError'
   }
 }
 
@@ -704,6 +736,7 @@ const _MONTHS = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e
 function extractPhone(text: string): string | null {
   // Strip date/time patterns so trailing day numbers don't bleed into the phone.
   const stripped = text
+    .replace(/\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b/g, ' ')
     .replace(/\bat\s*\d{1,2}:\d{2}\b/gi, ' ')
     .replace(new RegExp(`\\b\\d{1,2}\\s+${_MONTHS}(?:\\s+\\d{2,4})?\\b`, 'gi'), ' ')
     .replace(new RegExp(`\\b${_MONTHS}\\s+\\d{1,2}(?:,?\\s*\\d{2,4})?\\b`, 'gi'), ' ')
@@ -752,7 +785,7 @@ function extractServiceInterest(text: string): string | null {
 
 /* ── Combined extractor ────────────────────────────────────────────────── */
 
-function extractFromText(text: string): Partial<Slots> {
+function extractFromText(text: string, existingSlots: Partial<Slots> = {}): Partial<Slots> {
   const carRentalIntent = /\b(car|vehicle|fleet|pickup|pick-up|drop[-\s]?off|return|corolla|camry|x5|bmw|mercedes|skoda|suv|automatic|manual)\b/i.test(text)
   const returnOnlyCorrection =
     /\b(?:return|drop(?:off|-off)?)\b/i.test(text) &&
@@ -767,7 +800,7 @@ function extractFromText(text: string): Partial<Slots> {
     ?? text.match(/\bpick(?:up|-up)?\s+(?:at|from)\s+([^,.]+?)(?:\s+(?:tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at)|[,.]|$)/i)?.[1]
   const dropoffLocation = text.match(/\b(?:drop(?:off|-off)?)\s+location\s+([^.\n,]+?)(?:[.\n,]|$)/i)?.[1]
     ?? text.match(/\b(?:drop(?:off|-off)?|return)\s+(?:at|to)\s+([^,.]+?)(?:\s+(?:tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at)|[,.]|$)/i)?.[1]
-  const rentalWindow = parseRentalDateWindow(text)
+  const rentalWindow = parseRentalDateWindow(text, existingSlots)
 
   return {
     name:          extractName(text)         ?? undefined,
@@ -785,8 +818,10 @@ function extractFromText(text: string): Partial<Slots> {
     viewing_time:  carRentalIntent ? undefined : extractViewingTime(text)  ?? undefined,
     pickup_location: pickupLocation?.trim() ?? (airportMention ? 'Airport' : undefined),
     dropoff_location: dropoffLocation?.trim() ?? undefined,
+    pickup_date: rentalWindow.pickupDate ?? undefined,
+    return_date: rentalWindow.returnDate ?? undefined,
     pickup_datetime: returnOnlyCorrection ? undefined : rentalWindow.pickupAt ?? undefined,
-    return_datetime: rentalWindow.dropoffAt ?? (/\b(?:return|drop(?:off|-off)?)\b/i.test(text) ? extractViewingTime(text) ?? undefined : undefined),
+    return_datetime: rentalWindow.dropoffAt ?? (!carRentalIntent && /\b(?:return|drop(?:off|-off)?)\b/i.test(text) ? extractViewingTime(text) ?? undefined : undefined),
     selected_vehicle: extractRentalVehicleName(text) ?? undefined,
     car_class: carClass ? carClass.toLowerCase() : undefined,
     transmission: transmission ? transmission.toLowerCase() : undefined,
@@ -802,7 +837,7 @@ function extractFromText(text: string): Partial<Slots> {
 
 function latestExtractedSlots(userTexts: string[]): Partial<Slots> {
   return userTexts.reduce<Partial<Slots>>((acc, text) => {
-    const next = extractFromText(text)
+    const next = extractFromText(text, acc)
     for (const [key, value] of Object.entries(next) as [keyof Slots, string | undefined][]) {
       if (value) acc[key] = value
     }
@@ -877,6 +912,8 @@ function buildConfirmedSlots(
     viewing_time:  strOrNull(meta.viewing_time),
     pickup_location: strOrNull(meta.pickup_location),
     dropoff_location: strOrNull(meta.dropoff_location),
+    pickup_date: strOrNull(meta.pickup_date),
+    return_date: strOrNull(meta.return_date),
     pickup_datetime: strOrNull(meta.pickup_datetime),
     return_datetime: strOrNull(meta.return_datetime),
     selected_vehicle: strOrNull(meta.selected_vehicle),
@@ -893,7 +930,12 @@ function buildConfirmedSlots(
     currentMsg,
   ]
   const extracted = latestExtractedSlots(userTexts)
-  const currentExtracted = extractFromText(currentMsg)
+  const currentExtracted = extractFromText(currentMsg, fromDB)
+  const currentWithCanonicalState = extractFromText(currentMsg, { ...fromDB, ...extracted })
+  if (!extracted.pickup_datetime && currentWithCanonicalState.pickup_datetime) extracted.pickup_datetime = currentWithCanonicalState.pickup_datetime
+  if (!extracted.return_datetime && currentWithCanonicalState.return_datetime) extracted.return_datetime = currentWithCanonicalState.return_datetime
+  if (!extracted.pickup_date && currentWithCanonicalState.pickup_date) extracted.pickup_date = currentWithCanonicalState.pickup_date
+  if (!extracted.return_date && currentWithCanonicalState.return_date) extracted.return_date = currentWithCanonicalState.return_date
   if (!extracted.name && assistantAskedForName(history)) {
     const answeredName = plainNameAnswer(currentMsg)
     if (answeredName) extracted.name = answeredName
@@ -937,6 +979,8 @@ function buildConfirmedSlots(
     viewing_time:  fromDB.viewing_time  ?? extracted.viewing_time  ?? null,
     pickup_location: extracted.pickup_location ?? fromDB.pickup_location ?? null,
     dropoff_location: extracted.dropoff_location ?? fromDB.dropoff_location ?? null,
+    pickup_date: extracted.pickup_date ?? fromDB.pickup_date ?? null,
+    return_date: extracted.return_date ?? fromDB.return_date ?? null,
     pickup_datetime: extracted.pickup_datetime ?? fromDB.pickup_datetime ?? null,
     return_datetime: extracted.return_datetime ?? fromDB.return_datetime ?? null,
     selected_vehicle: extracted.selected_vehicle ?? fromDB.selected_vehicle ?? null,
@@ -1110,6 +1154,8 @@ function buildSystemPrompt(
   if (confirmed.viewing_time)  confirmedLines.push(`Preferred viewing time: ${confirmed.viewing_time}`)
   if (confirmed.pickup_location) confirmedLines.push(`Pickup location: ${confirmed.pickup_location}`)
   if (confirmed.dropoff_location) confirmedLines.push(`Drop-off location: ${confirmed.dropoff_location}`)
+  if (confirmed.pickup_date && !confirmed.pickup_datetime) confirmedLines.push(`Pickup date: ${confirmed.pickup_date} (time not confirmed yet)`)
+  if (confirmed.return_date && !confirmed.return_datetime) confirmedLines.push(`Return date: ${confirmed.return_date} (time not confirmed yet)`)
   if (confirmed.pickup_datetime) confirmedLines.push(`Pickup date/time: ${confirmed.pickup_datetime}`)
   if (confirmed.return_datetime) confirmedLines.push(`Return date/time: ${confirmed.return_datetime}`)
   if (confirmed.selected_vehicle) confirmedLines.push(`Selected vehicle: ${confirmed.selected_vehicle}`)
@@ -1354,6 +1400,21 @@ function rentalToolReplyOverride(
   const selected = confirmed.selected_vehicle ?? confirmed.car_class ?? 'the selected car'
   const acceptedLocation = locationAcceptanceReply(confirmed, missing, userMessage)
 
+  if (fleet?.ok && !confirmed.selected_vehicle) {
+    const data = fleet.data as { cars?: { name?: string | null; className?: string | null; transmission?: string | null; dailyPrice?: number | null }[]; availabilityFiltered?: boolean } | undefined
+    if (data?.availabilityFiltered) {
+      const cars = data.cars ?? []
+      if (cars.length === 0) return confirmed.car_class
+        ? `No ${confirmed.car_class} cars are available for that exact rental period.`
+        : 'No matching cars are available for that exact rental period.'
+      const listed = cars.slice(0, 8).map(car => {
+        const details = [car.className, car.transmission, car.dailyPrice ? `${car.dailyPrice} PLN/day` : null].filter(Boolean).join(', ')
+        return details ? `${car.name} (${details})` : String(car.name)
+      }).join('; ')
+      return `These cars are available for your rental period: ${listed}. Which one would you like?`
+    }
+  }
+
   if (create?.ok) {
     const data = create.data as { bookingNumber?: string; status?: string } | undefined
     if (!data?.bookingNumber) return 'Booking creation failed because no booking reference was returned. I can connect you with the team to finish this safely.'
@@ -1385,6 +1446,9 @@ function rentalToolReplyOverride(
     }
     const contactMissing = missing.find(field => ['name', 'phone', 'email'].includes(String(field.key)))
     if (contactMissing && confirmed.selected_vehicle) {
+      if (availability.ok && availabilityData?.requestedCar && availabilityData.available === true) {
+        return `${formatAvailabilityReply(availability, confirmed)} ${contactMissing.question}`
+      }
       const selectedNext = selectedVehicleNextStepReply(confirmed, missing, toolResults)
       if (selectedNext) return selectedNext
     }
@@ -1477,6 +1541,7 @@ export const __testRentalChatHelpers = {
   rentalToolReplyOverride,
   normalizeRentalLocationText,
   plainNameAnswer,
+  looksMidSentence,
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -1533,21 +1598,33 @@ async function callGemini(
   systemPrompt: string,
   history: { role: 'user' | 'assistant'; content: string }[],
   userMessage: string,
+  correlationId: string,
 ): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY
   if (!apiKey) {
     throw new GeminiApiError('GEMINI_API_KEY is missing. Add it in Vercel Environment Variables and redeploy.', 500, 'MISSING_API_KEY', 'config_error', null)
   }
-  const contents = [
-    ...history.map(message => ({
-      role: message.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: message.content }],
-    })),
-    { role: 'user', parts: [{ text: userMessage }] },
+  const baseContents = history.map(message => ({
+    role: message.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: message.content }],
+  }))
+  const attempts = [
+    { attempt: 1, maxOutputTokens: 900, userText: userMessage },
+    {
+      attempt: 2,
+      maxOutputTokens: 1400,
+      userText: `${userMessage}\n\nWrite one concise, complete customer-facing reply. Finish the sentence. Do not include JSON.`,
+    },
   ]
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 30_000)
-  try {
+  let lastIncomplete: GeminiIncompleteResponseError | null = null
+  for (const attempt of attempts) {
+    const contents = [
+      ...baseContents,
+      { role: 'user', parts: [{ text: attempt.userText }] },
+    ]
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 30_000)
+    try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1557,23 +1634,76 @@ async function callGemini(
         contents,
         generationConfig: {
           temperature,
-          maxOutputTokens: 300,
+          maxOutputTokens: attempt.maxOutputTokens,
         },
       }),
     })
     const payload = await res.json().catch(() => null) as {
       error?: { message?: string; status?: string; code?: number }
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+      candidates?: Array<{ finishReason?: string; finishMessage?: string; safetyRatings?: unknown; content?: { parts?: Array<{ text?: string }> } }>
+      promptFeedback?: unknown
+      usageMetadata?: Record<string, unknown>
     } | null
     if (!res.ok) {
       throw new GeminiApiError(payload?.error?.message ?? `Gemini request failed with HTTP ${res.status}`, res.status, payload?.error?.status ?? null, payload?.error?.status ?? null, payload)
     }
-    const text = payload?.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('').trim() ?? ''
-    if (!text) throw new GeminiApiError('Empty Gemini response', 502, 'EMPTY_RESPONSE', 'empty_response', payload)
-    return stripModelReply(text)
-  } finally {
-    clearTimeout(timeout)
+    const candidate = payload?.candidates?.[0]
+    const parts = candidate?.content?.parts ?? []
+    const text = parts.map(part => part.text ?? '').join('').trim()
+    console.log('[AI_DIAG] Gemini response', {
+      correlation_id: correlationId,
+      attempt: attempt.attempt,
+      model,
+      max_output_tokens: attempt.maxOutputTokens,
+      finish_reason: candidate?.finishReason ?? null,
+      finish_message: candidate?.finishMessage ?? null,
+      candidates: payload?.candidates?.length ?? 0,
+      content_parts: parts.length,
+      output_chars: text.length,
+      looks_mid_sentence: looksMidSentence(text),
+      safety_ratings_present: Boolean(candidate?.safetyRatings),
+      prompt_feedback_present: Boolean(payload?.promptFeedback),
+      usage_metadata: payload?.usageMetadata ?? null,
+    })
+      const finishReason = candidate?.finishReason ?? null
+      const incompleteReason = !text
+        ? 'EMPTY_RESPONSE'
+        : !candidate
+          ? 'NO_CANDIDATE'
+          : !parts.length
+            ? 'NO_CONTENT_PARTS'
+            : finishReason && !['STOP', 'FINISH_REASON_UNSPECIFIED'].includes(finishReason)
+              ? finishReason
+              : looksMidSentence(text)
+                ? 'MID_SENTENCE'
+                : null
+      if (incompleteReason) {
+        throw new GeminiIncompleteResponseError(`Gemini response did not finish cleanly (${incompleteReason}).`, incompleteReason, payload)
+      }
+      return stripModelReply(text)
+    } catch (error) {
+      if (error instanceof GeminiIncompleteResponseError) {
+        lastIncomplete = error
+        console.warn('[AI_DIAG] Gemini incomplete response retry decision', {
+          correlation_id: correlationId,
+          attempt: attempt.attempt,
+          code: error.code,
+          will_retry: attempt.attempt < attempts.length,
+        })
+        if (attempt.attempt < attempts.length) continue
+        break
+      }
+      throw error
+    } finally {
+      clearTimeout(timeout)
+    }
   }
+  console.error('[AI_DIAG] Gemini retry exhausted; using complete fallback', {
+    correlation_id: correlationId,
+    code: lastIncomplete?.code ?? null,
+    message: lastIncomplete?.message ?? null,
+  })
+  return 'I have the conversation details saved, but I had trouble completing that reply. Please send one more message and I will continue from the saved rental details.'
 }
 
 async function callAIProvider(
@@ -1583,9 +1713,10 @@ async function callAIProvider(
   systemPrompt: string,
   history: { role: 'user' | 'assistant'; content: string }[],
   userMessage: string,
+  correlationId: string,
 ) {
   if (isGeminiModel(model)) {
-    return callGemini(model, temperature, systemPrompt, history, userMessage)
+    return callGemini(model, temperature, systemPrompt, history, userMessage, correlationId)
   }
   return callOpenAI(client, model, temperature, systemPrompt, history, userMessage)
 }
@@ -1596,7 +1727,7 @@ async function callAIProvider(
 
 export async function POST(req: NextRequest) {
   /* 1. Parse ─────────────────────────────────────────────────────────────── */
-  let body: { business_id?: unknown; bot_id?: unknown; conversation_id?: unknown; message?: unknown; attachment?: unknown; visitor_context?: unknown; debug?: unknown; test_ai?: unknown; channel?: unknown; host?: unknown }
+  let body: { business_id?: unknown; bot_id?: unknown; conversation_id?: unknown; message?: unknown; attachment?: unknown; visitor_context?: unknown; debug?: unknown; test_ai?: unknown; channel?: unknown; host?: unknown; client_message_id?: unknown; request_id?: unknown; turn_id?: unknown }
   try { body = await req.json() }
   catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }) }
 
@@ -1607,6 +1738,9 @@ export async function POST(req: NextRequest) {
   const attachmentResult = parseAttachment(body.attachment)
   const debugMode       = body.debug === true
   const testAiMode      = body.test_ai === true
+  const clientMessageId = typeof body.client_message_id === 'string' && body.client_message_id.trim() ? body.client_message_id.trim().slice(0, 120) : null
+  const requestId       = typeof body.request_id === 'string' && body.request_id.trim() ? body.request_id.trim().slice(0, 120) : crypto.randomUUID()
+  const turnId          = typeof body.turn_id === 'string' && body.turn_id.trim() ? body.turn_id.trim().slice(0, 120) : requestId
 
   if (!requestedBusinessId) return NextResponse.json({ error: 'business_id is required' }, { status: 400 })
   if (attachmentResult && 'error' in attachmentResult) return NextResponse.json({ error: attachmentResult.error }, { status: 400 })
@@ -1626,6 +1760,9 @@ export async function POST(req: NextRequest) {
   const customerMessageMetadata = {
     sender_type: 'customer',
     delivery_status: 'delivered',
+    ...(clientMessageId && { client_message_id: clientMessageId }),
+    request_id: requestId,
+    turn_id: turnId,
     attachment: attachmentResult?.attachment ?? null,
     visitor_context: visitorContext,
   }
@@ -1663,6 +1800,118 @@ export async function POST(req: NextRequest) {
 
   /* 3. Supabase ───────────────────────────────────────────────────────────── */
   const sb = createAdminClient()
+
+  async function insertMessageOnce(input: {
+    conversationId: string
+    businessId: string
+    role: 'user' | 'assistant' | 'system'
+    content: string
+    metadata?: Record<string, unknown> | null
+    idempotency?: { key: 'client_message_id' | 'turn_id'; value: string | null; role?: string }
+  }): Promise<{ message: PersistedChatMessage | null; error: string | null }> {
+    const fullSelect = 'id,role,content,created_at,read_at,delivery_status,metadata'
+    const legacySelect = 'id,role,content,created_at,read_at,metadata'
+    const fetchExisting = async () => {
+      if (!input.idempotency?.value) return null
+      try {
+        let existingResult: { data: unknown; error: { code?: string; message: string } | null } = await sb
+          .from('messages')
+          .select(fullSelect)
+          .eq('conversation_id', input.conversationId)
+          .eq('business_id', input.businessId)
+          .eq('role', input.idempotency.role ?? input.role)
+          .contains('metadata', { [input.idempotency.key]: input.idempotency.value })
+          .maybeSingle()
+        if (existingResult.error?.code === '42703' || existingResult.error?.code === 'PGRST204') {
+          existingResult = await sb
+            .from('messages')
+            .select(legacySelect)
+            .eq('conversation_id', input.conversationId)
+            .eq('business_id', input.businessId)
+            .eq('role', input.idempotency.role ?? input.role)
+            .contains('metadata', { [input.idempotency.key]: input.idempotency.value })
+            .maybeSingle()
+        }
+        const existing = existingResult.data as PersistedChatMessage | null
+        return existing?.id ? existing : null
+      } catch { /* older schemas may not support JSON containment through PostgREST */ }
+      return null
+    }
+    if (input.idempotency?.value) {
+      const existing = await fetchExisting()
+      if (existing) return { message: existing, error: null }
+    }
+    let insertResult: { data: unknown; error: { code?: string; message: string } | null } = await sb
+      .from('messages')
+      .insert({
+        conversation_id: input.conversationId,
+        business_id: input.businessId,
+        role: input.role,
+        content: input.content,
+        metadata: input.metadata ?? {},
+      })
+      .select(fullSelect)
+      .single()
+    if (insertResult.error?.code === '42703' || insertResult.error?.code === 'PGRST204') {
+      insertResult = await sb
+        .from('messages')
+        .insert({
+          conversation_id: input.conversationId,
+          business_id: input.businessId,
+          role: input.role,
+          content: input.content,
+          metadata: input.metadata ?? {},
+        })
+        .select(legacySelect)
+        .single()
+    }
+    if (insertResult.error?.code === '23505') {
+      const existing = await fetchExisting()
+      if (existing) return { message: existing, error: null }
+    }
+    if (insertResult.error) return { message: null, error: insertResult.error.message }
+    return { message: insertResult.data as PersistedChatMessage, error: null }
+  }
+
+  const messageResponse = (message: PersistedChatMessage | null) => message ? {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    created_at: message.created_at ?? null,
+    read_at: message.read_at ?? null,
+    delivery_status: message.delivery_status ?? null,
+    metadata: message.metadata ?? null,
+  } : null
+
+  async function findMessageByMetadata(conversationId: string, role: 'user' | 'assistant', key: 'client_message_id' | 'turn_id', value: string | null) {
+    if (!value) return null
+    const fullSelect = 'id,role,content,created_at,read_at,delivery_status,metadata'
+    const legacySelect = 'id,role,content,created_at,read_at,metadata'
+    try {
+      let result: { data: unknown; error: { code?: string; message: string } | null } = await sb
+        .from('messages')
+        .select(fullSelect)
+        .eq('conversation_id', conversationId)
+        .eq('business_id', businessId)
+        .eq('role', role)
+        .contains('metadata', { [key]: value })
+        .maybeSingle()
+      if (result.error?.code === '42703' || result.error?.code === 'PGRST204') {
+        result = await sb
+          .from('messages')
+          .select(legacySelect)
+          .eq('conversation_id', conversationId)
+          .eq('business_id', businessId)
+          .eq('role', role)
+          .contains('metadata', { [key]: value })
+          .maybeSingle()
+      }
+      const data = result.data as PersistedChatMessage | null
+      return data?.id ? data : null
+    } catch {
+      return null
+    }
+  }
 
   let conversationContext: {
     id: string
@@ -1716,6 +1965,58 @@ export async function POST(req: NextRequest) {
         conversation_bot_id: conversationContext.botId,
         resolved_business_id: businessId,
         resolution_source: conversationContext.botId ? 'conversation_metadata_bot' : 'conversation_business_default_bot',
+      })
+    }
+  }
+
+  const liveConversationStatus = conversationContext?.status ? normalizeConversationStatus(conversationContext.status) : null
+  if (!testAiMode && conversationContext?.id && (liveConversationStatus === 'live_chat' || liveConversationStatus === 'handover_requested')) {
+    const extractedPatch = extractFromText(messageText)
+    const hasMeaningfulPatch = Boolean(
+      extractedPatch.name ||
+      extractedPatch.phone ||
+      extractedPatch.email ||
+      extractedPatch.company ||
+      extractedPatch.notes ||
+      extractedPatch.service_interest ||
+      extractedPatch.city ||
+      extractedPatch.area,
+    )
+    if (!hasMeaningfulPatch) {
+      const nowIso = new Date().toISOString()
+      const inserted = await insertMessageOnce({
+        conversationId: conversationContext.id,
+        businessId,
+        role: 'user',
+        content: messageText,
+        metadata: customerMessageMetadata,
+        idempotency: { key: 'client_message_id', value: clientMessageId, role: 'user' },
+      })
+      if (inserted.error) return NextResponse.json({ error: inserted.error }, { status: 500 })
+      await Promise.all([
+        sb
+          .from('conversations')
+          .update({
+            last_message_at: nowIso,
+            unread_count: 1,
+            metadata: {
+              ...(conversationContext.metadata ?? {}),
+              source_host: requestSourceHost,
+              widget_host: requestSourceHost,
+            },
+          })
+          .eq('id', conversationContext.id)
+          .eq('business_id', businessId),
+      ]).catch(error => console.warn('[POST /api/chat] live-chat fast update failed', error))
+      return NextResponse.json({
+        reply: null,
+        conversation_id: conversationContext.id,
+        customer_id: null,
+        status: liveConversationStatus,
+        handover: true,
+        ai_reply_skipped: true,
+        waiting_for_human: true,
+        user_message: messageResponse(inserted.message),
       })
     }
   }
@@ -1863,8 +2164,10 @@ export async function POST(req: NextRequest) {
       live_chat_enabled: liveChatSettings.live_chat_enabled,
     })
     let convId: string
+    let humanConversation: { convId: string; status: string | null; isNewConv: boolean }
     try {
-      ;({ convId } = await resolveConversation())
+      humanConversation = await resolveConversation()
+      convId = humanConversation.convId
     } catch (err) {
       return NextResponse.json({ error: err instanceof Error ? err.message : 'Failed to create conversation' }, { status: 500 })
     }
@@ -1875,7 +2178,7 @@ export async function POST(req: NextRequest) {
     if (userMsgErr) console.error('[POST /api/chat] live-chat user message insert failed:', JSON.stringify(userMsgErr))
     await incrementUnread(convId)
     await markConversationStatus(sb, convId, businessId, 'handover_requested')
-    if ((await resolveConversation()).isNewConv) {
+    if (humanConversation.isNewConv) {
       await insertStatusEvent(sb, convId, businessId, 'Waiting for a human reply.', 'handover_requested')
     }
     const { data: existingLiveLead } = await sb.from('leads').select('id, name, phone, email, interest, status, metadata')
@@ -1883,20 +2186,33 @@ export async function POST(req: NextRequest) {
     const confirmed = buildConfirmedSlots(existingLiveLead as ExistingLead | null, [], messageText)
     const missing = computeMissingSlots(confirmed, defaultSlotDefsForBusinessType(null))
     const qualificationStage = computeQualificationStage(confirmed, missing)
-    const liveChatPersist = await persistLead(
-      sb,
-      existingLiveLead as ExistingLead | null,
-      convId,
-      clientId,
-      businessId,
-      confirmed,
-      missing,
-      confirmed.name && (confirmed.phone || confirmed.email) ? 'contacted' : 'new',
-      qualificationStage,
-      '',
-      messageText,
-      null,
+    const hasMeaningfulLeadState = Boolean(
+      existingLiveLead ||
+      confirmed.name ||
+      confirmed.phone ||
+      confirmed.email ||
+      confirmed.company ||
+      confirmed.notes ||
+      confirmed.service_interest ||
+      confirmed.city ||
+      confirmed.area,
     )
+    const liveChatPersist = hasMeaningfulLeadState
+      ? await persistLead(
+        sb,
+        existingLiveLead as ExistingLead | null,
+        convId,
+        clientId,
+        businessId,
+        confirmed,
+        missing,
+        confirmed.name && (confirmed.phone || confirmed.email) ? 'contacted' : 'new',
+        qualificationStage,
+        '',
+        messageText,
+        null,
+      )
+      : { lead_id: null, insert_error: null }
     console.log('[LiveChatDebug] human-only persisted', {
       business_id: businessId,
       conversation_id: convId,
@@ -1904,7 +2220,9 @@ export async function POST(req: NextRequest) {
       lead_insert_error: liveChatPersist.insert_error,
       message_insert_error: userMsgErr?.message ?? null,
     })
-    const customerId = await linkCustomerIdentity(convId, confirmed, liveChatPersist.lead_id)
+    const customerId = (hasMeaningfulLeadState || humanConversation.isNewConv)
+      ? await linkCustomerIdentity(convId, confirmed, liveChatPersist.lead_id)
+      : null
 
     return NextResponse.json({
       reply: null,
@@ -2202,6 +2520,27 @@ export async function POST(req: NextRequest) {
   console.log('[SLOTS] missingSlots:',  missing.map(d => d.key).join(', ') || 'none')
   console.log('[SLOTS] qualificationStage:', qualificationStage)
 
+  if (turnId) {
+    const existingAssistant = await findMessageByMetadata(convId, 'assistant', 'turn_id', turnId)
+    if (existingAssistant) {
+      const existingUser = await findMessageByMetadata(convId, 'user', 'client_message_id', clientMessageId)
+      console.log('[POST /api/chat] duplicate completed turn resolved from persisted message', {
+        conversation_id: convId,
+        turn_id: turnId,
+        assistant_message_id: existingAssistant.id,
+      })
+      return NextResponse.json({
+        reply: existingAssistant.content,
+        conversation_id: convId,
+        intent: detectDealType(messageText) ? 'inquiry' : 'greeting',
+        lead_ready: !!(confirmed.name && confirmed.phone && confirmed.email),
+        user_message: messageResponse(existingUser),
+        assistant_message: messageResponse(existingAssistant),
+        duplicate_turn: true,
+      }, { headers: { 'Cache-Control': 'no-store' } })
+    }
+  }
+
   const operationalToolResults = await runOperationalTools(sb, {
     businessId,
     businessType,
@@ -2314,9 +2653,9 @@ export async function POST(req: NextRequest) {
   }
 
   /* 9. Persist user message ──────────────────────────────────────────────── */
-  const { error: userMsgErr } = await sb.from('messages').insert({
-    conversation_id: convId,
-    business_id: businessId,
+  const userInsert = await insertMessageOnce({
+    conversationId: convId,
+    businessId,
     role: 'user',
     content: messageText,
     metadata: {
@@ -2328,8 +2667,9 @@ export async function POST(req: NextRequest) {
         error: result.error ?? null,
       })),
     },
+    idempotency: { key: 'client_message_id', value: clientMessageId, role: 'user' },
   })
-  if (userMsgErr) console.error('[POST /api/chat] user message insert failed:', JSON.stringify(userMsgErr))
+  if (userInsert.error) console.error('[POST /api/chat] user message insert failed:', userInsert.error)
   await incrementUnread(convId)
 
   const deterministicRentalReply =
@@ -2338,10 +2678,15 @@ export async function POST(req: NextRequest) {
 
   if (deterministicRentalReply) {
     const { reply: finalReply, blocked } = guardReply(deterministicRentalReply, confirmed, missing)
-    const { error: aiMsgErr } = await sb.from('messages').insert({
-      conversation_id: convId, business_id: businessId, role: 'assistant', content: finalReply,
+    const assistantInsert = await insertMessageOnce({
+      conversationId: convId,
+      businessId,
+      role: 'assistant',
+      content: finalReply,
+      metadata: { sender_type: 'ai', delivery_status: 'delivered', request_id: requestId, turn_id: turnId },
+      idempotency: { key: 'turn_id', value: turnId, role: 'assistant' },
     })
-    if (aiMsgErr) console.error('[POST /api/chat] deterministic rental ai-msg insert failed:', JSON.stringify(aiMsgErr))
+    if (assistantInsert.error) console.error('[POST /api/chat] deterministic rental ai-msg insert failed:', assistantInsert.error)
 
     const isQualified = !!(confirmed.name && confirmed.phone && confirmed.email)
     const intent      = detectDealType(messageText) ? 'inquiry' : 'greeting'
@@ -2358,7 +2703,9 @@ export async function POST(req: NextRequest) {
       lead_insert_error:        persist.insert_error,
       appointment_id:           persist.appointment_id,
       appointment_insert_error: persist.appointment_insert_error,
-      message_insert_error:     userMsgErr?.message ?? null,
+      message_insert_error:     userInsert.error,
+      user_message:             messageResponse(userInsert.message),
+      assistant_message:        messageResponse(assistantInsert.message),
     }
     if (debugMode) {
       response.debug = {
@@ -2413,7 +2760,7 @@ export async function POST(req: NextRequest) {
 
   let rawReply: string
   try {
-    rawReply = await callAIProvider(openai, agent.model, agent.temperature, systemPrompt, historyForLLM, messageText)
+    rawReply = await callAIProvider(openai, agent.model, agent.temperature, systemPrompt, historyForLLM, messageText, turnId)
   } catch (err) {
     const classified = logAiProviderError(err, { businessId, model: agent.model, provider })
     return NextResponse.json({ error: classified.adminMessage }, { status: classified.responseStatus })
@@ -2425,10 +2772,15 @@ export async function POST(req: NextRequest) {
   console.log('[GUARD] blockedRepeatedQuestion:', blocked)
 
   if (!testAiMode && aiCannotAnswer(finalReply, liveChatSettings, agent.fallback_msg) && liveChatSettings.live_chat_enabled) {
-    const { error: assistantMsgErr } = await sb.from('messages').insert({
-      conversation_id: convId, business_id: businessId, role: 'assistant', content: HANDOVER_REPLY,
+    const assistantInsert = await insertMessageOnce({
+      conversationId: convId,
+      businessId,
+      role: 'assistant',
+      content: HANDOVER_REPLY,
+      metadata: { sender_type: 'ai', delivery_status: 'delivered', request_id: requestId, turn_id: turnId, handover: true },
+      idempotency: { key: 'turn_id', value: turnId, role: 'assistant' },
     })
-    if (assistantMsgErr) console.error('[POST /api/chat] cannot-answer handover message insert failed:', JSON.stringify(assistantMsgErr))
+    if (assistantInsert.error) console.error('[POST /api/chat] cannot-answer handover message insert failed:', assistantInsert.error)
     await markConversationStatus(sb, convId, businessId, 'handover_requested')
     await insertStatusEvent(sb, convId, businessId, 'AI could not answer and requested human handover.', 'ai_cannot_answer')
     return NextResponse.json({
@@ -2436,15 +2788,22 @@ export async function POST(req: NextRequest) {
       conversation_id: convId,
       status: 'handover_requested',
       handover: true,
-      message_insert_error: userMsgErr?.message ?? null,
+      message_insert_error: userInsert.error,
+      user_message: messageResponse(userInsert.message),
+      assistant_message: messageResponse(assistantInsert.message),
     })
   }
 
   /* 12. Persist assistant reply ──────────────────────────────────────────── */
-  const { error: aiMsgErr } = await sb.from('messages').insert({
-    conversation_id: convId, business_id: businessId, role: 'assistant', content: finalReply,
+  const assistantInsert = await insertMessageOnce({
+    conversationId: convId,
+    businessId,
+    role: 'assistant',
+    content: finalReply,
+    metadata: { sender_type: 'ai', delivery_status: 'delivered', request_id: requestId, turn_id: turnId },
+    idempotency: { key: 'turn_id', value: turnId, role: 'assistant' },
   })
-  if (aiMsgErr) console.error('[POST /api/chat] ai message insert failed:', JSON.stringify(aiMsgErr))
+  if (assistantInsert.error) console.error('[POST /api/chat] ai message insert failed:', assistantInsert.error)
 
   /* 13. Update / create lead ─────────────────────────────────────────────── */
   console.log('PERSIST IDS', {
@@ -2506,7 +2865,9 @@ export async function POST(req: NextRequest) {
     lead_insert_error:        persist.insert_error,
     appointment_id:           persist.appointment_id,
     appointment_insert_error: persist.appointment_insert_error,
-    message_insert_error:     userMsgErr?.message ?? null,
+    message_insert_error:     userInsert.error,
+    user_message:             messageResponse(userInsert.message),
+    assistant_message:        messageResponse(assistantInsert.message),
   }
   if (debugMode) {
     const meta = (existingLead?.metadata ?? {}) as Record<string, unknown>
@@ -2687,6 +3048,8 @@ async function persistLead(
       ...(confirmed.viewing_time  && { viewing_time:  confirmed.viewing_time  }),
       ...(confirmed.pickup_location && { pickup_location: confirmed.pickup_location }),
       ...(confirmed.dropoff_location && { dropoff_location: confirmed.dropoff_location }),
+      ...(confirmed.pickup_date && { pickup_date: confirmed.pickup_date }),
+      ...(confirmed.return_date && { return_date: confirmed.return_date }),
       ...(confirmed.pickup_datetime && { pickup_datetime: confirmed.pickup_datetime }),
       ...(confirmed.return_datetime && { return_datetime: confirmed.return_datetime }),
       ...(confirmed.selected_vehicle && { selected_vehicle: confirmed.selected_vehicle }),

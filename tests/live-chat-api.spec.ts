@@ -181,6 +181,38 @@ async function postChatRouteWithMissingGemini(body: Record<string, unknown>) {
   }
 }
 
+async function postChatRouteWithMockedGemini(body: Record<string, unknown>, responses: Array<Record<string, unknown>>) {
+  const previousKey = process.env.GEMINI_API_KEY
+  process.env.GEMINI_API_KEY = 'test-gemini-key'
+  const originalFetch = global.fetch
+  let geminiCalls = 0
+  global.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+    if (url.includes('generativelanguage.googleapis.com')) {
+      const payload = responses[Math.min(geminiCalls, responses.length - 1)]
+      geminiCalls += 1
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return originalFetch(input, init)
+  }) as typeof fetch
+  try {
+    const request = new NextRequest('http://127.0.0.1:3106/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const response = await postChat(request)
+    return { response, geminiCalls }
+  } finally {
+    global.fetch = originalFetch
+    if (previousKey === undefined) delete process.env.GEMINI_API_KEY
+    else process.env.GEMINI_API_KEY = previousKey
+  }
+}
+
 test.describe('Live Chat API production boundaries', () => {
   test('dashboard live-chat APIs require authentication', async ({ request }) => {
     const settings = await request.get('/api/live-chat/settings')
@@ -575,6 +607,107 @@ test.describe('Live Chat API production boundaries', () => {
       expect(response.status).toBe(500)
       expect(body.error).toBe(MISSING_GEMINI_KEY_MESSAGE)
       expect(body.error).not.toBe('No response')
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('Gemini MAX_TOKENS retry persists one clean assistant message', async () => {
+    const { sb, businessId } = await createGeminiTestAiBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
+    try {
+      const { response, geminiCalls } = await postChatRouteWithMockedGemini({
+        business_id: businessId,
+        message: 'Please answer with one complete sentence.',
+        debug: true,
+        test_ai: true,
+        turn_id: 'gemini-retry-turn',
+        client_message_id: 'gemini-retry-user',
+      }, [
+        { candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: "Okay, so that's pickup today at" }] } }], usageMetadata: { totalTokenCount: 900 } },
+        { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'This is a complete clean reply.' }] } }], usageMetadata: { totalTokenCount: 120 } },
+      ])
+      const body = await response.json() as { reply?: string; conversation_id?: string; assistant_message?: { id?: string } }
+      expect(response.status).toBe(200)
+      expect(geminiCalls).toBe(2)
+      expect(body.reply).toBe('This is a complete clean reply.')
+      expect(body.assistant_message?.id).toBeTruthy()
+      const { data: assistants } = await sb.from('messages').select('id,content,metadata').eq('conversation_id', body.conversation_id).eq('role', 'assistant')
+      expect(assistants).toHaveLength(1)
+      expect(assistants?.[0]?.content).toBe('This is a complete clean reply.')
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('Gemini repeated incomplete responses persist a complete fallback instead of partial text', async () => {
+    const { sb, businessId } = await createGeminiTestAiBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
+    try {
+      const { response, geminiCalls } = await postChatRouteWithMockedGemini({
+        business_id: businessId,
+        message: 'Please answer completely.',
+        debug: true,
+        test_ai: true,
+        turn_id: 'gemini-fallback-turn',
+        client_message_id: 'gemini-fallback-user',
+      }, [
+        { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Your' }] } }] },
+        { candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: 'The reply is still' }] } }] },
+      ])
+      const body = await response.json() as { reply?: string; conversation_id?: string }
+      expect(response.status).toBe(200)
+      expect(geminiCalls).toBe(2)
+      expect(body.reply).toContain('I have the conversation details saved')
+      expect(body.reply).not.toBe('Your')
+      expect(body.reply).not.toBe('The reply is still')
+      const { data: assistants } = await sb.from('messages').select('id,content').eq('conversation_id', body.conversation_id).eq('role', 'assistant')
+      expect(assistants).toHaveLength(1)
+      expect(assistants?.[0]?.content).toBe(body.reply)
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('duplicate client message and turn ids resolve to one persisted user and assistant row', async () => {
+    const { sb, businessId } = await createGeminiTestAiBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
+    try {
+      const first = await postChatRouteWithMockedGemini({
+        business_id: businessId,
+        message: 'Please answer once.',
+        debug: true,
+        test_ai: false,
+        turn_id: 'duplicate-turn-id',
+        client_message_id: 'duplicate-client-message-id',
+      }, [
+        { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'One persisted assistant reply.' }] } }] },
+      ])
+      const firstBody = await first.response.json() as { conversation_id?: string; user_message?: { id?: string }; assistant_message?: { id?: string } }
+      expect(first.response.status).toBe(200)
+      expect(firstBody.conversation_id).toBeTruthy()
+
+      const second = await postChatRouteWithMockedGemini({
+        business_id: businessId,
+        conversation_id: firstBody.conversation_id,
+        message: 'Please answer once.',
+        debug: true,
+        test_ai: false,
+        turn_id: 'duplicate-turn-id',
+        client_message_id: 'duplicate-client-message-id',
+      }, [
+        { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'This duplicate should not be inserted.' }] } }] },
+      ])
+      const secondBody = await second.response.json() as { user_message?: { id?: string }; assistant_message?: { id?: string } }
+      expect(second.response.status).toBe(200)
+      expect(secondBody.user_message?.id).toBe(firstBody.user_message?.id)
+      expect(secondBody.assistant_message?.id).toBe(firstBody.assistant_message?.id)
+
+      const { data: rows } = await sb
+        .from('messages')
+        .select('id,role,content,metadata')
+        .eq('conversation_id', firstBody.conversation_id)
+        .order('created_at', { ascending: true })
+      expect((rows ?? []).filter(row => row.role === 'user')).toHaveLength(1)
+      expect((rows ?? []).filter(row => row.role === 'assistant')).toHaveLength(1)
+      expect((rows ?? []).find(row => row.role === 'assistant')?.content).toBe('One persisted assistant reply.')
     } finally {
       await cleanupTestAiBusiness(sb, businessId)
     }

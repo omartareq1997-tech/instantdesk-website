@@ -5,6 +5,17 @@ import { extractRentalVehicleName } from '../app/lib/rentalVehicle'
 import { __testRentalChatHelpers } from '../app/api/chat/route'
 
 test.describe('agent operational tool planner', () => {
+  const warsawDate = (date: Date) => {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/Warsaw',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date)
+    const get = (type: string) => parts.find(part => part.type === type)?.value ?? ''
+    return `${get('year')}-${get('month')}-${get('day')}`
+  }
+
   const baseContext = {
     businessId: 'business-1',
     businessType: 'car_rental',
@@ -335,6 +346,108 @@ test.describe('agent operational tool planner', () => {
     })
     expect(parsed.pickupAt).toBe('2026-07-02T09:00:00+02:00')
     expect(parsed.dropoffAt).toBe('2026-07-09T22:00:00+02:00')
+  })
+
+  test('merges exact production partial date then time rental transcript into canonical datetimes', () => {
+    const today = warsawDate(new Date())
+    const first = __testRentalChatHelpers.buildConfirmedSlots(
+      null,
+      [],
+      'yes, i want to rent a car today until 12/07',
+    )
+    expect(first.pickup_date).toBe(today)
+    expect(first.return_date).toBe('2026-07-12')
+    expect(first.pickup_datetime).toBeNull()
+    expect(first.return_datetime).toBeNull()
+
+    const merged = __testRentalChatHelpers.buildConfirmedSlots(
+      { id: 'lead-1', name: null, phone: null, email: null, interest: null, status: null, metadata: first as any },
+      [],
+      'pick at 20:00 return at 21:00',
+    )
+    expect(merged.pickup_datetime).toBe(`${today}T20:00:00+02:00`)
+    expect(merged.return_datetime).toBe('2026-07-12T21:00:00+02:00')
+  })
+
+  test('selected vehicle preserves known rental datetimes and does not ask for dates again', () => {
+    const slots = __testRentalChatHelpers.buildConfirmedSlots(
+      {
+        id: 'lead-1',
+        name: null,
+        phone: null,
+        email: null,
+        interest: null,
+        status: null,
+        metadata: {
+          pickup_location: 'Kraków Bocheńska 2a',
+          dropoff_location: 'Kraków Bocheńska 2a',
+          pickup_datetime: '2026-07-08T20:00:00+02:00',
+          return_datetime: '2026-07-12T21:00:00+02:00',
+          car_class: 'economy',
+        },
+      },
+      [],
+      'im interested in toyota camry',
+    )
+    expect(slots.selected_vehicle).toBe('Toyota Camry')
+    expect(slots.pickup_datetime).toBe('2026-07-08T20:00:00+02:00')
+    expect(slots.return_datetime).toBe('2026-07-12T21:00:00+02:00')
+    const reply = __testRentalChatHelpers.rentalToolReplyOverride(
+      [
+        { tool: 'searchFleet', ok: true, summary: 'Found Toyota Camry.', data: { cars: [{ id: 'camry-1', name: 'Toyota Camry', className: 'Economy', transmission: 'automatic', dailyPrice: 160 }], requestedCar: { id: 'camry-1', name: 'Toyota Camry', transmission: 'automatic', dailyPrice: 160 }, availabilityFiltered: true } },
+        { tool: 'checkAvailability', ok: true, summary: 'Toyota Camry is available.', data: { available: true, requestedCar: { id: 'camry-1', name: 'Toyota Camry' }, availableCars: [] } },
+      ],
+      slots,
+      [
+        { key: 'name', label: 'Name', question: 'Could you please provide your name?', required: true },
+        { key: 'phone', label: 'Phone', question: 'What is your phone number?', required: true },
+        { key: 'email', label: 'Email', question: 'What is your email address?', required: true },
+      ],
+      'car_rental',
+      'im interested in toyota camry',
+    ) ?? ''
+    expect(reply).toContain('The Toyota Camry is available')
+    expect(reply).not.toMatch(/pickup date|return date|what .*date/i)
+  })
+
+  test('availability-filtered class search lists only verified available cars', () => {
+    const reply = __testRentalChatHelpers.rentalToolReplyOverride(
+      [
+        {
+          tool: 'searchFleet',
+          ok: true,
+          summary: 'Found 2 matching available fleet vehicle(s). Unavailable for that period: Toyota Corolla.',
+          data: {
+            availabilityFiltered: true,
+            unavailableCars: ['Toyota Corolla'],
+            cars: [
+              { name: 'Skoda Superb', className: 'Economy', transmission: 'automatic', dailyPrice: 150 },
+              { name: 'Toyota Camry', className: 'Economy', transmission: 'automatic', dailyPrice: 160 },
+            ],
+          },
+        },
+      ],
+      {
+        car_class: 'economy',
+        pickup_location: 'Kraków Bocheńska 2a',
+        dropoff_location: 'Kraków Bocheńska 2a',
+        pickup_datetime: '2026-07-08T20:00:00+02:00',
+        return_datetime: '2026-07-12T21:00:00+02:00',
+      } as any,
+      [{ key: 'selected_vehicle', label: 'Selected vehicle', question: 'Which vehicle would you like?', required: true }],
+      'car_rental',
+      'im looking for economy',
+    ) ?? ''
+    expect(reply).toContain('These cars are available for your rental period')
+    expect(reply).toContain('Skoda Superb')
+    expect(reply).toContain('Toyota Camry')
+    expect(reply).not.toContain('Toyota Corolla')
+    expect(reply).not.toContain('matching cars from the live fleet')
+  })
+
+  test('detects likely mid-sentence provider output for Gemini diagnostics', () => {
+    expect(__testRentalChatHelpers.looksMidSentence("Okay, so that's pickup today at")).toBe(true)
+    expect(__testRentalChatHelpers.looksMidSentence('The Toyota Camry is available for that rental period.')).toBe(false)
   })
 
   test('keeps stored dates when user confirms drop off same location', () => {

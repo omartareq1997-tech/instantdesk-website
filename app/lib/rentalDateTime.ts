@@ -1,6 +1,8 @@
 export type RentalDateWindowSlots = {
   pickup_datetime?: string | null
   return_datetime?: string | null
+  pickup_date?: string | null
+  return_date?: string | null
 }
 
 const DEFAULT_RENTAL_TIME_ZONE = 'Europe/Warsaw'
@@ -63,6 +65,23 @@ function parseTime(text: string) {
   }
 }
 
+function parseLabeledTime(text: string, label: 'pickup' | 'return') {
+  const pattern = label === 'pickup'
+    ? /\b(?:pick\s*up|pickup|pick-up|pick)\s*(?:at)?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i
+    : /\b(?:return|drop(?:off|-off)?)\s*(?:at)?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i
+  const match = text.match(pattern)
+  if (!match) return null
+  let hour = Number(match[1])
+  const minute = Number(match[2] ?? 0)
+  const suffix = match[3]?.toLowerCase()
+  if (suffix === 'pm' && hour < 12) hour += 12
+  if (suffix === 'am' && hour === 12) hour = 0
+  return {
+    hour: Math.max(0, Math.min(23, hour)),
+    minute: Math.max(0, Math.min(59, minute)),
+  }
+}
+
 function nextWeekday(base: Date, weekday: number) {
   const next = new Date(base)
   const diff = (weekday - next.getDay() + 7) % 7 || 7
@@ -91,6 +110,73 @@ function offsetFor(timeZone: string, year: number, month: number, day: number, h
 function isoWithBusinessOffset(year: number, month: number, day: number, hour: number, minute: number, timeZone: string) {
   const offset = offsetFor(timeZone, year, month, day, hour, minute)
   return `${year}-${pad(month + 1)}-${pad(day)}T${pad(hour)}:${pad(minute)}:00${offset}`
+}
+
+function dateOnly(year: number, month: number, day: number) {
+  return `${year}-${pad(month + 1)}-${pad(day)}`
+}
+
+function datePartFromIso(value: string | null | undefined, timeZone = DEFAULT_RENTAL_TIME_ZONE) {
+  if (!value) return null
+  const direct = value.match(/^(\d{4}-\d{2}-\d{2})(?:T|$)/)?.[1]
+  if (direct) return direct
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(item => item.type === type)?.value
+  const year = part('year')
+  const month = part('month')
+  const day = part('day')
+  return year && month && day ? `${year}-${month}-${day}` : null
+}
+
+function isoFromDateOnly(dateValue: string | null | undefined, time: { hour: number; minute: number } | null, timeZone = DEFAULT_RENTAL_TIME_ZONE) {
+  if (!dateValue || !time) return null
+  const match = dateValue.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return null
+  return isoWithBusinessOffset(Number(match[1]), Number(match[2]) - 1, Number(match[3]), time.hour, time.minute, timeZone)
+}
+
+function parseDateOnlyPhrase(text: string, now = new Date(), timeZone = DEFAULT_RENTAL_TIME_ZONE): string | null {
+  const lower = text.toLowerCase()
+  if (/\btomorrow\b/.test(lower)) {
+    const base = new Date(now)
+    base.setDate(base.getDate() + 1)
+    return dateOnly(base.getFullYear(), base.getMonth(), base.getDate())
+  }
+  if (/\btoday\b/.test(lower)) {
+    return dateOnly(now.getFullYear(), now.getMonth(), now.getDate())
+  }
+  const monthMatch = lower.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{4}))?\b/i)
+  if (monthMatch) {
+    const day = Number(monthMatch[1])
+    const month = MONTH_INDEX[monthMatch[2].toLowerCase()]
+    let year = monthMatch[3] ? Number(monthMatch[3]) : now.getFullYear()
+    const candidate = new Date(year, month, day, 12, 0)
+    if (!monthMatch[3] && candidate.getTime() < now.getTime() - 24 * 60 * 60 * 1000) year += 1
+    return dateOnly(year, month, day)
+  }
+  const numericMatch = lower.match(/\b(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\b/)
+  if (numericMatch) {
+    const day = Number(numericMatch[1])
+    const month = Number(numericMatch[2]) - 1
+    const rawYear = numericMatch[3]
+    let year = rawYear ? Number(rawYear.length === 2 ? `20${rawYear}` : rawYear) : now.getFullYear()
+    const candidate = new Date(year, month, day, 12, 0)
+    if (!rawYear && candidate.getTime() < now.getTime() - 24 * 60 * 60 * 1000) year += 1
+    if (day >= 1 && day <= 31 && month >= 0 && month <= 11) return dateOnly(year, month, day)
+  }
+  const weekday = Object.keys(WEEKDAY_INDEX).find(day => new RegExp(`\\b${day}\\b`, 'i').test(lower))
+  if (weekday) {
+    const base = nextWeekday(now, WEEKDAY_INDEX[weekday])
+    return dateOnly(base.getFullYear(), base.getMonth(), base.getDate())
+  }
+  return null
 }
 
 function parseDatePhrase(text: string, now = new Date(), timeZone = DEFAULT_RENTAL_TIME_ZONE): string | null {
@@ -155,6 +241,17 @@ function splitRentalWindow(message: string, slots: RentalDateWindowSlots) {
   }
 }
 
+function splitRentalDateOnlyWindow(message: string) {
+  const text = message.trim()
+  const fromUntil = text.match(/\b(?:from|pickup(?:\s+at)?(?!\s+location\b)|pick up(?!\s+location\b)|pick-up(?!\s+location\b)|rent(?:\s+a\s+car)?|rent)\s+(.+?)\s+(?:until|to|through|till|and\s+return(?:ing)?(?:\s+on)?|return(?:ing)?(?:\s+on)?|drop(?:off|-off)?(?:\s+on)?(?!\s+location\b))\s+(.+)$/i)
+  if (fromUntil) return { pickupText: fromUntil[1], returnText: fromUntil[2] }
+  const returnMatch = text.match(/\b(?:until|to|return(?:ing)?(?:\s+on)?|drop(?:off|-off)?(?:\s+on)?)\s+(.+)$/i)
+  return {
+    pickupText: text,
+    returnText: returnMatch?.[1] ?? '',
+  }
+}
+
 export function parseRentalDateWindow(
   message: string,
   slots: RentalDateWindowSlots = {},
@@ -162,8 +259,17 @@ export function parseRentalDateWindow(
   timeZone = DEFAULT_RENTAL_TIME_ZONE,
 ) {
   const { pickupText, returnText } = splitRentalWindow(message, slots)
+  const { pickupText: pickupDateText, returnText: returnDateText } = splitRentalDateOnlyWindow(message)
+  const existingPickupDate = slots.pickup_date ?? datePartFromIso(slots.pickup_datetime, timeZone)
+  const existingReturnDate = slots.return_date ?? datePartFromIso(slots.return_datetime, timeZone)
+  const pickupDate = parseDateOnlyPhrase(pickupText, now, timeZone) ?? parseDateOnlyPhrase(pickupDateText, now, timeZone) ?? existingPickupDate
+  const returnDate = parseDateOnlyPhrase(returnText, now, timeZone) ?? parseDateOnlyPhrase(returnDateText, now, timeZone) ?? existingReturnDate
+  const pickupTime = parseLabeledTime(message, 'pickup')
+  const returnTime = parseLabeledTime(message, 'return')
   return {
-    pickupAt: parseDatePhrase(pickupText, now, timeZone),
-    dropoffAt: parseDatePhrase(returnText, now, timeZone),
+    pickupAt: parseDatePhrase(pickupText, now, timeZone) ?? isoFromDateOnly(pickupDate, pickupTime, timeZone),
+    dropoffAt: parseDatePhrase(returnText, now, timeZone) ?? isoFromDateOnly(returnDate, returnTime, timeZone),
+    pickupDate,
+    returnDate,
   }
 }

@@ -122,7 +122,8 @@ function dateTime(iso?: string | null) {
 function mergeServerMessages(existing: Msg[], incoming: Msg[]) {
   if (!incoming.length) return existing
   const incomingKeys = new Set(incoming.map(serverConfirmationKey))
-  const pendingLocal = existing.filter(msg => msg.id.startsWith('local-') && !incomingKeys.has(serverConfirmationKey(msg)))
+  const incomingIds = new Set(incoming.map(msg => msg.id))
+  const pendingLocal = existing.filter(msg => msg.id.startsWith('local-') && !incomingIds.has(msg.id) && !incomingKeys.has(serverConfirmationKey(msg)))
   const byId = new Map<string, Msg>()
   for (const msg of existing.filter(msg => !msg.id.startsWith('local-'))) byId.set(msg.id, msg)
   for (const msg of pendingLocal) byId.set(msg.id, msg)
@@ -278,6 +279,7 @@ export default function ChatWidget() {
   const msgIdRef        = useRef(0)
   const conversationRef = useRef<string | null>(null)  // persists between sends
   const typingStopRef   = useRef<number | null>(null)
+  const messagePollSeqRef = useRef(0)
 
   const nextId = () => String(++msgIdRef.current)
 
@@ -290,12 +292,14 @@ export default function ChatWidget() {
   }, [businessId])
 
   const loadConversationMessages = useCallback(async (conversationId: string, signal?: AbortSignal) => {
+    const seq = ++messagePollSeqRef.current
     const res = await fetch(`/api/live-chat/widget/messages?conversation_id=${encodeURIComponent(conversationId)}`, { signal })
     if (!res.ok) return
     const data = await res.json() as {
       status?: string
       messages?: { id: string; role: string; content: string; created_at?: string | null; read_at?: string | null; delivery_status?: DeliveryStatus | null; metadata?: { sender_type?: string; attachment?: Attachment | null; reactions?: string[] } | null }[]
     }
+    if (seq !== messagePollSeqRef.current) return
     setHandoverActive(data.status === 'handover_requested' || data.status === 'live_chat')
     if (data.messages?.length) {
       const incoming: Msg[] = data.messages.map((msg) => ({
@@ -550,7 +554,9 @@ export default function ChatWidget() {
       return
     }
 
-    const userMsg: Msg = { id: `local-${nextId()}`, role: 'user', text: trimmed || attachment?.name || '', createdAt: new Date().toISOString(), deliveryStatus: 'sent', attachment }
+    const clientMessageId = `cm-${Date.now()}-${nextId()}`
+    const turnId = `turn-${Date.now()}-${nextId()}`
+    const userMsg: Msg = { id: `local-${clientMessageId}`, role: 'user', text: trimmed || attachment?.name || '', createdAt: new Date().toISOString(), deliveryStatus: 'sent', attachment }
     setMessages(prev => [...prev, userMsg])
     setInput('')
     setAttachment(null)
@@ -568,6 +574,9 @@ export default function ChatWidget() {
           channel:         'website',
           host:            window.location.hostname,
           message:         trimmed,
+          client_message_id: clientMessageId,
+          request_id:      turnId,
+          turn_id:         turnId,
           attachment,
           visitor_context: visitorContext(),
         }),
@@ -580,6 +589,8 @@ export default function ChatWidget() {
         status?:          string
         handover?:        boolean
         waiting_for_human?: boolean
+        user_message?: { id: string; role: string; content: string; created_at?: string | null; read_at?: string | null; delivery_status?: DeliveryStatus | null; metadata?: { sender_type?: string; attachment?: Attachment | null; reactions?: string[] } | null } | null
+        assistant_message?: { id: string; role: string; content: string; created_at?: string | null; read_at?: string | null; delivery_status?: DeliveryStatus | null; metadata?: { sender_type?: string; attachment?: Attachment | null; reactions?: string[] } | null } | null
       }
       try {
         data = await res.json()
@@ -613,9 +624,27 @@ export default function ChatWidget() {
         ? 'The assistant connection was interrupted. Please try again.'
         : data.error
       const replyText = data.reply ?? normalizedError
-      if (replyText) {
+      const serverMessages = [data.user_message, data.assistant_message].filter(Boolean).map((msg) => ({
+        id: msg!.id,
+        role: (msg!.role === 'user'
+          ? 'user'
+          : msg!.role === 'human' || msg!.metadata?.sender_type === 'human'
+            ? 'human'
+            : msg!.role === 'system'
+              ? 'system'
+              : 'ai') as Role,
+        text: msg!.content,
+        createdAt: msg!.created_at ?? null,
+        readAt: msg!.read_at ?? null,
+        deliveryStatus: msg!.delivery_status ?? null,
+        attachment: msg!.metadata?.attachment ?? null,
+        reactions: Array.isArray(msg!.metadata?.reactions) ? msg!.metadata.reactions : [],
+      }))
+      if (serverMessages.length) {
+        setMessages(prev => mergeServerMessages(prev, serverMessages))
+      } else if (replyText) {
         setMessages(prev => mergeServerMessages(prev, [{
-          id: `local-ai-${nextId()}`,
+          id: `local-ai-${turnId}`,
           role: 'ai',
           text: replyText,
           createdAt: new Date().toISOString(),

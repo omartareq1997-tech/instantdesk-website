@@ -733,6 +733,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
   const [conversations, setConversations] = useState<ConversationItem[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [messageCache, setMessageCache] = useState<Record<string, ChatMessage[]>>({})
+  const [selectedThreadSnapshot, setSelectedThreadSnapshot] = useState<{ conversationId: string; messages: ChatMessage[] } | null>(null)
   const [reply, setReply] = useState('')
   const [attachment, setAttachment] = useState<Attachment | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
@@ -773,14 +774,20 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
   const [now, setNow] = useState(() => Date.now())
   const messagePaneRef = useRef<HTMLDivElement>(null)
   const wasAtThreadBottomRef = useRef(true)
+  const wasAtThreadBottomBeforeMessageRef = useRef(true)
   const previousSelectedIdRef = useRef<string | null>(null)
   const previousLastMessageIdRef = useRef<string | null>(null)
   const activeProfileRequestRef = useRef<string | null>(null)
+  const profileEditVersionRef = useRef(0)
   const messageCacheRef = useRef<Record<string, ChatMessage[]>>({})
   const conversationsRef = useRef<ConversationItem[]>([])
   const alertWatermarkRef = useRef(Date.now())
   const dismissedIncomingAlertRef = useRef<Record<string, string | null>>({})
   const selectedIdRef = useRef<string | null>(null)
+  const selectedThreadEnsureRef = useRef(0)
+  const conversationLoadSeqRef = useRef(0)
+  const acceptedConversationLoadSeqRef = useRef(0)
+  const typingHoldUntilRef = useRef<Record<string, number>>({})
   const filterRef = useRef(filter)
   const channelFilterRef = useRef(channelFilter)
   const advancedFilterRef = useRef(advancedFilter)
@@ -793,10 +800,19 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
     [conversations, selectedId],
   )
   const selectedMessageId = selected?.id ?? null
-  const messages = useMemo(
-    () => selectedMessageId ? (messageCache[selectedMessageId] ?? []).filter(message => message.metadata?.deleted !== true) : [],
-    [messageCache, selectedMessageId],
-  )
+  const messages = useMemo(() => {
+    if (!selectedMessageId) return []
+    const cached = messageCache[selectedMessageId] ?? []
+    const snapshot = selectedThreadSnapshot?.conversationId === selectedMessageId
+      ? selectedThreadSnapshot.messages
+      : []
+    const byId = new Map<string, ChatMessage>()
+    for (const message of snapshot) byId.set(message.id, message)
+    for (const message of cached) byId.set(message.id, message)
+    return Array.from(byId.values())
+      .filter(message => message.metadata?.deleted !== true)
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+  }, [messageCache, selectedMessageId, selectedThreadSnapshot])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const isThreadAtBottom = useCallback(() => {
     const node = messagePaneRef.current
@@ -815,18 +831,26 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
     wasAtThreadBottomRef.current = atBottom
     if (atBottom) setShowThreadNewMessage(false)
   }, [isThreadAtBottom])
+  const mergeMessageList = useCallback((currentMessages: ChatMessage[], nextMessages: ChatMessage[]) => {
+    const byId = new Map(currentMessages.map(message => [message.id, message]))
+    for (const message of nextMessages) byId.set(message.id, message)
+    return [...byId.values()].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+  }, [])
   const mergeMessages = useCallback((conversationId: string, nextMessages: ChatMessage[]) => {
+    if (conversationId === selectedIdRef.current) {
+      const atBottomBeforeMerge = isThreadAtBottom()
+      wasAtThreadBottomRef.current = atBottomBeforeMerge
+      wasAtThreadBottomBeforeMessageRef.current = atBottomBeforeMerge
+    }
     setMessageCache(prev => {
-      const byId = new Map((prev[conversationId] ?? []).map(message => [message.id, message]))
-      for (const message of nextMessages) byId.set(message.id, message)
       const next = {
         ...prev,
-        [conversationId]: [...byId.values()].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
+        [conversationId]: mergeMessageList(prev[conversationId] ?? [], nextMessages),
       }
       messageCacheRef.current = next
       return next
     })
-  }, [])
+  }, [isThreadAtBottom, mergeMessageList])
   const isTakenOver = selected?.status === 'live_chat'
   const metrics = useMemo(() => [
     { label: 'Open handovers', value: conversations.filter(c => c.status === 'handover_requested').length, Icon: Headphones, color: '#fbbf24' },
@@ -920,20 +944,23 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
 
   const loadMessages = useCallback(async (conversationId: string, delta = false) => {
     const cached = messageCacheRef.current[conversationId] ?? []
-    const since = delta && cached.length ? `?since=${encodeURIComponent(cached[cached.length - 1].created_at)}` : ''
-    const res = await fetch(`/api/live-chat/conversations/${conversationId}/messages${since}`, { cache: 'no-store' })
+    const conversationBusinessId = conversationsRef.current.find(conversation => conversation.id === conversationId)?.business_id
+    const params = new URLSearchParams()
+    if (delta && cached.length) params.set('since', cached[cached.length - 1].created_at)
+    if (conversationBusinessId) params.set('business_id', conversationBusinessId)
+    const query = params.toString() ? `?${params.toString()}` : ''
+    const res = await fetch(`/api/live-chat/conversations/${conversationId}/messages${query}`, { cache: 'no-store' })
     if (!res.ok) return
     const data = await res.json() as { messages: ChatMessage[] }
-    if (delta) mergeMessages(conversationId, data.messages)
-    else {
-      setMessageCache(prev => {
-        const next = { ...prev, [conversationId]: data.messages }
-        messageCacheRef.current = next
-        return next
-      })
+    mergeMessages(conversationId, data.messages)
+    if (conversationId === selectedIdRef.current) {
+      setSelectedThreadSnapshot(prev => ({
+        conversationId,
+        messages: mergeMessageList(prev?.conversationId === conversationId ? prev.messages : (messageCacheRef.current[conversationId] ?? []), data.messages),
+      }))
     }
     setConversations(prev => prev.map(c => c.id === conversationId ? { ...c, unread_count: 0 } : c))
-  }, [mergeMessages])
+  }, [mergeMessageList, mergeMessages])
 
   const openIncomingAlert = useCallback((alert: IncomingAlert) => {
     const conversation = conversationsRef.current.find(item => item.id === alert.conversationId)
@@ -942,7 +969,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
     setSelectedId(alert.conversationId)
     selectedIdRef.current = alert.conversationId
     setIncomingAlerts(prev => prev.filter(item => item.conversationId !== alert.conversationId))
-    void loadMessages(alert.conversationId, Boolean(messageCacheRef.current[alert.conversationId]?.length))
+    void loadMessages(alert.conversationId, false)
   }, [loadMessages])
 
   const selectConversation = useCallback((conversationId: string) => {
@@ -950,18 +977,53 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
     selectedIdRef.current = conversationId
     setShowThreadNewMessage(false)
     wasAtThreadBottomRef.current = true
-    void loadMessages(conversationId, Boolean(messageCacheRef.current[conversationId]?.length))
+    void loadMessages(conversationId, false)
   }, [loadMessages])
 
   const loadConversations = useCallback(async (showLoading = false) => {
-    if (showLoading) setLoading(true)
-    const res = await fetch('/api/live-chat/conversations', { cache: 'no-store' })
-    if (res.ok) {
-      const data = await res.json() as { conversations: ConversationItem[] }
+    const seq = ++conversationLoadSeqRef.current
+    if (showLoading && conversationsRef.current.length === 0) setLoading(true)
+    let data: { conversations: ConversationItem[]; messages_by_conversation?: Record<string, ChatMessage[]> } | null = null
+    for (let attempt = 0; attempt < 5 && !data; attempt += 1) {
+      const controller = new AbortController()
+      const timeout = window.setTimeout(() => controller.abort(), 12_000)
+      try {
+        const res = await fetch('/api/live-chat/conversations', { cache: 'no-store', signal: controller.signal })
+        if (res.ok) {
+          const parsed = await res.json() as { conversations: ConversationItem[]; messages_by_conversation?: Record<string, ChatMessage[]> }
+          const looksLikeTransientEmptyBootstrap = showLoading && conversationsRef.current.length === 0 && parsed.conversations.length === 0 && attempt < 4
+          if (looksLikeTransientEmptyBootstrap) {
+            await new Promise(resolve => window.setTimeout(resolve, 300 * (attempt + 1)))
+          } else {
+            data = parsed
+            break
+          }
+        }
+      } catch {
+        // Retry transient bootstrap failures so the inbox does not remain stuck behind a single stalled request.
+      } finally {
+        window.clearTimeout(timeout)
+      }
+      if (!data) await new Promise(resolve => window.setTimeout(resolve, 250 * (attempt + 1)))
+    }
+    const hasSnapshotRows = (data?.conversations.length ?? 0) > 0
+    const hasLocalRows = conversationsRef.current.length > 0
+    const isFreshEnough = seq === conversationLoadSeqRef.current || seq > acceptedConversationLoadSeqRef.current
+    const shouldAcceptSnapshot = Boolean(data) && (
+      (hasSnapshotRows && (isFreshEnough || !hasLocalRows)) ||
+      (!hasSnapshotRows && !hasLocalRows && isFreshEnough)
+    )
+    if (data && shouldAcceptSnapshot) {
+      acceptedConversationLoadSeqRef.current = Math.max(acceptedConversationLoadSeqRef.current, seq)
       const normalized = data.conversations.map(conversation => ({
         ...conversation,
         channel: normalizeChannel(conversation.channel),
       }))
+      if (data.messages_by_conversation) {
+        for (const [conversationId, preloadedMessages] of Object.entries(data.messages_by_conversation)) {
+          if (Array.isArray(preloadedMessages) && preloadedMessages.length > 20) mergeMessages(conversationId, preloadedMessages)
+        }
+      }
       const previousById = new Map(conversationsRef.current.map(conversation => [conversation.id, conversation]))
       const merged = normalized.map(conversation => {
         const previous = previousById.get(conversation.id)
@@ -974,6 +1036,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
         for (const conversation of merged) {
           const previous = previousById.get(conversation.id)
           const hasNewMessage = Boolean(previous && previous.last_message_at !== conversation.last_message_at)
+          if (hasNewMessage && conversation.id === selectedIdRef.current) void loadMessages(conversation.id, true)
           if (!previous || hasNewMessage) addIncomingAlert(conversation, previous ? 'message' : 'conversation')
         }
       }
@@ -984,10 +1047,10 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
         if (next && !messageCacheRef.current[next]) void loadMessages(next, false)
         return next
       })
-      if (showLoading) setLoading(false)
+      setLoading(false)
       return normalized
     }
-    if (showLoading) setLoading(false)
+    if (showLoading || conversationsRef.current.length > 0) setLoading(false)
     return []
   }, [addIncomingAlert, loadMessages, matchesCurrentFilterSnapshot])
 
@@ -1000,6 +1063,25 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
   useEffect(() => {
     selectedIdRef.current = selected?.id ?? null
   }, [selected?.id])
+
+  useEffect(() => {
+    if (!selected?.id) return
+    const conversationId = selected.id
+    const hasKnownMessages = Boolean(selected.last_message_preview || selected.last_message_at)
+    if (!hasKnownMessages || (messageCacheRef.current[conversationId]?.length ?? 0) > 0) return
+    const generation = ++selectedThreadEnsureRef.current
+    let cancelled = false
+    let attempts = 0
+    const ensureSelectedThreadLoaded = () => {
+      if (cancelled || generation !== selectedThreadEnsureRef.current) return
+      if ((messageCacheRef.current[conversationId]?.length ?? 0) > 0) return
+      attempts += 1
+      void loadMessages(conversationId, false)
+      if (attempts < 6) window.setTimeout(ensureSelectedThreadLoaded, 900)
+    }
+    ensureSelectedThreadLoaded()
+    return () => { cancelled = true }
+  }, [loadMessages, selected?.id, selected?.last_message_at, selected?.last_message_preview])
 
   useEffect(() => {
     conversationsRef.current = conversations
@@ -1069,12 +1151,15 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
       previousLastMessageIdRef.current = currentMessageId
       wasAtThreadBottomRef.current = true
       scrollThreadToBottom('auto')
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => scrollThreadToBottom('auto'))
+      })
       return
     }
 
     if (newMessageInCurrentConversation) {
       previousLastMessageIdRef.current = currentMessageId
-      if (wasAtThreadBottomRef.current || isThreadAtBottom()) {
+      if (wasAtThreadBottomBeforeMessageRef.current) {
         scrollThreadToBottom('auto')
       } else {
         setShowThreadNewMessage(true)
@@ -1095,8 +1180,10 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
 
   const loadCustomerProfile = useCallback(async (customerId: string) => {
     activeProfileRequestRef.current = customerId
+    const requestEditVersion = profileEditVersionRef.current
     const res = await fetch(`/api/customers/${customerId}`, { cache: 'no-store' })
     if (activeProfileRequestRef.current !== customerId) return
+    if (requestEditVersion !== profileEditVersionRef.current) return
     if (!res.ok) {
       setCustomerProfile(null)
       setCustomerProfileId(null)
@@ -1104,6 +1191,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
     }
     const data = await res.json() as { profile?: CustomerProfileData }
     if (activeProfileRequestRef.current !== customerId) return
+    if (requestEditVersion !== profileEditVersionRef.current) return
     setCustomerProfile(data.profile ?? null)
     setCustomerProfileId(data.profile?.customer?.id ?? customerId)
   }, [])
@@ -1121,50 +1209,63 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
     void loadCustomerProfile(customerId)
   }, [loadCustomerProfile, selected?.id, selected?.customer?.id, selected?.customer_id])
 
-  useEffect(() => {
-    if (!selected?.id) return
-    const pollTyping = async () => {
-      try {
-        const res = await fetch(`/api/live-chat/typing?conversation_id=${selected.id}`)
-        if (!res.ok) return
-        const data = await res.json() as { typing?: { actor_type?: string }[] }
-        const isTyping = Boolean(data.typing?.some(item => item.actor_type === 'visitor'))
-        setVisitorTyping(isTyping)
-        setTypingByConversation(prev => ({ ...prev, [selected.id]: isTyping }))
+	  useEffect(() => {
+	    if (!selected?.id) return
+	    const pollOwner = selected.id
+	    const pollTyping = async () => {
+	      try {
+	        const res = await fetch(`/api/live-chat/typing?conversation_id=${pollOwner}`, { cache: 'no-store' })
+	        if (selectedIdRef.current !== pollOwner) return
+	        if (!res.ok) return
+	        const data = await res.json() as { typing?: { actor_type?: string }[] }
+	        if (selectedIdRef.current !== pollOwner) return
+	        const observedTyping = Boolean(data.typing?.some(item => item.actor_type === 'visitor'))
+	        if (observedTyping) typingHoldUntilRef.current[pollOwner] = Date.now() + 8_000
+	        const isTyping = observedTyping || Date.now() < (typingHoldUntilRef.current[pollOwner] ?? 0)
+	        setVisitorTyping(isTyping)
+	        setTypingByConversation(prev => ({ ...prev, [pollOwner]: isTyping }))
       } catch { /* best-effort */ }
     }
     void pollTyping()
-    const interval = window.setInterval(() => void pollTyping(), 1800)
-    return () => window.clearInterval(interval)
-  }, [selected?.id])
+	    const interval = window.setInterval(() => void pollTyping(), 800)
+	    return () => window.clearInterval(interval)
+	  }, [selected?.id])
 
-  useEffect(() => {
-    const ids = filteredConversations.slice(0, 30).map(conversation => conversation.id)
-    if (!ids.length) {
-      setTypingByConversation({})
-      return
-    }
-    const pollVisibleTyping = async () => {
-      const entries = await Promise.all(ids.map(async id => {
-        try {
-          const res = await fetch(`/api/live-chat/typing?conversation_id=${id}`)
-          if (!res.ok) return [id, false] as const
-          const data = await res.json() as { typing?: { actor_type?: string }[] }
-          return [id, Boolean(data.typing?.some(item => item.actor_type === 'visitor'))] as const
-        } catch {
-          return [id, false] as const
+	  useEffect(() => {
+	    const ids = filteredConversations.slice(0, 30).map(conversation => conversation.id)
+	    if (!ids.length) {
+	      setTypingByConversation({})
+	      return
+	    }
+	    const pollVisibleTyping = async () => {
+	      let entries: Array<readonly [string, boolean]> = []
+	      try {
+	        const query = encodeURIComponent(ids.join(','))
+	        const res = await fetch(`/api/live-chat/typing?conversation_ids=${query}`, { cache: 'no-store' })
+	        if (!res.ok) return
+	        const data = await res.json() as { typing_by_conversation?: Record<string, { actor_type?: string }[]> }
+	        entries = ids.map(id => {
+	          const observedTyping = Boolean(data.typing_by_conversation?.[id]?.some(item => item.actor_type === 'visitor'))
+	          if (observedTyping) typingHoldUntilRef.current[id] = Date.now() + 8_000
+	          return [id, observedTyping || Date.now() < (typingHoldUntilRef.current[id] ?? 0)] as const
+	        })
+	      } catch {
+	        return
+	      }
+	      setTypingByConversation(prev => {
+	        const next = { ...prev }
+	        const selectedId = selectedIdRef.current
+        for (const [id, isTyping] of entries) {
+          if (id === selectedId) continue
+          next[id] = isTyping
         }
-      }))
-      setTypingByConversation(prev => {
-        const next = { ...prev }
-        for (const [id, isTyping] of entries) next[id] = isTyping
         return next
       })
     }
     void pollVisibleTyping()
-    const interval = window.setInterval(() => void pollVisibleTyping(), 2200)
-    return () => window.clearInterval(interval)
-  }, [filteredConversations])
+	    const interval = window.setInterval(() => void pollVisibleTyping(), 1200)
+	    return () => window.clearInterval(interval)
+	  }, [filteredConversations])
 
   const anchorFromEvent = (event: Event, width: number, fallbackLeft: number): PopoverAnchor => {
     const detail = (event as CustomEvent<{ left: number; right: number; bottom: number } | null>).detail
@@ -1218,10 +1319,10 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
           void loadConversations(false)
         }
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, (payload) => {
-        const row = payload.new as { id?: string; customer_id?: string | null; status?: ConversationStatus; unread_count?: number; last_message_at?: string; assigned_to?: string | null } | null
-        if (selectedIdRef.current && row?.id === selectedIdRef.current) {
-          setConversations(prev => prev.map(c => c.id === row.id ? {
+	      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, (payload) => {
+	        const row = payload.new as { id?: string; customer_id?: string | null; status?: ConversationStatus; unread_count?: number; last_message_at?: string; assigned_to?: string | null } | null
+	        if (selectedIdRef.current && row?.id === selectedIdRef.current) {
+	          setConversations(prev => prev.map(c => c.id === row.id ? {
             ...c,
             customer_id: row.customer_id ?? c.customer_id,
             status: row.status ?? c.status,
@@ -1235,27 +1336,56 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
             const conversation = next.find(item => item.id === row.id)
             if (conversation) addIncomingAlert(conversation, 'conversation')
           })
-        } else {
-          void loadConversations(false)
-        }
-      })
-      .subscribe()
+	        } else {
+	          void loadConversations(false)
+	        }
+	      })
+	      .on('postgres_changes', { event: '*', schema: 'public', table: 'live_chat_typing' }, (payload) => {
+	        const row = payload.new as { conversation_id?: string | null; actor_type?: string | null; is_typing?: boolean | null; updated_at?: string | null } | null
+	        if (!row?.conversation_id || row.actor_type !== 'visitor') return
+	        const active = row.is_typing === true && (!row.updated_at || Date.now() - new Date(row.updated_at).getTime() < 8_000)
+	        if (active) typingHoldUntilRef.current[row.conversation_id] = Date.now() + 8_000
+	        const visibleTyping = active || Date.now() < (typingHoldUntilRef.current[row.conversation_id] ?? 0)
+	        setTypingByConversation(prev => ({ ...prev, [row.conversation_id!]: visibleTyping }))
+	        if (selectedIdRef.current === row.conversation_id) setVisitorTyping(visibleTyping)
+	      })
+	      .subscribe()
 
     return () => { void supabase.removeChannel(channel) }
   }, [addIncomingAlert, businessId, loadConversations, loadMessages, mergeMessages])
 
-  useEffect(() => {
-    let ticks = 0
-    const interval = window.setInterval(() => {
-      ticks += 1
-      void loadConversations(false)
-      const current = selectedIdRef.current
-      if (current) void loadMessages(current, ticks % 5 !== 0)
-    }, 3500)
-    return () => {
-      window.clearInterval(interval)
-    }
-  }, [loadConversations, loadMessages])
+	  useEffect(() => {
+	    let ticks = 0
+	    const interval = window.setInterval(() => {
+	      ticks += 1
+	      void loadConversations(false)
+	    }, 5000)
+	    return () => {
+	      window.clearInterval(interval)
+	    }
+	  }, [loadConversations])
+
+	  useEffect(() => {
+	    if (loading || conversations.length > 0) return
+	    let attempts = 0
+	    const interval = window.setInterval(() => {
+	      attempts += 1
+	      void loadConversations(false)
+	      if (attempts >= 8) window.clearInterval(interval)
+	    }, 750)
+	    return () => window.clearInterval(interval)
+	  }, [conversations.length, loadConversations, loading])
+
+	  useEffect(() => {
+	    if (!selected?.id) return
+	    const conversationId = selected.id
+	    let ticks = 0
+	    const interval = window.setInterval(() => {
+	      ticks += 1
+	      if (selectedIdRef.current === conversationId) void loadMessages(conversationId, ticks % 3 !== 0)
+	    }, 500)
+	    return () => window.clearInterval(interval)
+	  }, [loadMessages, selected?.id])
 
   const normalizeSettings = (next: LiveChatSettings): LiveChatSettings => {
     if (next.ai_auto_replies_enabled) return next
@@ -1329,6 +1459,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
     const previousConversations = conversationsRef.current
     const previousProfile = customerProfile
     const normalizedValue = value.trim()
+    profileEditVersionRef.current += 1
     setSavingCustomerField(field)
     setCustomerEditNotice(null)
 
@@ -1395,39 +1526,55 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
     mergeMessages(selected.id, [pending])
     setReply('')
     setAttachment(null)
-    const res = await fetch(`/api/live-chat/conversations/${selected.id}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, attachment, type: mode }),
-    })
-    if (res.ok) {
-      setUploadError(null)
-      const data = await res.json() as { message: ChatMessage }
-      setMessageCache(prev => {
-        const next = {
-          ...prev,
-          [selected.id]: (prev[selected.id] ?? []).filter(message => message.id !== pending.id),
-        }
-        messageCacheRef.current = next
-        return next
+    if (mode === 'note') setComposeMode('reply')
+    try {
+      const res = await fetch(`/api/live-chat/conversations/${selected.id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, attachment, type: mode }),
       })
-      mergeMessages(selected.id, [data.message])
-      if (mode === 'note') setComposeMode('reply')
-      if (mode === 'reply') {
-        setConversations(prev => prev.map(c => c.id === selected.id ? {
-          ...c,
-          status: 'live_chat',
-          assigned_to: c.assigned_to ?? currentStaffName,
-          last_message_at: data.message.created_at,
-          last_message_preview: text || attachment?.name || '',
-          last_message_role: data.message.role,
-        } as ConversationItem : c))
+      if (res.ok) {
+        setUploadError(null)
+        const data = await res.json() as { message: ChatMessage }
+        setMessageCache(prev => {
+          const next = {
+            ...prev,
+            [selected.id]: (prev[selected.id] ?? []).filter(message => message.id !== pending.id),
+          }
+          messageCacheRef.current = next
+          return next
+        })
+        mergeMessages(selected.id, [data.message])
+        if (mode === 'reply') {
+          setConversations(prev => prev.map(c => c.id === selected.id ? {
+            ...c,
+            status: 'live_chat',
+            assigned_to: c.assigned_to ?? currentStaffName,
+            last_message_at: data.message.created_at,
+            last_message_preview: text || attachment?.name || '',
+            last_message_role: data.message.role,
+          } as ConversationItem : c))
+        }
+      } else {
+        const errorBody = await res.json().catch(() => ({})) as { error?: string }
+        setUploadError(errorBody.error ?? 'Upload failed. Please try again.')
+        setReply(text)
+        setAttachment(attachment)
+        if (mode === 'note') setComposeMode('note')
+        setMessageCache(prev => {
+          const next = {
+            ...prev,
+            [selected.id]: (prev[selected.id] ?? []).filter(message => message.id !== pending.id),
+          }
+          messageCacheRef.current = next
+          return next
+        })
       }
-    } else {
-      const errorBody = await res.json().catch(() => ({})) as { error?: string }
-      setUploadError(errorBody.error ?? 'Upload failed. Please try again.')
+    } catch {
+      setUploadError('Upload failed. Please try again.')
       setReply(text)
       setAttachment(attachment)
+      if (mode === 'note') setComposeMode('note')
       setMessageCache(prev => {
         const next = {
           ...prev,
@@ -1436,8 +1583,9 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
         messageCacheRef.current = next
         return next
       })
+    } finally {
+      setSending(false)
     }
-    setSending(false)
   }
 
   const publishAgentTyping = useCallback((typing: boolean) => {
@@ -1559,18 +1707,54 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
 
   const saveEdit = async () => {
     if (!selected || !editingMessageId || !editDraft.trim() || savingEdit) return
+    const conversationId = selected.id
+    const messageId = editingMessageId
+    const nextContent = editDraft.trim()
+    const existingMessage = (messageCacheRef.current[conversationId] ?? messages).find(message => message.id === messageId)
+    const optimisticMessage = existingMessage ? {
+      ...existingMessage,
+      content: nextContent,
+      metadata: {
+        ...(existingMessage.metadata ?? {}),
+        sender_type: 'human',
+        edited: true,
+        edited_at: new Date().toISOString(),
+      },
+    } : null
     setSavingEdit(true)
-    const res = await fetch(`/api/live-chat/conversations/${selected.id}/messages`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message_id: editingMessageId, message: editDraft.trim() }),
-    })
-    if (res.ok) {
-      const data = await res.json() as { message: ChatMessage }
-      mergeMessages(selected.id, [data.message])
+    if (optimisticMessage) {
+      mergeMessages(conversationId, [optimisticMessage])
+      setSelectedThreadSnapshot(prev => prev?.conversationId === conversationId ? {
+        conversationId,
+        messages: mergeMessageList(prev.messages, [optimisticMessage]),
+      } : prev)
       cancelEditing()
     }
-    setSavingEdit(false)
+    try {
+      const controller = new AbortController()
+      const timeout = window.setTimeout(() => controller.abort(), 12_000)
+      const res = await fetch(`/api/live-chat/conversations/${conversationId}/messages`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: messageId, message: nextContent }),
+        signal: controller.signal,
+      }).finally(() => window.clearTimeout(timeout))
+      if (res.ok) {
+        const data = await res.json() as { message: ChatMessage }
+        mergeMessages(conversationId, [data.message])
+        setSelectedThreadSnapshot(prev => prev?.conversationId === conversationId ? {
+          conversationId,
+          messages: mergeMessageList(prev.messages, [data.message]),
+        } : prev)
+        cancelEditing()
+      } else {
+        await loadMessages(conversationId, false)
+      }
+    } catch {
+      await loadMessages(conversationId, false)
+    } finally {
+      setSavingEdit(false)
+    }
   }
 
   const deleteMessage = async (message: ChatMessage) => {
@@ -2002,7 +2186,7 @@ export default function LiveChatSection({ businessId }: { businessId: string }) 
                 {showThreadNewMessage && (
                   <button
                     type="button"
-                    onClick={() => scrollThreadToBottom('smooth')}
+                    onClick={() => scrollThreadToBottom('auto')}
                     className="sticky bottom-3 left-1/2 z-20 mx-auto mt-3 block -translate-x-1/2 rounded-full px-3 py-1.5 text-xs font-black text-emerald-100 shadow-xl"
                     style={{ background: 'rgba(16,185,129,0.92)', border: '1px solid rgba(187,247,208,0.2)' }}
                   >

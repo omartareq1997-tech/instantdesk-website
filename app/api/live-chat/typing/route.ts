@@ -19,7 +19,40 @@ function activeTyping(rows: { actor_type: TypingActor; actor_name: string | null
 }
 
 export async function GET(request: NextRequest) {
-  const conversationId = new URL(request.url).searchParams.get('conversation_id')
+  const url = new URL(request.url)
+  const conversationId = url.searchParams.get('conversation_id')
+  const conversationIds = (url.searchParams.get('conversation_ids') ?? '')
+    .split(',')
+    .map(id => id.trim())
+    .filter(id => UUID_RE.test(id))
+    .slice(0, 50)
+  if (!conversationId && conversationIds.length === 0) return NextResponse.json({ error: 'conversation_id is required' }, { status: 400 })
+  if (!conversationId && conversationIds.length > 0) {
+    const sb = createAdminClient()
+    const { data, error } = await sb
+      .from('live_chat_typing')
+      .select('conversation_id,actor_type,actor_name,is_typing,updated_at')
+      .in('conversation_id', conversationIds)
+
+    if (error?.code !== '42P01' && error?.code !== 'PGRST205' && error?.code !== 'PGRST204' && error) {
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
+
+    const grouped: Record<string, { actor_type: TypingActor; actor_name: string | null; is_typing: boolean; updated_at: string }[]> = {}
+    for (const id of conversationIds) grouped[id] = error ? memoryTyping.get(key(id)) ?? [] : []
+    if (!error) {
+      for (const row of (data ?? []) as Array<{ conversation_id?: string | null; actor_type: TypingActor; actor_name: string | null; is_typing: boolean; updated_at: string }>) {
+        if (!row.conversation_id || !grouped[row.conversation_id]) continue
+        grouped[row.conversation_id].push(row)
+      }
+    }
+
+    return NextResponse.json({
+      typing_by_conversation: Object.fromEntries(
+        Object.entries(grouped).map(([id, rows]) => [id, activeTyping(rows)]),
+      ),
+    })
+  }
   if (!conversationId) return NextResponse.json({ error: 'conversation_id is required' }, { status: 400 })
   if (!UUID_RE.test(conversationId)) return NextResponse.json({ typing: [] })
   const sb = createAdminClient()

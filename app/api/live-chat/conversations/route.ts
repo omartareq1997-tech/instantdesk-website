@@ -26,10 +26,13 @@ interface ConversationRow {
 }
 
 interface MessageRow {
+  id: string
   conversation_id: string
+  business_id?: string | null
   role?: string | null
   content?: string | null
   created_at?: string | null
+  read_at?: string | null
   metadata?: Record<string, unknown> | null
 }
 
@@ -95,12 +98,22 @@ export async function GET() {
   const ids = rows.map(c => c.id)
   const customerIds = Array.from(new Set(rows.map(c => c.customer_id).filter(Boolean))) as string[]
 
-  const messagesPromise = ids.length
-    ? sb.from('messages')
-        .select('conversation_id,role,content,created_at,metadata')
+  const messagesPromise = async () => {
+    if (!ids.length) return { data: [], error: null }
+    let result: { data: unknown; error: { code?: string; message: string } | null } = await sb.from('messages')
+      .select('id,conversation_id,business_id,role,content,created_at,read_at,metadata')
+      .in('conversation_id', ids)
+      .order('created_at', { ascending: false })
+      .limit(1000)
+    if (result.error?.code === '42703' || result.error?.code === 'PGRST204') {
+      result = await sb.from('messages')
+        .select('id,conversation_id,role,content,created_at,metadata')
         .in('conversation_id', ids)
         .order('created_at', { ascending: false })
-    : Promise.resolve({ data: [], error: null })
+        .limit(1000)
+    }
+    return result
+  }
 
   const leadsPromise = async () => {
     if (!ids.length) return { data: [], error: null }
@@ -120,7 +133,7 @@ export async function GET() {
   }
 
   const [messagesResult, leadsResult] = await Promise.all([
-    messagesPromise,
+    messagesPromise(),
     leadsPromise(),
   ])
 
@@ -130,7 +143,11 @@ export async function GET() {
   const latestMessage = new Map<string, MessageRow>()
   const latestNonSystemMessage = new Map<string, MessageRow>()
   const latestVisitorContext = new Map<string, Record<string, unknown>>()
+  const messagesByConversation = new Map<string, MessageRow[]>()
   for (const msg of (messagesResult.data ?? []) as MessageRow[]) {
+    const grouped = messagesByConversation.get(msg.conversation_id) ?? []
+    grouped.push(msg)
+    messagesByConversation.set(msg.conversation_id, grouped)
     if (!latestMessage.has(msg.conversation_id)) latestMessage.set(msg.conversation_id, msg)
     if (msg.role !== 'system' && !latestNonSystemMessage.has(msg.conversation_id)) {
       latestNonSystemMessage.set(msg.conversation_id, msg)
@@ -232,5 +249,15 @@ export async function GET() {
     }
   })
 
-  return NextResponse.json({ conversations: items }, { headers: NO_STORE_HEADERS })
+  const recentMessagesByConversation = Object.fromEntries(
+    Array.from(messagesByConversation.entries()).map(([conversationId, messages]) => [
+      conversationId,
+      messages
+        .slice()
+        .sort((a, b) => new Date(a.created_at ?? 0).getTime() - new Date(b.created_at ?? 0).getTime())
+        .slice(-100),
+    ]),
+  )
+
+  return NextResponse.json({ conversations: items, messages_by_conversation: recentMessagesByConversation }, { headers: NO_STORE_HEADERS })
 }

@@ -958,9 +958,12 @@ type RentalSemanticInterpretation = {
 type RentalSemanticTraceMeta = {
   semantic_source: 'llm' | 'legacy_fallback' | 'deterministic'
   fallback_used: boolean
-  fallback_reason: string | null
+  fallback_reason: RentalSemanticFallbackReason | null
+  fallback_reason_detail?: string | null
   interpreter_latency_ms: number | null
   semantic_parse_success: boolean
+  semantic_retry_used?: boolean
+  validation_issues?: RentalSemanticValidationIssue[]
   finish_reason?: string | null
 }
 
@@ -968,10 +971,33 @@ type RentalResponseTraceMeta = {
   generator_source: 'llm' | 'deterministic_fallback'
   response_latency_ms: number | null
   fallback_used: boolean
+  fallback_reason?: string | null
   provider_retry_used: boolean
   finish_reason: string | null
   output_length: number
 }
+
+type RentalSemanticFallbackReason =
+  | 'PROVIDER_REQUEST_FAILED'
+  | 'PROVIDER_TIMEOUT'
+  | 'PROVIDER_EMPTY_RESPONSE'
+  | 'UNSUPPORTED_STRUCTURED_OUTPUT'
+  | 'JSON_PARSE_FAILED'
+  | 'SCHEMA_VALIDATION_FAILED'
+  | 'INVALID_INTENT'
+  | 'INVALID_RELATION'
+  | 'INVALID_REFERENCE'
+  | 'MODEL_CONFIGURATION_ERROR'
+  | 'PROVIDER_ADAPTER_ERROR'
+  | 'SEMANTIC_RETRY_EXHAUSTED'
+  | 'UNKNOWN_SEMANTIC_FAILURE'
+
+type RentalSemanticValidationIssue = {
+  path: string
+  code: string
+}
+
+type SemanticProvider = 'openai' | 'gemini' | 'claude'
 
 const EMPTY_RENTAL_SEMANTICS: RentalSemanticInterpretation = {
   intent: 'UNKNOWN',
@@ -1052,6 +1078,26 @@ function asRentalSemanticIntent(value: unknown): RentalSemanticIntent {
   return typeof value === 'string' && allowed.includes(value as RentalSemanticIntent) ? value as RentalSemanticIntent : 'UNKNOWN'
 }
 
+const RENTAL_SEMANTIC_INTENTS: RentalSemanticIntent[] = [
+  'START_RENTAL',
+  'UPDATE_RENTAL_DETAILS',
+  'CORRECT_RENTAL_DETAILS',
+  'ASK_AVAILABLE_VEHICLES',
+  'ASK_AVAILABLE_VEHICLES_BY_CLASS',
+  'SELECT_VEHICLE',
+  'ASK_LOCATION',
+  'ASK_PRICE',
+  'ASK_DEPOSIT',
+  'ASK_POLICY',
+  'CONFIRM_BOOKING',
+  'CANCEL_BOOKING',
+  'EXTEND_BOOKING',
+  'UPDATE_BOOKING',
+  'PROVIDE_CUSTOMER_DETAILS',
+  'GENERAL_QUESTION',
+  'UNKNOWN',
+]
+
 function asRentalSemanticField(value: unknown): RentalSemanticField | null {
   const allowed: RentalSemanticField[] = [
     'pickup_location',
@@ -1070,6 +1116,55 @@ function asRentalSemanticField(value: unknown): RentalSemanticField | null {
     'email',
   ]
   return typeof value === 'string' && allowed.includes(value as RentalSemanticField) ? value as RentalSemanticField : null
+}
+
+function validateSemanticInterpretationPayload(value: unknown): RentalSemanticValidationIssue[] {
+  const issues: RentalSemanticValidationIssue[] = []
+  const record = safeRecord(value)
+  if (!record || Object.keys(record).length === 0) return [{ path: '$', code: 'not_object' }]
+  if (typeof record.intent !== 'string') issues.push({ path: 'intent', code: 'missing_or_not_string' })
+  else if (!RENTAL_SEMANTIC_INTENTS.includes(record.intent as RentalSemanticIntent)) issues.push({ path: 'intent', code: 'invalid_enum' })
+
+  if (record.relations != null && !Array.isArray(record.relations)) {
+    issues.push({ path: 'relations', code: 'not_array' })
+  } else if (Array.isArray(record.relations)) {
+    record.relations.forEach((item, index) => {
+      const relation = safeRecord(item)
+      if (relation.type === 'SAME_AS') {
+        if (!asRentalSemanticField(relation.source)) issues.push({ path: `relations[${index}].source`, code: 'invalid_field' })
+        if (!asRentalSemanticField(relation.target)) issues.push({ path: `relations[${index}].target`, code: 'invalid_field' })
+      } else if (relation.type === 'SAME_LOCATION') {
+        if (!Array.isArray(relation.fields) || relation.fields.filter(asRentalSemanticField).length < 2) issues.push({ path: `relations[${index}].fields`, code: 'invalid_fields' })
+      } else {
+        issues.push({ path: `relations[${index}].type`, code: 'invalid_enum' })
+      }
+    })
+  }
+
+  if (record.references != null && !Array.isArray(record.references)) {
+    issues.push({ path: 'references', code: 'not_array' })
+  } else if (Array.isArray(record.references)) {
+    record.references.forEach((item, index) => {
+      const ref = safeRecord(item)
+      if (ref.field != null && !asRentalSemanticField(ref.field)) issues.push({ path: `references[${index}].field`, code: 'invalid_field' })
+      if (ref.resolved_to != null && typeof ref.resolved_to !== 'string') issues.push({ path: `references[${index}].resolved_to`, code: 'not_string' })
+    })
+  }
+
+  if (record.corrections != null && !Array.isArray(record.corrections)) {
+    issues.push({ path: 'corrections', code: 'not_array' })
+  } else if (Array.isArray(record.corrections)) {
+    record.corrections.forEach((item, index) => {
+      const correction = safeRecord(item)
+      if (!asRentalSemanticField(correction.field)) issues.push({ path: `corrections[${index}].field`, code: 'invalid_field' })
+      if (correction.operation != null && correction.operation !== 'CLEAR' && correction.operation !== 'REPLACE' && correction.operation !== 'SET') {
+        issues.push({ path: `corrections[${index}].operation`, code: 'invalid_enum' })
+      }
+    })
+  }
+
+  if (record.confirmation != null && record.confirmation !== 'yes' && record.confirmation !== 'no') issues.push({ path: 'confirmation', code: 'invalid_enum' })
+  return issues
 }
 
 function rentalSemanticIntentToUserIntent(intent: RentalSemanticIntent): RentalUserIntent | 'NON_RENTAL' {
@@ -2414,6 +2509,10 @@ export const __testRentalChatHelpers = {
   sameLocationIntent,
   dropoffSameAsPickupIntent,
   normalizeSemanticInterpretation,
+  validateSemanticInterpretationPayload,
+  extractSemanticTextFromProviderPayload,
+  parseSemanticJson,
+  semanticProviderForModel,
   reduceRentalState,
   semanticNeedsLocationTool,
   rentalSemanticIntentToUserIntent,
@@ -2446,7 +2545,7 @@ async function callOpenAI(
     model,
     temperature,
     messages,
-    max_tokens: 300,
+    max_tokens: 900,
   })
 
   const text = response.choices[0]?.message?.content?.trim() ?? ''
@@ -2586,7 +2685,71 @@ async function callGemini(
   throw lastIncomplete ?? new GeminiIncompleteResponseError('Gemini response did not finish cleanly.', 'INCOMPLETE_RESPONSE', null)
 }
 
-async function interpretRentalSemanticsWithGemini(input: {
+function semanticProviderForModel(model: string): SemanticProvider {
+  if (isGeminiModel(model)) return 'gemini'
+  if (model.toLowerCase().startsWith('claude')) return 'claude'
+  return 'openai'
+}
+
+function stripJsonFences(text: string) {
+  return text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/,'').trim()
+}
+
+function extractSemanticTextFromProviderPayload(provider: SemanticProvider, payload: unknown): { text: string; finishReason: string | null; candidateCount: number; contentPartCount: number } {
+  const record = safeRecord(payload)
+  if (provider === 'gemini') {
+    const candidates = Array.isArray(record.candidates) ? record.candidates : []
+    const candidate = safeRecord(candidates[0])
+    const content = safeRecord(candidate.content)
+    const parts = Array.isArray(content.parts) ? content.parts : []
+    return {
+      text: parts.map(part => strOrNull(safeRecord(part).text) ?? '').join('').trim(),
+      finishReason: strOrNull(candidate.finishReason),
+      candidateCount: candidates.length,
+      contentPartCount: parts.length,
+    }
+  }
+  if (provider === 'openai') {
+    const outputText = strOrNull(record.output_text)
+    if (outputText) return { text: outputText.trim(), finishReason: strOrNull(record.status), candidateCount: 1, contentPartCount: 1 }
+    const choices = Array.isArray(record.choices) ? record.choices : []
+    const choice = safeRecord(choices[0])
+    const message = safeRecord(choice.message)
+    const content = message.content
+    const text = typeof content === 'string'
+      ? content
+      : Array.isArray(content)
+        ? content.map(part => strOrNull(safeRecord(part).text) ?? '').join('')
+        : ''
+    return {
+      text: text.trim(),
+      finishReason: strOrNull(choice.finish_reason),
+      candidateCount: choices.length,
+      contentPartCount: text ? 1 : 0,
+    }
+  }
+  const content = Array.isArray(record.content) ? record.content : []
+  return {
+    text: content.map(part => strOrNull(safeRecord(part).text) ?? '').join('').trim(),
+    finishReason: strOrNull(record.stop_reason) ?? strOrNull(record.stopReason),
+    candidateCount: content.length ? 1 : 0,
+    contentPartCount: content.length,
+  }
+}
+
+function cleanSemanticFinishReason(provider: SemanticProvider, finishReason: string | null) {
+  if (!finishReason) return true
+  const normalized = finishReason.toUpperCase()
+  if (provider === 'openai') return normalized === 'STOP' || normalized === 'COMPLETED'
+  if (provider === 'claude') return normalized === 'END_TURN' || normalized === 'STOP_SEQUENCE'
+  return normalized === 'STOP' || normalized === 'FINISH_REASON_UNSPECIFIED'
+}
+
+function parseSemanticJson(text: string) {
+  return JSON.parse(stripJsonFences(text)) as unknown
+}
+
+function semanticPrompt(input: {
   model: string
   agent: AgentRow
   currentState: Slots
@@ -2595,28 +2758,21 @@ async function interpretRentalSemanticsWithGemini(input: {
   qualificationStage: string
   missing: SlotDef[]
   correlationId: string
-}): Promise<{ interpretation: RentalSemanticInterpretation | null; trace: RentalSemanticTraceMeta }> {
-  const apiKey = process.env.GEMINI_API_KEY
-  if (!apiKey || !isGeminiModel(input.model)) return {
-    interpretation: null,
-    trace: {
-      semantic_source: 'legacy_fallback',
-      fallback_used: true,
-      fallback_reason: !apiKey ? 'missing_gemini_key' : 'non_gemini_model',
-      interpreter_latency_ms: null,
-      semantic_parse_success: false,
-      finish_reason: null,
-    },
-  }
+}) {
   const recentHistory = input.history.slice(-10)
-  const prompt = [
+  return [
     'You are the semantic interpreter for a car-rental operations agent.',
     'Do not write a customer-facing reply.',
     'Return only JSON matching this shape:',
     '{"intent":"...","state_patch":{},"relations":[],"references":[],"corrections":[],"question":null,"confirmation":null,"confidence":0.0}',
+    `Allowed intents: ${RENTAL_SEMANTIC_INTENTS.join(', ')}`,
+    'Allowed relation types: SAME_AS, SAME_LOCATION.',
+    'Allowed state/reference fields: pickup_location, dropoff_location, pickup_datetime, return_datetime, pickup_date, return_date, pickup_time, return_time, selected_vehicle, car_class, transmission, name, phone, email.',
     'Let language understanding be broad and contextual. Do not require exact phrases.',
     'Use relations for contextual references, for example SAME_AS pickup_location -> dropoff_location.',
     'Use references for "first one", "cheaper one", "there", "that place", and similar contextual references.',
+    'If the customer confirms the previous assistant proposal, set confirmation to "yes" and include references/relations for what was confirmed.',
+    'Budget or low-cost wording should be represented as ASK_AVAILABLE_VEHICLES or SELECT_VEHICLE with a lowest_price_candidate / cheapest_offered_vehicle reference when context supports it.',
     'Never invent database IDs. Vehicle/location names are allowed; IDs are backend-only.',
     'If the message is ambiguous, set intent UNKNOWN or GENERAL_QUESTION with low confidence.',
     'Configured bot instructions for tone/context:',
@@ -2627,63 +2783,177 @@ async function interpretRentalSemanticsWithGemini(input: {
     `Recent history JSON: ${JSON.stringify(recentHistory)}`,
     `Latest customer message: ${input.userMessage}`,
   ].join('\n\n')
+}
+
+async function semanticOpenAiAttempt(input: { model: string; prompt: string }) {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) throw new Error('MODEL_CONFIGURATION_ERROR:OPENAI_API_KEY')
+  const client = new OpenAI({ apiKey })
+  const response = await client.chat.completions.create({
+    model: input.model,
+    temperature: 0.1,
+    messages: [
+      { role: 'system', content: 'Return one valid JSON object only. No markdown.' },
+      { role: 'user', content: input.prompt },
+    ],
+    response_format: { type: 'json_object' },
+    max_tokens: 700,
+  })
+  return extractSemanticTextFromProviderPayload('openai', response)
+}
+
+async function semanticGeminiAttempt(input: { model: string; prompt: string; signal: AbortSignal }) {
+  const apiKey = process.env.GEMINI_API_KEY
+  if (!apiKey) throw new Error('MODEL_CONFIGURATION_ERROR:GEMINI_API_KEY')
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: input.signal,
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: input.prompt }] }],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 700,
+        responseMimeType: 'application/json',
+      },
+    }),
+  })
+  const payload = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(`PROVIDER_REQUEST_FAILED:${res.status}`)
+  return extractSemanticTextFromProviderPayload('gemini', payload)
+}
+
+async function semanticProviderAttempt(provider: SemanticProvider, input: { model: string; prompt: string; signal: AbortSignal }) {
+  if (provider === 'gemini') return semanticGeminiAttempt(input)
+  if (provider === 'openai') return semanticOpenAiAttempt(input)
+  throw new Error('UNSUPPORTED_STRUCTURED_OUTPUT:claude_adapter_not_configured')
+}
+
+function semanticFallbackReasonFromError(error: unknown): { reason: RentalSemanticFallbackReason; detail: string | null } {
+  const message = error instanceof Error ? error.message : String(error)
+  const lowerMessage = message.toLowerCase()
+  if (message.startsWith('MODEL_CONFIGURATION_ERROR')) return { reason: 'MODEL_CONFIGURATION_ERROR', detail: message.split(':').slice(1).join(':') || null }
+  if (message.startsWith('UNSUPPORTED_STRUCTURED_OUTPUT')) return { reason: 'UNSUPPORTED_STRUCTURED_OUTPUT', detail: message.split(':').slice(1).join(':') || null }
+  if (message.startsWith('PROVIDER_REQUEST_FAILED')) return { reason: 'PROVIDER_REQUEST_FAILED', detail: message.split(':').slice(1).join(':') || null }
+  if (
+    lowerMessage.includes('response_format') ||
+    (lowerMessage.includes('structured') && lowerMessage.includes('unsupported')) ||
+    (lowerMessage.includes('json') && lowerMessage.includes('unsupported'))
+  ) return { reason: 'UNSUPPORTED_STRUCTURED_OUTPUT', detail: null }
+  if (error instanceof SyntaxError) return { reason: 'JSON_PARSE_FAILED', detail: null }
+  if (error && typeof error === 'object' && String((error as { name?: unknown }).name ?? '').includes('AbortError')) return { reason: 'PROVIDER_TIMEOUT', detail: null }
+  return { reason: 'PROVIDER_ADAPTER_ERROR', detail: null }
+}
+
+async function interpretRentalSemantics(input: {
+  model: string
+  agent: AgentRow
+  currentState: Slots
+  history: { role: 'user' | 'assistant'; content: string }[]
+  userMessage: string
+  qualificationStage: string
+  missing: SlotDef[]
+  correlationId: string
+}): Promise<{ interpretation: RentalSemanticInterpretation | null; trace: RentalSemanticTraceMeta }> {
+  const provider = semanticProviderForModel(input.model)
+  const basePrompt = semanticPrompt(input)
   const controller = new AbortController()
   const startedAt = Date.now()
   const timeout = setTimeout(() => controller.abort(), 12_000)
+  let lastReason: RentalSemanticFallbackReason | null = null
+  let lastDetail: string | null = null
+  let lastIssues: RentalSemanticValidationIssue[] = []
+  let lastFinishReason: string | null = null
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.1,
-          maxOutputTokens: 500,
-          responseMimeType: 'application/json',
-        },
-      }),
-    })
-    const payload = await res.json().catch(() => null) as {
-      candidates?: Array<{ finishReason?: string; content?: { parts?: Array<{ text?: string }> } }>
-      error?: { message?: string; status?: string; code?: number }
-    } | null
-    const candidate = payload?.candidates?.[0]
-    const text = candidate?.content?.parts?.map(part => part.text ?? '').join('').trim() ?? ''
+    for (const attempt of [1, 2]) {
+      const prompt = attempt === 1
+        ? basePrompt
+        : `${basePrompt}\n\nYour previous semantic JSON was invalid or incomplete. Return only one complete JSON object matching the canonical schema.`
+      try {
+        const output = await semanticProviderAttempt(provider, { model: input.model, prompt, signal: controller.signal })
+        lastFinishReason = output.finishReason
+        const latencyMs = Date.now() - startedAt
+        console.log('[SEMANTIC_DIAG] rental interpreter response', {
+          correlation_id: input.correlationId,
+          provider,
+          model: input.model,
+          attempt,
+          finish_reason: output.finishReason,
+          candidate_count: output.candidateCount,
+          content_parts: output.contentPartCount,
+          output_chars: output.text.length,
+          latency_ms: latencyMs,
+        })
+        if (!output.text) {
+          lastReason = 'PROVIDER_EMPTY_RESPONSE'
+          lastDetail = null
+          continue
+        }
+        if (!cleanSemanticFinishReason(provider, output.finishReason)) {
+          lastReason = output.finishReason?.toUpperCase().includes('TOKEN') ? 'SEMANTIC_RETRY_EXHAUSTED' : 'PROVIDER_ADAPTER_ERROR'
+          lastDetail = output.finishReason
+          continue
+        }
+        let parsed: unknown
+        try {
+          parsed = parseSemanticJson(output.text)
+        } catch {
+          lastReason = 'JSON_PARSE_FAILED'
+          lastDetail = null
+          continue
+        }
+        const issues = validateSemanticInterpretationPayload(parsed)
+        if (issues.length) {
+          lastIssues = issues
+          lastReason = issues.some(issue => issue.path === 'intent') ? 'INVALID_INTENT' :
+            issues.some(issue => issue.path.includes('relations')) ? 'INVALID_RELATION' :
+              issues.some(issue => issue.path.includes('references')) ? 'INVALID_REFERENCE' :
+                'SCHEMA_VALIDATION_FAILED'
+          lastDetail = null
+          continue
+        }
+        return {
+          interpretation: normalizeSemanticInterpretation(parsed, 'llm'),
+          trace: {
+            semantic_source: 'llm',
+            fallback_used: false,
+            fallback_reason: null,
+            fallback_reason_detail: null,
+            interpreter_latency_ms: latencyMs,
+            semantic_parse_success: true,
+            semantic_retry_used: attempt > 1,
+            validation_issues: [],
+            finish_reason: output.finishReason,
+          },
+        }
+      } catch (error) {
+        const classified = semanticFallbackReasonFromError(error)
+        lastReason = classified.reason
+        lastDetail = classified.detail
+        if (classified.reason !== 'JSON_PARSE_FAILED' && classified.reason !== 'PROVIDER_EMPTY_RESPONSE') break
+      }
+    }
     const latencyMs = Date.now() - startedAt
-    console.log('[SEMANTIC_DIAG] rental interpreter response', {
-      correlation_id: input.correlationId,
-      finish_reason: candidate?.finishReason ?? null,
-      output_chars: text.length,
-      latency_ms: latencyMs,
-    })
-    if (!res.ok || !text || candidate?.finishReason && !['STOP', 'FINISH_REASON_UNSPECIFIED'].includes(candidate.finishReason)) return {
+    return {
       interpretation: null,
       trace: {
         semantic_source: 'legacy_fallback',
         fallback_used: true,
-        fallback_reason: !res.ok ? 'provider_http_error' : !text ? 'empty_semantic_response' : `finish_reason:${candidate?.finishReason ?? 'unknown'}`,
+        fallback_reason: lastReason ?? 'UNKNOWN_SEMANTIC_FAILURE',
+        fallback_reason_detail: lastDetail,
         interpreter_latency_ms: latencyMs,
         semantic_parse_success: false,
-        finish_reason: candidate?.finishReason ?? null,
-      },
-    }
-    const parsed = JSON.parse(text) as unknown
-    return {
-      interpretation: normalizeSemanticInterpretation(parsed, 'llm'),
-      trace: {
-        semantic_source: 'llm',
-        fallback_used: false,
-        fallback_reason: null,
-        interpreter_latency_ms: latencyMs,
-        semantic_parse_success: true,
-        finish_reason: candidate?.finishReason ?? null,
+        semantic_retry_used: true,
+        validation_issues: lastIssues,
+        finish_reason: lastFinishReason,
       },
     }
   } catch (error) {
     const latencyMs = Date.now() - startedAt
+    const classified = semanticFallbackReasonFromError(error)
     console.warn('[SEMANTIC_DIAG] rental interpreter fallback', {
       correlation_id: input.correlationId,
+      provider,
       message: error instanceof Error ? error.message : String(error),
       latency_ms: latencyMs,
     })
@@ -2692,9 +2962,12 @@ async function interpretRentalSemanticsWithGemini(input: {
       trace: {
         semantic_source: 'legacy_fallback',
         fallback_used: true,
-        fallback_reason: error instanceof SyntaxError ? 'semantic_json_parse_error' : 'semantic_interpreter_error',
+        fallback_reason: classified.reason,
+        fallback_reason_detail: classified.detail,
         interpreter_latency_ms: latencyMs,
         semantic_parse_success: false,
+        semantic_retry_used: false,
+        validation_issues: [],
         finish_reason: null,
       },
     }
@@ -2729,12 +3002,13 @@ async function generateRentalNaturalReply(input: {
   history: { role: 'user' | 'assistant'; content: string }[]
   correlationId: string
 }) {
-  if (!isGeminiModel(input.agent.model) || input.semantics.source !== 'llm') return {
+  if (input.semantics.source !== 'llm') return {
     reply: null,
     trace: {
       generator_source: 'deterministic_fallback',
       response_latency_ms: null,
       fallback_used: true,
+      fallback_reason: 'semantic_source_not_llm',
       provider_retry_used: false,
       finish_reason: null,
       output_length: input.draftReply.length,
@@ -2757,14 +3031,23 @@ async function generateRentalNaturalReply(input: {
   ].join('\n\n')
   const startedAt = Date.now()
   try {
-    const reply = await callGemini(
-      input.agent.model,
-      Math.min(input.agent.temperature ?? 0.3, 0.4),
-      systemPrompt,
-      input.history.slice(-8),
-      input.userMessage,
-      `${input.correlationId}:response`,
-    )
+    const reply = isGeminiModel(input.agent.model)
+      ? await callGemini(
+        input.agent.model,
+        Math.min(input.agent.temperature ?? 0.3, 0.4),
+        systemPrompt,
+        input.history.slice(-8),
+        input.userMessage,
+        `${input.correlationId}:response`,
+      )
+      : await callOpenAI(
+        new OpenAI({ apiKey: process.env.OPENAI_API_KEY || 'missing-openai-key' }),
+        input.agent.model,
+        Math.min(input.agent.temperature ?? 0.3, 0.4),
+        systemPrompt,
+        input.history.slice(-8),
+        input.userMessage,
+      )
     console.log('[SEMANTIC_DIAG] rental response generator accepted', {
       correlation_id: input.correlationId,
       latency_ms: Date.now() - startedAt,
@@ -2776,6 +3059,7 @@ async function generateRentalNaturalReply(input: {
         generator_source: 'llm',
         response_latency_ms: Date.now() - startedAt,
         fallback_used: false,
+        fallback_reason: null,
         provider_retry_used: false,
         finish_reason: 'STOP',
         output_length: reply.length,
@@ -2793,6 +3077,7 @@ async function generateRentalNaturalReply(input: {
         generator_source: 'deterministic_fallback',
         response_latency_ms: Date.now() - startedAt,
         fallback_used: true,
+        fallback_reason: error instanceof Error && error.message.toLowerCase().includes('api key') ? 'MODEL_CONFIGURATION_ERROR' : 'PROVIDER_REQUEST_FAILED',
         provider_retry_used: false,
         finish_reason: null,
         output_length: input.draftReply.length,
@@ -3761,6 +4046,7 @@ export async function POST(req: NextRequest) {
     generator_source: 'deterministic_fallback',
     response_latency_ms: null,
     fallback_used: false,
+    fallback_reason: null,
     provider_retry_used: false,
     finish_reason: null,
     output_length: 0,
@@ -3801,7 +4087,7 @@ export async function POST(req: NextRequest) {
         })),
       })
     }
-    const interpreted = await interpretRentalSemanticsWithGemini({
+    const interpreted = await interpretRentalSemantics({
       model: agent.model,
       agent,
       currentState: confirmed,
@@ -3818,7 +4104,7 @@ export async function POST(req: NextRequest) {
         ...semanticTrace,
         semantic_source: 'legacy_fallback',
         fallback_used: true,
-        fallback_reason: semanticTrace.fallback_reason ?? 'semantic_interpreter_unavailable',
+        fallback_reason: semanticTrace.fallback_reason ?? 'UNKNOWN_SEMANTIC_FAILURE',
       }
     }
     emitRentalTrace('rental_semantic_interpretation', {
@@ -3837,9 +4123,13 @@ export async function POST(req: NextRequest) {
       confidence: rentalSemantics.confidence,
       fallback_used: semanticTrace.fallback_used,
       fallback_reason: semanticTrace.fallback_reason,
+      fallback_reason_detail: semanticTrace.fallback_reason_detail ?? null,
       interpreter_latency_ms: semanticTrace.interpreter_latency_ms,
       semantic_parse_success: semanticTrace.semantic_parse_success,
+      semantic_retry_used: semanticTrace.semantic_retry_used ?? false,
+      validation_issues: semanticTrace.validation_issues ?? [],
       finish_reason: semanticTrace.finish_reason ?? null,
+      known_state_fields: Object.entries(redactedSlotPresence(confirmed)).filter(([, present]) => present).map(([field]) => field),
     })
     const beforeReduction = confirmed
     const reduced = reduceRentalState(confirmed, rentalSemantics, history.map(r => ({ role: r.role === 'assistant' ? 'assistant' : 'user', content: r.content })))
@@ -3851,6 +4141,7 @@ export async function POST(req: NextRequest) {
       turn_id: turnId,
       intent: rentalSemantics.intent,
       changed_fields: stateChangedFields,
+      known_state_fields: Object.entries(redactedSlotPresence(confirmed)).filter(([, present]) => present).map(([field]) => field),
       applied_relation_types: rentalSemantics.relations.map(relation => relation.type),
       correction_fields: rentalSemantics.corrections.map(correction => correction.field),
       preserved_field_count: countPreservedFields(beforeReduction, confirmed),
@@ -4151,6 +4442,7 @@ export async function POST(req: NextRequest) {
       model: agent.model,
       response_latency_ms: responseTrace.response_latency_ms,
       fallback_used: responseTrace.fallback_used,
+      fallback_reason: responseTrace.fallback_reason ?? null,
       provider_retry_used: responseTrace.provider_retry_used,
       finish_reason: responseTrace.finish_reason,
       output_length: finalReply.length,
@@ -4331,6 +4623,7 @@ export async function POST(req: NextRequest) {
       model: agent.model,
       response_latency_ms: responseTrace.response_latency_ms,
       fallback_used: responseTrace.fallback_used,
+      fallback_reason: responseTrace.fallback_reason ?? null,
       provider_retry_used: responseTrace.provider_retry_used,
       finish_reason: responseTrace.finish_reason,
       output_length: finalReply.length,

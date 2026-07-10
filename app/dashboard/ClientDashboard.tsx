@@ -2466,6 +2466,11 @@ function AgentTracesSection({ bots, selectedBotId, onSelectBot }: { bots: Dashbo
         <div className="space-y-2">
           {groupedTurns.map(group => {
             const changed = Array.isArray(group.state?.trace_data?.changed_fields) ? group.state?.trace_data?.changed_fields as string[] : []
+            const known = Array.isArray(group.state?.trace_data?.known_state_fields)
+              ? group.state?.trace_data?.known_state_fields as string[]
+              : Array.isArray(group.semantic?.trace_data?.known_state_fields)
+                ? group.semantic?.trace_data?.known_state_fields as string[]
+                : []
             const tools = Array.isArray(group.tools?.trace_data?.tools) ? group.tools?.trace_data?.tools as string[] : []
             return (
               <button key={group.turnId} type="button" onClick={() => setSelectedTurn(group.turnId)} className="w-full rounded-xl border border-white/10 bg-white/[0.025] px-4 py-3 text-left transition hover:bg-white/[0.045]">
@@ -2481,9 +2486,9 @@ function AgentTracesSection({ bots, selectedBotId, onSelectBot }: { bots: Dashbo
                   </div>
                 </div>
                 <div className="mt-2 grid gap-2 text-xs text-white/45 sm:grid-cols-3">
-                  <span>State: {changed.length ? changed.join(', ') : 'none'}</span>
+                  <span>Changed: {changed.length ? changed.join(', ') : 'none'}</span>
+                  <span>Known: {known.length ? known.slice(0, 4).join(', ') + (known.length > 4 ? ` +${known.length - 4}` : '') : 'none'}</span>
                   <span>Response: {String(group.response?.trace_data?.generator_source ?? 'unknown')}</span>
-                  <span>Latency: {group.complete?.latency_ms ? `${group.complete.latency_ms} ms` : 'n/a'}</span>
                 </div>
               </button>
             )
@@ -2509,8 +2514,11 @@ function AgentTracesSection({ bots, selectedBotId, onSelectBot }: { bots: Dashbo
                     {row.semantic_intent && <span>Intent: {row.semantic_intent}</span>}
                     {row.model && <span>Model: {row.model}</span>}
                     <span>Fallback: {row.fallback_used ? 'Yes' : 'No'}</span>
+                    {Boolean(row.trace_data?.fallback_reason) && <span>Fallback reason: {String(row.trace_data.fallback_reason)}</span>}
+                    {Array.isArray(row.trace_data?.validation_issues) && (row.trace_data.validation_issues as unknown[]).length > 0 && <span>Validation issues: {(row.trace_data.validation_issues as Array<{ path?: string; code?: string }>).map(issue => `${issue.path ?? '?'}:${issue.code ?? '?'}`).join(', ')}</span>}
                     {row.event_type === 'rental_semantic_interpretation' && <span>Relations: {relationLabel(row)}</span>}
                     {Array.isArray(row.trace_data?.changed_fields) && <span>Changed fields: {(row.trace_data.changed_fields as string[]).join(', ') || 'none'}</span>}
+                    {Array.isArray(row.trace_data?.known_state_fields) && <span>Known state fields: {(row.trace_data.known_state_fields as string[]).join(', ') || 'none'}</span>}
                     {Array.isArray(row.trace_data?.tools) && <span>Tools: {(row.trace_data.tools as string[]).join(', ') || 'none'}</span>}
                     {typeof row.trace_data?.ISO_leak_validator_passed === 'boolean' && <span>ISO validator: {row.trace_data.ISO_leak_validator_passed ? 'Passed' : 'Failed'}</span>}
                   </div>

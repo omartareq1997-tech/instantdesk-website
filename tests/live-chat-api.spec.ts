@@ -21,6 +21,21 @@ function adminClient() {
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
+function warsawDateOffset(days: number) {
+  const date = new Date(Date.now() + days * 24 * 60 * 60 * 1000)
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Warsaw',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const get = (type: string) => parts.find(part => part.type === type)?.value ?? ''
+  return {
+    iso: `${get('year')}-${get('month')}-${get('day')}`,
+    short: `${get('day')}/${get('month')}`,
+  }
+}
+
 async function createTestAiBusiness(options: { aiAutoRepliesEnabled: boolean; liveChatEnabled: boolean }) {
   const sb = adminClient()
   const businessId = crypto.randomUUID()
@@ -296,12 +311,58 @@ async function postChatRouteWithMockedGemini(body: Record<string, unknown>, resp
   }
 }
 
+async function postChatRouteWithMockedOpenAI(body: Record<string, unknown>, responses: Array<Record<string, unknown>>) {
+  const previousKey = process.env.OPENAI_API_KEY
+  process.env.OPENAI_API_KEY = 'test-openai-key'
+  const originalFetch = global.fetch
+  let openAiCalls = 0
+  global.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+    if (url.includes('api.openai.com') && url.includes('/embeddings')) {
+      return new Response(JSON.stringify({ data: [{ embedding: [0.01, 0.02, 0.03] }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    if (url.includes('api.openai.com') && url.includes('/chat/completions')) {
+      const payload = responses[Math.min(openAiCalls, responses.length - 1)]
+      openAiCalls += 1
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return originalFetch(input, init)
+  }) as typeof fetch
+  try {
+    const request = new NextRequest('http://127.0.0.1:3106/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const response = await postChat(request)
+    return { response, openAiCalls }
+  } finally {
+    global.fetch = originalFetch
+    if (previousKey === undefined) delete process.env.OPENAI_API_KEY
+    else process.env.OPENAI_API_KEY = previousKey
+  }
+}
+
 function geminiTextResponse(text: string, finishReason = 'STOP') {
   return { candidates: [{ finishReason, content: { parts: [{ text }] } }] }
 }
 
 function geminiSemanticResponse(payload: Record<string, unknown>, finishReason = 'STOP') {
   return geminiTextResponse(JSON.stringify(payload), finishReason)
+}
+
+function openAiTextResponse(text: string, finishReason = 'stop') {
+  return { choices: [{ finish_reason: finishReason, message: { content: text } }] }
+}
+
+function openAiSemanticResponse(payload: Record<string, unknown>, finishReason = 'stop') {
+  return openAiTextResponse(JSON.stringify(payload), finishReason)
 }
 
 async function createRentalConversationWithAgentState(
@@ -912,6 +973,8 @@ test.describe('Live Chat API production boundaries', () => {
   test('exact rental flow binds same configured location, hides blocked Camry, and returns truthful pending booking status', async () => {
     const { sb, businessId, locationId, carIds } = await createGeminiCarRentalBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
     let conversationId: string | undefined
+    const pickupDate = warsawDateOffset(1)
+    const returnDate = warsawDateOffset(4)
     async function send(message: string, suffix: string) {
       const { response } = await postChatRouteWithMockedGemini({
         business_id: businessId,
@@ -943,17 +1006,17 @@ test.describe('Live Chat API production boundaries', () => {
         customer_email: 'blocked@example.com',
         pickup_location_id: locationId,
         dropoff_location_id: locationId,
-        pickup_at: '2026-07-10T20:00:00+02:00',
-        dropoff_at: '2026-07-13T21:00:00+02:00',
+        pickup_at: `${pickupDate.iso}T20:00:00+02:00`,
+        dropoff_at: `${returnDate.iso}T21:00:00+02:00`,
         status: 'confirmed',
         total_price: 480,
         updated_at: new Date().toISOString(),
       })
 
-      await send('yes, i want to rent a car tomorrow until 13/07', 'dates')
+      await send(`yes, i want to rent a car tomorrow until ${returnDate.short}`, 'dates')
       const combined = await send('pick at 20:00 return at 21:00, yes i will use that location for both pickup and drop-off', 'times-location')
-      expect(combined.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-10T20:00:00+02:00')
-      expect(combined.debug?.confirmedSlots?.return_datetime).toBe('2026-07-13T21:00:00+02:00')
+      expect(combined.debug?.confirmedSlots?.pickup_datetime).toBe(`${pickupDate.iso}T20:00:00+02:00`)
+      expect(combined.debug?.confirmedSlots?.return_datetime).toBe(`${returnDate.iso}T21:00:00+02:00`)
       expect(combined.debug?.confirmedSlots?.pickup_location_id).toBe(locationId)
       expect(combined.debug?.confirmedSlots?.dropoff_location_id).toBe(locationId)
       expect(combined.reply).not.toMatch(/still need the drop-off|drop-off location before/i)
@@ -999,6 +1062,8 @@ test.describe('Live Chat API production boundaries', () => {
   test('AI resume reconciles handover state, contextual confirmations, budget preference, and pending booking contract', async () => {
     const { sb, businessId, locationId } = await createGeminiCarRentalBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
     let conversationId: string | undefined
+    const pickupDate = warsawDateOffset(1)
+    const returnDate = warsawDateOffset(8)
     async function send(message: string, suffix: string, responses: Array<Record<string, unknown>> = [
       { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Runtime fallback should not dominate this rental workflow.' }] } }] },
     ]) {
@@ -1023,10 +1088,10 @@ test.describe('Live Chat API production boundaries', () => {
       return body
     }
     try {
-      await send('id like to rent a car tomorrow until 17/07', 'dates')
+      await send(`id like to rent a car tomorrow until ${returnDate.short}`, 'dates')
       const times = await send('21:00 and return at 22:00', 'times')
-      expect(times.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-10T21:00:00+02:00')
-      expect(times.debug?.confirmedSlots?.return_datetime).toBe('2026-07-17T22:00:00+02:00')
+      expect(times.debug?.confirmedSlots?.pickup_datetime).toBe(`${pickupDate.iso}T21:00:00+02:00`)
+      expect(times.debug?.confirmedSlots?.return_datetime).toBe(`${returnDate.iso}T22:00:00+02:00`)
 
       const locations = await send('what locations do you have', 'locations')
       expect(locations.reply).toContain('Bocheńska 2a')
@@ -1106,8 +1171,8 @@ test.describe('Live Chat API production boundaries', () => {
         ])
       })
       const budget = budgetTrace.result as Awaited<ReturnType<typeof send>>
-      expect(budget.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-10T21:00:00+02:00')
-      expect(budget.debug?.confirmedSlots?.return_datetime).toBe('2026-07-17T22:00:00+02:00')
+      expect(budget.debug?.confirmedSlots?.pickup_datetime).toBe(`${pickupDate.iso}T21:00:00+02:00`)
+      expect(budget.debug?.confirmedSlots?.return_datetime).toBe(`${returnDate.iso}T22:00:00+02:00`)
       expect(budget.debug?.confirmedSlots?.pickup_location_id).toBe(locationId)
       expect(budget.debug?.confirmedSlots?.dropoff_location_id).toBe(locationId)
       expect(budget.reply).toMatch(/Toyota Corolla|Skoda Superb|available/i)
@@ -1261,7 +1326,9 @@ test.describe('Live Chat API production boundaries', () => {
       const providerFallback = first.traces.find(trace => trace.event === 'rental_semantic_interpretation')
       expect(providerFallback?.semantic_source).toBe('legacy_fallback')
       expect(providerFallback?.fallback_used).toBe(true)
-      expect(String(providerFallback?.fallback_reason)).toContain('finish_reason:MAX_TOKENS')
+      expect(providerFallback?.fallback_reason).toBe('SEMANTIC_RETRY_EXHAUSTED')
+      expect(providerFallback?.fallback_reason_detail).toBe('MAX_TOKENS')
+      expect(providerFallback?.semantic_retry_used).toBe(true)
       expect(providerFallback?.semantic_parse_success).toBe(false)
 
       const secondConversationId = await createRentalConversationWithAgentState(sb, businessId, {
@@ -1285,8 +1352,205 @@ test.describe('Live Chat API production boundaries', () => {
       const jsonFallback = second.traces.find(trace => trace.event === 'rental_semantic_interpretation')
       expect(jsonFallback?.semantic_source).toBe('legacy_fallback')
       expect(jsonFallback?.fallback_used).toBe(true)
-      expect(jsonFallback?.fallback_reason).toBe('semantic_json_parse_error')
+      expect(jsonFallback?.fallback_reason).toBe('JSON_PARSE_FAILED')
+      expect(jsonFallback?.semantic_retry_used).toBe(true)
       expect(jsonFallback?.semantic_parse_success).toBe(false)
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('GPT-4o semantic interpreter handles contextual location confirmation and budget preference without legacy fallback', async () => {
+    const { sb, businessId, locationId } = await createGeminiCarRentalBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
+    try {
+      await sb.from('agents').update({ model: 'gpt-4o' }).eq('business_id', businessId)
+
+      let conversationId: string | undefined
+      const first = await captureAgentTrace(async () => {
+        const { response } = await postChatRouteWithMockedOpenAI({
+          business_id: businessId,
+          message: 'sup bro i need wheels from tonight until the 16th',
+          debug: true,
+          turn_id: 'gpt-semantic-date-turn',
+          client_message_id: 'gpt-semantic-date-client',
+        }, [
+          openAiSemanticResponse({
+            intent: 'UPDATE_RENTAL_DETAILS',
+            state_patch: { pickup_date: '2026-07-10', return_date: '2026-07-16' },
+            relations: [],
+            references: [],
+            corrections: [],
+            question: null,
+            confirmation: null,
+            confidence: 0.92,
+          }),
+          openAiTextResponse('Sure, what pickup time and return time should I use?'),
+        ])
+        const body = await response.json() as { conversation_id?: string; debug?: { confirmedSlots?: Record<string, unknown> } }
+        expect(response.status).toBe(200)
+        conversationId = body.conversation_id
+        expect(body.debug?.confirmedSlots?.pickup_date).toBe('2026-07-10')
+        expect(body.debug?.confirmedSlots?.return_date).toBe('2026-07-16')
+      })
+      expect(first.traces.find(trace => trace.event === 'rental_semantic_interpretation')?.semantic_source).toBe('llm')
+      expect(first.traces.find(trace => trace.event === 'rental_semantic_interpretation')?.fallback_used).toBe(false)
+
+      const second = await captureAgentTrace(async () => {
+        const { response } = await postChatRouteWithMockedOpenAI({
+          business_id: businessId,
+          conversation_id: conversationId,
+          message: 'pick up at 20:00, what location do you have in krakow',
+          debug: true,
+          turn_id: 'gpt-semantic-location-turn',
+          client_message_id: 'gpt-semantic-location-client',
+        }, [
+          openAiSemanticResponse({
+            intent: 'ASK_LOCATION',
+            state_patch: { pickup_time: '20:00' },
+            relations: [],
+            references: [],
+            corrections: [],
+            question: 'location',
+            confirmation: null,
+            confidence: 0.94,
+          }),
+          openAiTextResponse('We currently offer pickup at Kraków Bocheńska 2a. Would you like me to use it for both pickup and drop-off?'),
+        ])
+        const body = await response.json() as { debug?: { confirmedSlots?: Record<string, unknown> } }
+        expect(response.status).toBe(200)
+        expect(body.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-10T20:00:00+02:00')
+      })
+      expect(second.traces.find(trace => trace.event === 'rental_semantic_interpretation')?.intent).toBe('ASK_LOCATION')
+
+      const third = await captureAgentTrace(async () => {
+        const { response } = await postChatRouteWithMockedOpenAI({
+          business_id: businessId,
+          conversation_id: conversationId,
+          message: 'yes please',
+          debug: true,
+          turn_id: 'gpt-semantic-confirm-location-turn',
+          client_message_id: 'gpt-semantic-confirm-location-client',
+        }, [
+          openAiSemanticResponse({
+            intent: 'UPDATE_RENTAL_DETAILS',
+            state_patch: {},
+            relations: [{ type: 'SAME_LOCATION', fields: ['pickup_location', 'dropoff_location'] }],
+            references: [{ resolved_to: 'last_offered_location', field: 'pickup_location' }],
+            corrections: [],
+            question: null,
+            confirmation: 'yes',
+            confidence: 0.97,
+          }),
+          openAiTextResponse('Perfect, I will use Bocheńska 2a for both pickup and drop-off. What return time should I use?'),
+        ])
+        const body = await response.json() as { debug?: { confirmedSlots?: Record<string, unknown> } }
+        expect(response.status).toBe(200)
+        expect(body.debug?.confirmedSlots?.pickup_location_id).toBe(locationId)
+        expect(body.debug?.confirmedSlots?.dropoff_location_id).toBe(locationId)
+        expect(body.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-10T20:00:00+02:00')
+        expect(body.debug?.confirmedSlots?.return_date).toBe('2026-07-16')
+      })
+      const confirmSemantic = third.traces.find(trace => trace.event === 'rental_semantic_interpretation')
+      expect(confirmSemantic?.semantic_source).toBe('llm')
+      expect(confirmSemantic?.fallback_used).toBe(false)
+      expect(confirmSemantic?.confirmation).toBe('yes')
+      expect(confirmSemantic?.relations).toContainEqual({ type: 'SAME_LOCATION', fields: ['pickup_location', 'dropoff_location'] })
+
+      const fourth = await captureAgentTrace(async () => {
+        const { response } = await postChatRouteWithMockedOpenAI({
+          business_id: businessId,
+          conversation_id: conversationId,
+          message: 'preferably economical i dont have much money tbh',
+          debug: true,
+          turn_id: 'gpt-semantic-budget-turn',
+          client_message_id: 'gpt-semantic-budget-client',
+        }, [
+          openAiSemanticResponse({
+            intent: 'ASK_AVAILABLE_VEHICLES_BY_CLASS',
+            state_patch: { car_class: 'Economy' },
+            relations: [],
+            references: [{ resolved_to: 'lowest_price_candidate', field: 'selected_vehicle' }],
+            corrections: [],
+            question: null,
+            confirmation: null,
+            confidence: 0.93,
+          }),
+          openAiTextResponse('I have the budget preference. What return time should I use for the 16th?'),
+        ])
+        const body = await response.json() as { reply?: string; debug?: { confirmedSlots?: Record<string, unknown> } }
+        expect(response.status).toBe(200)
+        expect(body.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-10T20:00:00+02:00')
+        expect(body.debug?.confirmedSlots?.return_date).toBe('2026-07-16')
+        expect(body.reply ?? '').not.toMatch(/pickup date|pickup.*time.*return.*time/i)
+      })
+      const budgetSemantic = fourth.traces.find(trace => trace.event === 'rental_semantic_interpretation')
+      expect(budgetSemantic?.semantic_source).toBe('llm')
+      expect(budgetSemantic?.fallback_used).toBe(false)
+      expect(budgetSemantic?.references).toContainEqual({ resolved_to: 'lowest_price_candidate', field: 'selected_vehicle' })
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('GPT-4o semantic interpreter retries invalid JSON or schema before legacy fallback', async () => {
+    const { sb, businessId } = await createGeminiCarRentalBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
+    try {
+      await sb.from('agents').update({ model: 'gpt-4o' }).eq('business_id', businessId)
+      const jsonRetry = await captureAgentTrace(async () => {
+        const { response } = await postChatRouteWithMockedOpenAI({
+          business_id: businessId,
+          message: 'wherever you hand me the keys is where you will get the car back',
+          debug: true,
+          turn_id: 'gpt-semantic-json-retry-turn',
+          client_message_id: 'gpt-semantic-json-retry-client',
+        }, [
+          openAiTextResponse('not json'),
+          openAiSemanticResponse({
+            intent: 'UPDATE_RENTAL_DETAILS',
+            state_patch: {},
+            relations: [{ type: 'SAME_AS', source: 'pickup_location', target: 'dropoff_location' }],
+            references: [],
+            corrections: [],
+            confirmation: null,
+            confidence: 0.94,
+          }),
+          openAiTextResponse('Got it. Which pickup location should I use?'),
+        ])
+        expect(response.status).toBe(200)
+      })
+      const jsonSemantic = jsonRetry.traces.find(trace => trace.event === 'rental_semantic_interpretation')
+      expect(jsonSemantic?.semantic_source).toBe('llm')
+      expect(jsonSemantic?.fallback_used).toBe(false)
+      expect(jsonSemantic?.semantic_retry_used).toBe(true)
+
+      const schemaRetry = await captureAgentTrace(async () => {
+        const { response } = await postChatRouteWithMockedOpenAI({
+          business_id: businessId,
+          message: 'ill take the camry',
+          debug: true,
+          turn_id: 'gpt-semantic-schema-retry-turn',
+          client_message_id: 'gpt-semantic-schema-retry-client',
+        }, [
+          openAiSemanticResponse({ intent: 'PICK_RANDOM_CAR', relations: [], references: [], corrections: [], confirmation: null, confidence: 0.8 }),
+          openAiSemanticResponse({
+            intent: 'SELECT_VEHICLE',
+            state_patch: { selected_vehicle_name: 'Toyota Camry' },
+            relations: [],
+            references: [],
+            corrections: [{ field: 'selected_vehicle', operation: 'SET' }],
+            confirmation: null,
+            confidence: 0.96,
+          }),
+          openAiTextResponse('I have selected the Toyota Camry. What return time should I use?'),
+        ])
+        const body = await response.json() as { debug?: { confirmedSlots?: Record<string, unknown> } }
+        expect(response.status).toBe(200)
+        expect(body.debug?.confirmedSlots?.selected_vehicle).toBe('Toyota Camry')
+      })
+      const schemaSemantic = schemaRetry.traces.find(trace => trace.event === 'rental_semantic_interpretation')
+      expect(schemaSemantic?.semantic_source).toBe('llm')
+      expect(schemaSemantic?.fallback_used).toBe(false)
+      expect(schemaSemantic?.semantic_retry_used).toBe(true)
     } finally {
       await cleanupTestAiBusiness(sb, businessId)
     }

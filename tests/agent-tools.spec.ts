@@ -807,6 +807,48 @@ test.describe('agent operational tool planner', () => {
     expect(__testRentalChatHelpers.semanticNeedsLocationTool(semantics)).toBe(true)
   })
 
+  test('semantic provider payloads normalize OpenAI, Gemini, and Claude shapes into one schema', () => {
+    const semanticJson = JSON.stringify({
+      intent: 'UPDATE_RENTAL_DETAILS',
+      state_patch: {},
+      relations: [{ type: 'SAME_AS', source: 'pickup_location', target: 'dropoff_location' }],
+      references: [{ resolved_to: 'last_offered_location', field: 'dropoff_location' }],
+      corrections: [],
+      confirmation: 'yes',
+      confidence: 0.96,
+    })
+    const openai = __testRentalChatHelpers.extractSemanticTextFromProviderPayload('openai', {
+      choices: [{ finish_reason: 'stop', message: { content: semanticJson } }],
+    })
+    const gemini = __testRentalChatHelpers.extractSemanticTextFromProviderPayload('gemini', {
+      candidates: [{ finishReason: 'STOP', content: { parts: [{ text: semanticJson }] } }],
+    })
+    const claude = __testRentalChatHelpers.extractSemanticTextFromProviderPayload('claude', {
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: semanticJson }],
+    })
+    for (const output of [openai, gemini, claude]) {
+      const parsed = __testRentalChatHelpers.parseSemanticJson(output.text)
+      expect(__testRentalChatHelpers.validateSemanticInterpretationPayload(parsed)).toEqual([])
+      const normalized = __testRentalChatHelpers.normalizeSemanticInterpretation(parsed, 'llm')
+      expect(normalized.intent).toBe('UPDATE_RENTAL_DETAILS')
+      expect(normalized.confirmation).toBe('yes')
+      expect(normalized.relations).toContainEqual({ type: 'SAME_AS', source: 'pickup_location', target: 'dropoff_location' })
+    }
+  })
+
+  test('semantic schema validation reports structural invalid fields without raw payload values', () => {
+    const issues = __testRentalChatHelpers.validateSemanticInterpretationPayload({
+      intent: 'MAKE_MAGIC',
+      relations: [{ type: 'SAME_AS', source: 'pickup_location', target: 'not_a_field' }],
+      references: [{ field: 'not_a_field' }],
+    })
+    expect(issues).toContainEqual({ path: 'intent', code: 'invalid_enum' })
+    expect(issues).toContainEqual({ path: 'relations[0].target', code: 'invalid_field' })
+    expect(issues).toContainEqual({ path: 'references[0].field', code: 'invalid_field' })
+    expect(JSON.stringify(issues)).not.toContain('MAKE_MAGIC')
+  })
+
   test('normalizes Bocheńska drop-off mentions to the canonical business location', () => {
     const slots = __testRentalChatHelpers.buildConfirmedSlots(
       { id: 'lead-1', name: null, phone: null, email: null, interest: null, status: null, metadata: { pickup_location: 'Kraków Bocheńska 2a' } },

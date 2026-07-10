@@ -30,7 +30,7 @@ export async function PATCH(request: NextRequest, context: RouteContext<'/api/li
   const sb = createAdminClient()
   const { data: conversation, error: convError } = await sb
     .from('conversations')
-    .select('id,business_id,status,assigned_to')
+    .select('id,business_id,status,assigned_to,metadata')
     .eq('id', id)
     .eq('business_id', businessId)
     .maybeSingle()
@@ -44,6 +44,33 @@ export async function PATCH(request: NextRequest, context: RouteContext<'/api/li
       ? ownerName
       : assignedTo
   await markConversationStatus(sb, id, businessId, status as ConversationStatus, nextAssignedTo)
+  const existingMetadata = (conversation.metadata && typeof conversation.metadata === 'object')
+    ? conversation.metadata as Record<string, unknown>
+    : {}
+  const existingAgentState = (existingMetadata.agent_state && typeof existingMetadata.agent_state === 'object')
+    ? existingMetadata.agent_state as Record<string, unknown>
+    : {}
+  const now = new Date().toISOString()
+  const agentStatePatch = status === 'live_chat' || status === 'handover_requested'
+    ? { handover_started_at: now }
+    : status === 'ai_active'
+      ? { handover_resumed_at: now }
+      : {}
+  if (Object.keys(agentStatePatch).length) {
+    await sb
+      .from('conversations')
+      .update({
+        metadata: {
+          ...existingMetadata,
+          agent_state: {
+            ...existingAgentState,
+            ...agentStatePatch,
+          },
+        },
+      })
+      .eq('id', id)
+      .eq('business_id', businessId)
+  }
 
   const labels: Record<ConversationStatus, string> = {
     ai_active: `${ownerName} returned this conversation to AI.`,

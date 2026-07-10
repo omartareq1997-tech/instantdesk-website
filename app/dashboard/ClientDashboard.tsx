@@ -30,7 +30,7 @@ import { BUSINESS_TYPE_CONFIG, CANONICAL_BUSINESS_TYPES, normalizeBusinessType }
 /* ─── Types ──────────────────────────────────────────────────── */
 
 type Section      = 'overview' | 'analytics' | 'pipeline' | 'activity' | 'appointments' | 'automation' | 'settings' | 'log' | 'team'
-                  | 'bots' | 'live_chat' | 'deploy' | 'integrations' | 'rental_ops' | 'ai_overview' | 'ai_instructions' | 'ai_knowledge' | 'ai_qualification' | 'ai_test'
+                  | 'bots' | 'agent_traces' | 'live_chat' | 'deploy' | 'integrations' | 'rental_ops' | 'ai_overview' | 'ai_instructions' | 'ai_knowledge' | 'ai_qualification' | 'ai_test'
 type LeadStatus   = 'new' | 'contacted' | 'demo_booked' | 'won' | 'lost'
 type ScoreLabel   = 'hot' | 'warm' | 'cold'
 type ApptStatus   = 'confirmed' | 'pending' | 'completed' | 'cancelled'
@@ -154,6 +154,7 @@ const NAV_ITEMS: {id:Section; label:string; Icon:React.ComponentType<{className?
   { id:'analytics',    label:'Analytics',     Icon:LineChart                },
   { id:'pipeline',     label:'Lead Pipeline', Icon:Users,       badge:10    },
   { id:'bots',         label:'Bots',          Icon:Bot                     },
+  { id:'agent_traces', label:'Agent Traces',  Icon:Code2                   },
   { id:'live_chat',    label:'Live Chat',     Icon:Headphones              },
   { id:'deploy',       label:'Deploy',        Icon:Rocket                  },
   { id:'integrations', label:'Integrations',  Icon:Link2                   },
@@ -179,6 +180,7 @@ const SECTION_META: Record<Section,{title:string;sub:string}> = {
   analytics:    { title:'Analytics',      sub:'Conversation metrics and conversion data'              },
   pipeline:     { title:'Lead Pipeline',  sub:'Click any lead to view full details'                  },
   bots:         { title:'Bots',           sub:'Manage bot workspaces, prompts, tests and website defaults' },
+  agent_traces: { title:'Agent Traces',   sub:'Internal semantic, state, tool and response timeline for AI turns' },
   live_chat:    { title:'Live Chat',      sub:'Human handover inbox and real-time customer messages' },
   deploy:       { title:'Deploy',         sub:'Share and embed your InstantDesk chat experience'     },
   integrations: { title:'Integrations',   sub:'Connect InstantDesk with channels, automation tools and websites' },
@@ -2327,6 +2329,203 @@ function DeployCopyButton({ id, value, copied, onCopy }: { id: string; value: st
       {copied === id ? <Check className="h-4 w-4 text-emerald-300" /> : <Copy className="h-4 w-4" />}
       {copied === id ? 'Copied' : 'Copy'}
     </button>
+  )
+}
+
+type AgentTraceRow = {
+  id: string
+  business_id: string
+  bot_id: string
+  conversation_id: string | null
+  turn_id: string | null
+  request_id: string | null
+  event_type: string
+  semantic_source: string | null
+  semantic_intent: string | null
+  model: string | null
+  latency_ms: number | null
+  fallback_used: boolean | null
+  success: boolean | null
+  trace_data: Record<string, unknown>
+  created_at: string
+}
+
+function AgentTracesSection({ bots, selectedBotId, onSelectBot }: { bots: DashboardBot[]; selectedBotId: string | null; onSelectBot: (id: string | null) => void }) {
+  const [botFilter, setBotFilter] = useState<string>(selectedBotId ?? '')
+  const [eventType, setEventType] = useState('')
+  const [semanticSource, setSemanticSource] = useState('')
+  const [intent, setIntent] = useState('')
+  const [conversation, setConversation] = useState('')
+  const [fallback, setFallback] = useState('')
+  const [traces, setTraces] = useState<AgentTraceRow[]>([])
+  const [selectedTurn, setSelectedTurn] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [migrationRequired, setMigrationRequired] = useState(false)
+
+  useEffect(() => {
+    setBotFilter(prev => prev || selectedBotId || bots.find(bot => bot.is_default_website_bot)?.id || bots[0]?.id || '')
+  }, [bots, selectedBotId])
+
+  const loadTraces = useCallback(async () => {
+    setLoading(true)
+    const params = new URLSearchParams({ limit: '200' })
+    if (botFilter) params.set('bot_id', botFilter)
+    if (eventType) params.set('event_type', eventType)
+    if (semanticSource) params.set('semantic_source', semanticSource)
+    if (intent) params.set('intent', intent)
+    if (conversation.trim()) params.set('conversation_id', conversation.trim())
+    if (fallback) params.set('fallback', fallback)
+    try {
+      const res = await fetch(`/api/agent-traces?${params.toString()}`, { cache: 'no-store' })
+      const data = await res.json() as { traces?: AgentTraceRow[]; migration_required?: boolean }
+      setMigrationRequired(Boolean(data.migration_required))
+      const incoming = data.traces ?? []
+      setTraces(prev => {
+        const byId = new Map(prev.map(trace => [trace.id, trace]))
+        for (const trace of incoming) byId.set(trace.id, trace)
+        return Array.from(byId.values()).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 300)
+      })
+    } catch {
+      setTraces(prev => prev)
+    } finally {
+      setLoading(false)
+    }
+  }, [botFilter, conversation, eventType, fallback, intent, semanticSource])
+
+  useEffect(() => {
+    void loadTraces()
+    const id = window.setInterval(() => { void loadTraces() }, 5000)
+    return () => window.clearInterval(id)
+  }, [loadTraces])
+
+  const selectedBot = bots.find(bot => bot.id === botFilter) ?? null
+  const groupedTurns = useMemo(() => {
+    const byTurn = new Map<string, AgentTraceRow[]>()
+    for (const trace of traces) {
+      const key = trace.turn_id ?? trace.request_id ?? trace.id
+      const list = byTurn.get(key) ?? []
+      list.push(trace)
+      byTurn.set(key, list)
+    }
+    return Array.from(byTurn.entries()).map(([turnId, rows]) => {
+      const chronological = [...rows].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+      const complete = chronological.find(row => row.event_type === 'rental_agent_turn_complete')
+      const semantic = chronological.find(row => row.event_type === 'rental_semantic_interpretation')
+      const state = chronological.find(row => row.event_type === 'rental_state_reduction')
+      const tools = chronological.find(row => row.event_type === 'rental_tool_execution')
+      const response = chronological.find(row => row.event_type === 'rental_response_generation')
+      return { turnId, rows: chronological, complete, semantic, state, tools, response, latest: chronological[chronological.length - 1] }
+    }).sort((a, b) => new Date(b.latest.created_at).getTime() - new Date(a.latest.created_at).getTime())
+  }, [traces])
+
+  const selected = groupedTurns.find(group => group.turnId === selectedTurn) ?? null
+  const relationLabel = (trace?: AgentTraceRow) => {
+    const relations = Array.isArray(trace?.trace_data?.relations) ? trace?.trace_data?.relations as Array<Record<string, unknown>> : []
+    if (!relations.length) return 'None'
+    return relations.map(rel => rel.type === 'SAME_AS' ? `${String(rel.target)} <- ${String(rel.source)}` : String(rel.type)).join(', ')
+  }
+
+  return (
+    <div className="space-y-5">
+      <Card className="p-4">
+        <div className="grid gap-3 lg:grid-cols-8">
+          <select value={botFilter} onChange={event => { const value = event.target.value; setBotFilter(value); onSelectBot(value || null); setTraces([]) }} className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none lg:col-span-2">
+            {bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}
+            <option value="">All bots</option>
+          </select>
+          <input value={conversation} onChange={event => { setConversation(event.target.value); setTraces([]) }} placeholder="Conversation ID" className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none lg:col-span-2" />
+          <select value={eventType} onChange={event => { setEventType(event.target.value); setTraces([]) }} className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none">
+            <option value="">All events</option>
+            <option value="rental_semantic_interpretation">Semantic</option>
+            <option value="rental_state_reduction">State</option>
+            <option value="rental_tool_execution">Tools</option>
+            <option value="rental_response_generation">Response</option>
+            <option value="rental_agent_turn_complete">Turn complete</option>
+          </select>
+          <select value={semanticSource} onChange={event => { setSemanticSource(event.target.value); setTraces([]) }} className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none">
+            <option value="">Any source</option>
+            <option value="llm">LLM</option>
+            <option value="legacy_fallback">Legacy fallback</option>
+            <option value="deterministic">Deterministic</option>
+          </select>
+          <input value={intent} onChange={event => { setIntent(event.target.value); setTraces([]) }} placeholder="Intent" className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none" />
+          <select value={fallback} onChange={event => { setFallback(event.target.value); setTraces([]) }} className="h-10 rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-white outline-none">
+            <option value="">Fallback?</option>
+            <option value="true">Fallback</option>
+            <option value="false">No fallback</option>
+          </select>
+        </div>
+        <div className="mt-3 flex items-center justify-between text-xs text-white/40">
+          <span>{selectedBot ? `Bot: ${selectedBot.name}` : 'All authorized bots'} · {groupedTurns.length} turns</span>
+          <span>{loading ? 'Refreshing...' : 'No-store polling every 5s'}</span>
+        </div>
+        {migrationRequired && <div className="mt-3 rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">Agent trace migration has not been applied yet.</div>}
+      </Card>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="space-y-2">
+          {groupedTurns.map(group => {
+            const changed = Array.isArray(group.state?.trace_data?.changed_fields) ? group.state?.trace_data?.changed_fields as string[] : []
+            const tools = Array.isArray(group.tools?.trace_data?.tools) ? group.tools?.trace_data?.tools as string[] : []
+            return (
+              <button key={group.turnId} type="button" onClick={() => setSelectedTurn(group.turnId)} className="w-full rounded-xl border border-white/10 bg-white/[0.025] px-4 py-3 text-left transition hover:bg-white/[0.045]">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-white">{new Date(group.latest.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · {group.semantic?.semantic_intent ?? group.complete?.semantic_intent ?? 'UNKNOWN'}</div>
+                    <div className="mt-1 truncate text-xs text-white/38">Conversation {group.latest.conversation_id?.slice(0, 8) ?? 'none'} · Turn {group.turnId.slice(0, 14)}</div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-[11px] font-semibold">
+                    <span className="rounded-full border border-white/10 px-2 py-1 text-white/65">{group.semantic?.semantic_source ?? 'unknown'}</span>
+                    <span className="rounded-full border border-white/10 px-2 py-1 text-white/65">{tools.length ? tools.join(', ') : 'no tools'}</span>
+                    <span className={`rounded-full border px-2 py-1 ${group.complete?.success === false ? 'border-red-300/25 text-red-200' : 'border-emerald-300/25 text-emerald-200'}`}>{group.complete?.success === false ? 'Failed' : 'Success'}</span>
+                  </div>
+                </div>
+                <div className="mt-2 grid gap-2 text-xs text-white/45 sm:grid-cols-3">
+                  <span>State: {changed.length ? changed.join(', ') : 'none'}</span>
+                  <span>Response: {String(group.response?.trace_data?.generator_source ?? 'unknown')}</span>
+                  <span>Latency: {group.complete?.latency_ms ? `${group.complete.latency_ms} ms` : 'n/a'}</span>
+                </div>
+              </button>
+            )
+          })}
+          {!groupedTurns.length && <Card className="p-8 text-center text-sm text-white/35">No traces match the current filters.</Card>}
+        </div>
+
+        <Card className="h-fit p-4">
+          {selected ? (
+            <div className="space-y-4">
+              <div>
+                <div className="text-sm font-bold text-white">Turn {selected.turnId.slice(0, 18)}</div>
+                <div className="mt-1 text-xs text-white/38">Timeline ordered by event creation time</div>
+              </div>
+              {selected.rows.map(row => (
+                <div key={row.id} className="rounded-xl border border-white/10 bg-black/20 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs font-bold uppercase tracking-wide text-white/72">{row.event_type.replace('rental_', '').replace(/_/g, ' ')}</div>
+                    <div className="text-[11px] text-white/35">{row.latency_ms != null ? `${row.latency_ms} ms` : new Date(row.created_at).toLocaleTimeString()}</div>
+                  </div>
+                  <div className="mt-2 grid gap-1 text-xs text-white/50">
+                    {row.semantic_source && <span>Source: {row.semantic_source}</span>}
+                    {row.semantic_intent && <span>Intent: {row.semantic_intent}</span>}
+                    {row.model && <span>Model: {row.model}</span>}
+                    <span>Fallback: {row.fallback_used ? 'Yes' : 'No'}</span>
+                    {row.event_type === 'rental_semantic_interpretation' && <span>Relations: {relationLabel(row)}</span>}
+                    {Array.isArray(row.trace_data?.changed_fields) && <span>Changed fields: {(row.trace_data.changed_fields as string[]).join(', ') || 'none'}</span>}
+                    {Array.isArray(row.trace_data?.tools) && <span>Tools: {(row.trace_data.tools as string[]).join(', ') || 'none'}</span>}
+                    {typeof row.trace_data?.ISO_leak_validator_passed === 'boolean' && <span>ISO validator: {row.trace_data.ISO_leak_validator_passed ? 'Passed' : 'Failed'}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="py-12 text-center">
+              <Code2 className="mx-auto h-8 w-8 text-white/20" />
+              <p className="mt-3 text-sm text-white/35">Select a turn to inspect semantic, state, tools and response events.</p>
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
   )
 }
 
@@ -6536,6 +6735,7 @@ export default function ClientDashboard({
                 {section==='analytics'    && <AnalyticsSection analytics={analytics} analyticsSummary={analyticsSummary} liveAnalytics={liveAnalytics} />}
                 {section==='pipeline'     && <PipelineSection onSelectLead={handleSelectLead} leads={visibleLeads} newLeadIds={newLeadIds} onAddLead={can.canAddLead ? () => setShowAddLead(true) : undefined} teamMembers={teamMembers} />}
                 {section==='bots'         && <BotsSection bots={bots} selectedBotId={selectedBotId} onSelectBot={setSelectedBotId} onCreateBot={createBot} onSetDefault={setDefaultWebsiteBot} onOpenSection={handleNav} />}
+                {section==='agent_traces' && <AgentTracesSection bots={bots} selectedBotId={selectedBotId} onSelectBot={setSelectedBotId} />}
                 {section==='live_chat'    && <LiveChatSection businessId={dashboardBusinessId} />}
                 {section==='deploy'       && <DeploySection businessId={dashboardBusinessId} selectedBotId={selectedBotId} />}
                 {section==='integrations' && <IntegrationsSection businessId={dashboardBusinessId} selectedBotId={selectedBotId} onOpenDeploy={() => handleNav('deploy')} />}

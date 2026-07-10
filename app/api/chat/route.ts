@@ -43,6 +43,7 @@ import { logBotResolution, resolveBotContext } from '../../lib/bot-context'
 import { parseRentalDateWindow } from '../../lib/rentalDateTime'
 import { extractRentalVehicleName } from '../../lib/rentalVehicle'
 import { getBusinessTypeConfig, normalizeBusinessType } from '../../lib/businessTypes'
+import { agentTraceRow, persistAgentTraceRows, type AgentTraceInsert } from '../../lib/agent-traces'
 import {
   HANDOVER_REPLY,
   aiCannotAnswer,
@@ -929,7 +930,7 @@ type RentalSemanticRelation =
 
 type RentalSemanticReference = {
   expression?: string
-  resolved_to?: 'last_offered_location' | 'pickup_location' | 'dropoff_location' | 'last_offered_vehicle' | 'first_offered_vehicle' | 'cheapest_offered_vehicle' | 'ambiguous' | string
+  resolved_to?: 'last_offered_location' | 'pickup_location' | 'dropoff_location' | 'last_offered_vehicle' | 'last_recommended_vehicle' | 'first_offered_vehicle' | 'cheapest_offered_vehicle' | 'lowest_price_candidate' | 'ambiguous' | string
   field?: RentalSemanticField
 }
 
@@ -954,6 +955,24 @@ type RentalSemanticInterpretation = {
   source: 'llm' | 'fallback' | 'none'
 }
 
+type RentalSemanticTraceMeta = {
+  semantic_source: 'llm' | 'legacy_fallback' | 'deterministic'
+  fallback_used: boolean
+  fallback_reason: string | null
+  interpreter_latency_ms: number | null
+  semantic_parse_success: boolean
+  finish_reason?: string | null
+}
+
+type RentalResponseTraceMeta = {
+  generator_source: 'llm' | 'deterministic_fallback'
+  response_latency_ms: number | null
+  fallback_used: boolean
+  provider_retry_used: boolean
+  finish_reason: string | null
+  output_length: number
+}
+
 const EMPTY_RENTAL_SEMANTICS: RentalSemanticInterpretation = {
   intent: 'UNKNOWN',
   state_patch: {},
@@ -964,6 +983,50 @@ const EMPTY_RENTAL_SEMANTICS: RentalSemanticInterpretation = {
   confirmation: null,
   confidence: 0,
   source: 'none',
+}
+
+function agentTraceLogsEnabled() {
+  return process.env.AGENT_TRACE_LOGS === 'true'
+}
+
+function emitAgentTrace(event: string, payload: Record<string, unknown>) {
+  if (!agentTraceLogsEnabled()) return
+  console.info(JSON.stringify({
+    event,
+    timestamp: new Date().toISOString(),
+    ...payload,
+  }))
+}
+
+function relationTrace(relations: RentalSemanticRelation[]) {
+  return relations.map(relation => relation.type === 'SAME_AS'
+    ? { type: relation.type, source: relation.source, target: relation.target }
+    : { type: relation.type, fields: relation.fields })
+}
+
+function referenceTrace(references: RentalSemanticReference[]) {
+  return references.map(reference => ({
+    resolved_to: reference.resolved_to ?? null,
+    field: reference.field ?? null,
+  }))
+}
+
+function slotChangedFields(before: Slots, after: Slots) {
+  return (Object.keys(after) as (keyof Slots)[]).filter(key => before[key] !== after[key]).map(String)
+}
+
+function countPreservedFields(before: Slots, after: Slots) {
+  return (Object.keys(after) as (keyof Slots)[]).filter(key => before[key] && before[key] === after[key]).length
+}
+
+function isoLeakValidatorPassed(reply: string) {
+  return !/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:[+-]\d{2}:\d{2}|Z)?\b/.test(reply)
+}
+
+function redactedSlotPresence(slots: Slots) {
+  return Object.fromEntries(
+    (Object.keys(slots) as (keyof Slots)[]).map(key => [key, slots[key] != null && slots[key] !== ''])
+  )
 }
 
 function asRentalSemanticIntent(value: unknown): RentalSemanticIntent {
@@ -1144,7 +1207,9 @@ function resolveSemanticVehicleReference(semantics: RentalSemanticInterpretation
   if (!cars.length) return null
   const firstReference = semantics.references.find(ref => ref.resolved_to === 'first_offered_vehicle')
   if (firstReference) return cars[0]?.name ?? null
-  const cheaperReference = semantics.references.find(ref => ref.resolved_to === 'cheapest_offered_vehicle')
+  const lastReference = semantics.references.find(ref => ref.resolved_to === 'last_offered_vehicle' || ref.resolved_to === 'last_recommended_vehicle')
+  if (lastReference && cars.length === 1) return cars[0]?.name ?? null
+  const cheaperReference = semantics.references.find(ref => ref.resolved_to === 'cheapest_offered_vehicle' || ref.resolved_to === 'lowest_price_candidate')
   if (cheaperReference) {
     const priced = cars.filter(car => typeof car.dailyPrice === 'number')
     if (priced.length) return [...priced].sort((a, b) => Number(a.dailyPrice) - Number(b.dailyPrice))[0]?.name ?? null
@@ -1267,6 +1332,14 @@ function wantsRentalBookingConfirmation(text: string) {
 }
 
 type RentalToolLocation = { id?: string | null; name?: string | null; address?: string | null }
+type RentalAgentLocationReference = { id?: string | null; name?: string | null; address?: string | null; label?: string | null }
+type RentalAgentVehicleReference = { id?: string | null; name?: string | null; dailyPrice?: number | null }
+type RentalAgentReferences = {
+  last_offered_locations: RentalAgentLocationReference[]
+  last_offered_vehicles: RentalAgentVehicleReference[]
+  last_recommended_vehicle: RentalAgentVehicleReference | null
+  last_pending_confirmation_subject: string | null
+}
 
 function locationListFromTool(toolResults: AgentToolResult[]) {
   const locations = toolResults.find(result => result.tool === 'getLocations' && result.ok)
@@ -1274,8 +1347,118 @@ function locationListFromTool(toolResults: AgentToolResult[]) {
   return data?.locations ?? []
 }
 
+function fleetListFromTool(toolResults: AgentToolResult[]) {
+  const fleet = toolResults.find(result => result.tool === 'searchFleet' && result.ok)
+  const data = fleet?.data as { cars?: FleetReplyCar[] } | undefined
+  return data?.cars ?? []
+}
+
 function normalizedLocationLabel(location: RentalToolLocation) {
   return Array.from(new Set([location.name, location.address].filter(Boolean))).join(', ') || 'the configured location'
+}
+
+function agentReferencesFromState(metadata: Record<string, unknown> | null | undefined): RentalAgentReferences {
+  const agentState = safeRecord(metadata?.agent_state)
+  const references = safeRecord(agentState.references)
+  const locations = Array.isArray(references.last_offered_locations)
+    ? references.last_offered_locations.map(item => {
+      const row = safeRecord(item)
+      return {
+        id: strOrNull(row.id),
+        name: strOrNull(row.name),
+        address: strOrNull(row.address),
+        label: strOrNull(row.label),
+      }
+    }).filter(location => location.id || location.name || location.address || location.label)
+    : []
+  const vehicles = Array.isArray(references.last_offered_vehicles)
+    ? references.last_offered_vehicles.map(item => {
+      const row = safeRecord(item)
+      return {
+        id: strOrNull(row.id),
+        name: strOrNull(row.name),
+        dailyPrice: typeof row.dailyPrice === 'number' ? row.dailyPrice : null,
+      }
+    }).filter(vehicle => vehicle.id || vehicle.name)
+    : []
+  const recommended = safeRecord(references.last_recommended_vehicle)
+  const lastRecommended = strOrNull(recommended.id) || strOrNull(recommended.name)
+    ? {
+      id: strOrNull(recommended.id),
+      name: strOrNull(recommended.name),
+      dailyPrice: typeof recommended.dailyPrice === 'number' ? recommended.dailyPrice : null,
+    }
+    : null
+  return {
+    last_offered_locations: locations,
+    last_offered_vehicles: vehicles,
+    last_recommended_vehicle: lastRecommended,
+    last_pending_confirmation_subject: strOrNull(references.last_pending_confirmation_subject),
+  }
+}
+
+function referencesFromToolResults(toolResults: AgentToolResult[], previous: RentalAgentReferences, missing: SlotDef[]): RentalAgentReferences {
+  const locations = locationListFromTool(toolResults)
+  const fleet = fleetListFromTool(toolResults)
+  const missingLocation = missing.some(field => field.key === 'pickup_location' || field.key === 'dropoff_location')
+  const nextLocations = locations.length
+    ? locations.map(location => ({
+      id: location.id ?? null,
+      name: location.name ?? null,
+      address: location.address ?? null,
+      label: normalizedLocationLabel(location),
+    }))
+    : previous.last_offered_locations
+  const nextVehicles = fleet.length
+    ? fleet.map(car => ({
+      id: car.id ?? null,
+      name: car.name ?? null,
+      dailyPrice: typeof car.dailyPrice === 'number' ? car.dailyPrice : null,
+    }))
+    : previous.last_offered_vehicles
+  return {
+    last_offered_locations: nextLocations,
+    last_offered_vehicles: nextVehicles,
+    last_recommended_vehicle: fleet.length === 1
+      ? { id: fleet[0]?.id ?? null, name: fleet[0]?.name ?? null, dailyPrice: typeof fleet[0]?.dailyPrice === 'number' ? fleet[0]?.dailyPrice : null }
+      : previous.last_recommended_vehicle,
+    last_pending_confirmation_subject: !missingLocation
+      ? null
+      : locations.length ? 'use_location_for_both' : previous.last_pending_confirmation_subject,
+  }
+}
+
+function messageSenderType(message: PersistedChatMessage) {
+  return strOrNull(message.metadata?.sender_type) ?? (
+    message.role === 'user' ? 'customer' :
+    message.role === 'system' ? 'system' :
+    'ai'
+  )
+}
+
+function unprocessedRentalMessages(metadata: Record<string, unknown> | null | undefined, messages: PersistedChatMessage[]) {
+  const agentState = safeRecord(metadata?.agent_state)
+  const checkpointAt = strOrNull(agentState.last_semantically_processed_at)
+  const checkpointId = strOrNull(agentState.last_semantically_processed_message_id)
+  const resumedAt = strOrNull(agentState.handover_resumed_at)
+  const startedAt = strOrNull(agentState.handover_started_at)
+  const afterCheckpoint = checkpointAt
+    ? messages.filter(message => message.created_at && message.created_at > checkpointAt)
+    : messages
+  const relevant = afterCheckpoint.filter(message => {
+    const sender = messageSenderType(message)
+    if (message.id === checkpointId) return false
+    if (message.role === 'user') return true
+    if (message.role === 'assistant' && sender === 'human') return true
+    return false
+  })
+  return {
+    checkpointAt,
+    checkpointId,
+    handoverStartedAt: startedAt,
+    handoverResumedAt: resumedAt,
+    messages: relevant,
+  }
 }
 
 function sameLocationIntent(text: string) {
@@ -1319,18 +1502,39 @@ function locationOptionsReply(toolResults: AgentToolResult[]) {
   return 'I can help set the pickup and drop-off location. Which location should I use for pickup and return?'
 }
 
-function applyConfiguredLocationAcceptance(confirmed: Slots, userMessage: string, toolResults: AgentToolResult[], semantics: RentalSemanticInterpretation = EMPTY_RENTAL_SEMANTICS) {
+function applyConfiguredLocationAcceptance(
+  confirmed: Slots,
+  userMessage: string,
+  toolResults: AgentToolResult[],
+  semantics: RentalSemanticInterpretation = EMPTY_RENTAL_SEMANTICS,
+  references: RentalAgentReferences = {
+    last_offered_locations: [],
+    last_offered_vehicles: [],
+    last_recommended_vehicle: null,
+    last_pending_confirmation_subject: null,
+  },
+) {
   const locations = locationListFromTool(toolResults)
-  if (!locations.length) return confirmed
+  const referencedLocations = references.last_offered_locations.map(location => ({
+    id: location.id ?? null,
+    name: location.name ?? location.label ?? null,
+    address: location.address ?? null,
+  }))
+  const locationOptions = locations.length ? locations : referencedLocations
+  if (!locationOptions.length) return confirmed
   const next: Slots = { ...confirmed }
+  const confirmedLastLocation =
+    semantics.confirmation === 'yes' &&
+    references.last_pending_confirmation_subject === 'use_location_for_both'
   const acceptedBoth =
     semantics.intent === 'UPDATE_RENTAL_DETAILS' && semanticRelationInvolvesLocation(semantics) ||
     semantics.references.some(ref => ref.resolved_to === 'last_offered_location') ||
+    confirmedLastLocation ||
     wantsBothLocations(userMessage) ||
     detectRentalUserIntent(userMessage, confirmed) === 'ACCEPT_LOCATION'
-  const singleOffered = locations.length === 1 ? locations[0] : null
-  const pickupMatch = locations.find(location => locationMatchesText(location, next.pickup_location))
-  const dropoffMatch = locations.find(location => locationMatchesText(location, next.dropoff_location))
+  const singleOffered = locationOptions.length === 1 ? locationOptions[0] : null
+  const pickupMatch = locationOptions.find(location => locationMatchesText(location, next.pickup_location))
+  const dropoffMatch = locationOptions.find(location => locationMatchesText(location, next.dropoff_location))
   const acceptedLocation = singleOffered && (acceptedBoth || isLocationAffirmation(userMessage)) ? singleOffered : null
 
   if (acceptedLocation && acceptedBoth) {
@@ -1846,6 +2050,7 @@ function guardReply(
 }
 
 type FleetReplyCar = {
+  id?: string | null
   name?: string | null
   className?: string | null
   transmission?: string | null
@@ -1934,6 +2139,20 @@ function replaceRentalIsoDateTimes(reply: string, confirmed: Slots) {
     if (raw && formatted) next = next.split(raw).join(formatted)
   }
   return next.replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:[+-]\d{2}:\d{2}|Z)?\b/g, value => formatCustomerDateTime(value) ?? value)
+}
+
+function enforceRentalOperationalReplyContract(reply: string, toolResults: AgentToolResult[]) {
+  let next = reply
+    .replace(/\b(?:please\s+)?hold on(?: for a moment)?[.!]?\s*/gi, '')
+    .replace(/\bLet me (?:just )?check (?:the )?availability[^.?!]*[.?!]\s*/gi, '')
+  const create = toolResults.find(result => result.tool === 'createBooking' && result.ok)
+  const status = create ? String(safeRecord(create.data).status ?? '').toLowerCase() : ''
+  if (create && status === 'pending') {
+    next = next
+      .replace(/\bOur team will contact you shortly to confirm(?: the final details)?[.?!]?/gi, '')
+      .replace(/\bYour booking is confirmed\b/gi, 'Your booking request has been created successfully')
+  }
+  return next.replace(/\s{2,}/g, ' ').trim()
 }
 
 function formatPln(value: unknown) {
@@ -2376,9 +2595,19 @@ async function interpretRentalSemanticsWithGemini(input: {
   qualificationStage: string
   missing: SlotDef[]
   correlationId: string
-}): Promise<RentalSemanticInterpretation | null> {
+}): Promise<{ interpretation: RentalSemanticInterpretation | null; trace: RentalSemanticTraceMeta }> {
   const apiKey = process.env.GEMINI_API_KEY
-  if (!apiKey || !isGeminiModel(input.model)) return null
+  if (!apiKey || !isGeminiModel(input.model)) return {
+    interpretation: null,
+    trace: {
+      semantic_source: 'legacy_fallback',
+      fallback_used: true,
+      fallback_reason: !apiKey ? 'missing_gemini_key' : 'non_gemini_model',
+      interpreter_latency_ms: null,
+      semantic_parse_success: false,
+      finish_reason: null,
+    },
+  }
   const recentHistory = input.history.slice(-10)
   const prompt = [
     'You are the semantic interpreter for a car-rental operations agent.',
@@ -2421,22 +2650,54 @@ async function interpretRentalSemanticsWithGemini(input: {
     } | null
     const candidate = payload?.candidates?.[0]
     const text = candidate?.content?.parts?.map(part => part.text ?? '').join('').trim() ?? ''
+    const latencyMs = Date.now() - startedAt
     console.log('[SEMANTIC_DIAG] rental interpreter response', {
       correlation_id: input.correlationId,
       finish_reason: candidate?.finishReason ?? null,
       output_chars: text.length,
-      latency_ms: Date.now() - startedAt,
+      latency_ms: latencyMs,
     })
-    if (!res.ok || !text || candidate?.finishReason && !['STOP', 'FINISH_REASON_UNSPECIFIED'].includes(candidate.finishReason)) return null
+    if (!res.ok || !text || candidate?.finishReason && !['STOP', 'FINISH_REASON_UNSPECIFIED'].includes(candidate.finishReason)) return {
+      interpretation: null,
+      trace: {
+        semantic_source: 'legacy_fallback',
+        fallback_used: true,
+        fallback_reason: !res.ok ? 'provider_http_error' : !text ? 'empty_semantic_response' : `finish_reason:${candidate?.finishReason ?? 'unknown'}`,
+        interpreter_latency_ms: latencyMs,
+        semantic_parse_success: false,
+        finish_reason: candidate?.finishReason ?? null,
+      },
+    }
     const parsed = JSON.parse(text) as unknown
-    return normalizeSemanticInterpretation(parsed, 'llm')
+    return {
+      interpretation: normalizeSemanticInterpretation(parsed, 'llm'),
+      trace: {
+        semantic_source: 'llm',
+        fallback_used: false,
+        fallback_reason: null,
+        interpreter_latency_ms: latencyMs,
+        semantic_parse_success: true,
+        finish_reason: candidate?.finishReason ?? null,
+      },
+    }
   } catch (error) {
+    const latencyMs = Date.now() - startedAt
     console.warn('[SEMANTIC_DIAG] rental interpreter fallback', {
       correlation_id: input.correlationId,
       message: error instanceof Error ? error.message : String(error),
-      latency_ms: Date.now() - startedAt,
+      latency_ms: latencyMs,
     })
-    return null
+    return {
+      interpretation: null,
+      trace: {
+        semantic_source: 'legacy_fallback',
+        fallback_used: true,
+        fallback_reason: error instanceof SyntaxError ? 'semantic_json_parse_error' : 'semantic_interpreter_error',
+        interpreter_latency_ms: latencyMs,
+        semantic_parse_success: false,
+        finish_reason: null,
+      },
+    }
   } finally {
     clearTimeout(timeout)
   }
@@ -2468,7 +2729,17 @@ async function generateRentalNaturalReply(input: {
   history: { role: 'user' | 'assistant'; content: string }[]
   correlationId: string
 }) {
-  if (!isGeminiModel(input.agent.model) || input.semantics.source !== 'llm') return null
+  if (!isGeminiModel(input.agent.model) || input.semantics.source !== 'llm') return {
+    reply: null,
+    trace: {
+      generator_source: 'deterministic_fallback',
+      response_latency_ms: null,
+      fallback_used: true,
+      provider_retry_used: false,
+      finish_reason: null,
+      output_length: input.draftReply.length,
+    } satisfies RentalResponseTraceMeta,
+  }
   const toolBlock = formatToolResultsForPrompt(input.toolResults)
   const systemPrompt = [
     'You generate the final customer-facing reply for a car-rental operations assistant.',
@@ -2499,14 +2770,34 @@ async function generateRentalNaturalReply(input: {
       latency_ms: Date.now() - startedAt,
       output_chars: reply.length,
     })
-    return reply
+    return {
+      reply,
+      trace: {
+        generator_source: 'llm',
+        response_latency_ms: Date.now() - startedAt,
+        fallback_used: false,
+        provider_retry_used: false,
+        finish_reason: 'STOP',
+        output_length: reply.length,
+      } satisfies RentalResponseTraceMeta,
+    }
   } catch (error) {
     console.warn('[SEMANTIC_DIAG] rental response generator fallback', {
       correlation_id: input.correlationId,
       message: error instanceof Error ? error.message : String(error),
       latency_ms: Date.now() - startedAt,
     })
-    return null
+    return {
+      reply: null,
+      trace: {
+        generator_source: 'deterministic_fallback',
+        response_latency_ms: Date.now() - startedAt,
+        fallback_used: true,
+        provider_retry_used: false,
+        finish_reason: null,
+        output_length: input.draftReply.length,
+      } satisfies RentalResponseTraceMeta,
+    }
   }
 }
 
@@ -2539,6 +2830,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `message must be ${MAX_MESSAGE_LENGTH} characters or fewer` }, { status: 413 })
   }
   const messageText = message ?? attachmentResult?.attachment?.name ?? ''
+  const turnStartedAt = Date.now()
   const requestChannel = typeof body.channel === 'string' && body.channel.trim() ? body.channel.trim().slice(0, 40) : 'website'
   const requestSourceHost = typeof body.host === 'string' && body.host.trim()
     ? body.host.trim().toLowerCase().slice(0, 180)
@@ -2870,6 +3162,8 @@ export async function POST(req: NextRequest) {
   ) {
     const previousAgentState = safeRecord(latestConversationMetadata.agent_state)
     const previousState = safeRecord(previousAgentState.state)
+    const previousReferences = agentReferencesFromState(latestConversationMetadata)
+    const nextReferences = referencesFromToolResults(toolResults, previousReferences, missingFields)
     const price = toolResults.find(result => result.tool === 'calculatePrice' && result.ok)?.data as {
       rentalSubtotal?: number
       rentalDays?: number
@@ -2924,6 +3218,11 @@ export async function POST(req: NextRequest) {
         last_turn_id: turnId,
       },
       missing: missingFields.map(field => field.key),
+      references: nextReferences,
+      last_semantically_processed_message_id: strOrNull(previousAgentState.last_semantically_processed_message_id),
+      last_semantically_processed_at: strOrNull(previousAgentState.last_semantically_processed_at),
+      handover_started_at: strOrNull(previousAgentState.handover_started_at),
+      handover_resumed_at: strOrNull(previousAgentState.handover_resumed_at),
       updated_at: new Date().toISOString(),
     }
   }
@@ -2948,6 +3247,32 @@ export async function POST(req: NextRequest) {
       .eq('id', convId)
       .eq('business_id', businessId)
     if (error) console.warn('[AGENT STATE] conversation metadata persist failed', {
+      conversation_id: convId,
+      business_id: businessId,
+      code: error.code,
+      message: error.message,
+    })
+  }
+
+  async function persistSemanticCheckpoint(convId: string, message: PersistedChatMessage | null | undefined) {
+    if (!message?.id) return
+    const previousAgentState = safeRecord(latestConversationMetadata.agent_state)
+    const metadata = nextConversationMetadata({
+      ...latestConversationMetadata,
+      agent_state: {
+        ...previousAgentState,
+        last_semantically_processed_message_id: message.id,
+        last_semantically_processed_at: message.created_at ?? new Date().toISOString(),
+      },
+    })
+    latestConversationMetadata = metadata
+    if (conversationContext) conversationContext.metadata = metadata
+    const { error } = await sb
+      .from('conversations')
+      .update({ metadata })
+      .eq('id', convId)
+      .eq('business_id', businessId)
+    if (error) console.warn('[AGENT STATE] semantic checkpoint persist failed', {
       conversation_id: convId,
       business_id: businessId,
       code: error.code,
@@ -3378,7 +3703,7 @@ export async function POST(req: NextRequest) {
   const [leadResult, historyResult, qualResult] = await Promise.all([
     sb.from('leads').select('id, name, phone, email, interest, status, metadata')
       .eq('conversation_id', convId).maybeSingle(),
-    sb.from('messages').select('role, content')
+    sb.from('messages').select('id, role, content, created_at, metadata')
       .eq('conversation_id', convId).order('created_at', { ascending: true }).limit(40),
     sb.from('agent_qualification_fields')
       .select('field_key, label, prompt, required, sort_order')
@@ -3390,7 +3715,8 @@ export async function POST(req: NextRequest) {
   if (historyResult.error) console.error('[POST /api/chat] history lookup error:', JSON.stringify(historyResult.error))
 
   const existingLead = leadResult.data as ExistingLead | null
-  const history      = ((historyResult.data as { role: string; content: string }[] | null) ?? []).map(r => ({
+  const historyRows = ((historyResult.data as PersistedChatMessage[] | null) ?? [])
+  const history      = historyRows.map(r => ({
     role:    r.role,
     content: r.content,
   }))
@@ -3408,12 +3734,73 @@ export async function POST(req: NextRequest) {
 
   /* 7. Build confirmedSlots deterministically ─────────────────────────────── */
   const canonicalConversationSlots = slotsFromConversationAgentState(latestConversationMetadata)
-  let confirmed            = buildConfirmedSlots(existingLead, history, messageText, canonicalConversationSlots)
+  const stateHistoryForSlots = normalizeBusinessType(businessType) === 'car_rental'
+    ? historyRows
+      .filter(row => row.role === 'user' || (row.role === 'assistant' && messageSenderType(row) === 'human') || row.role === 'assistant')
+      .map(row => ({
+        role: row.role === 'user' || messageSenderType(row) === 'human' ? 'user' : 'assistant',
+        content: row.content,
+      }))
+    : history
+  let confirmed            = buildConfirmedSlots(existingLead, stateHistoryForSlots, messageText, canonicalConversationSlots)
   confirmed                = await hydrateSelectedRentalVehicle(sb, businessId, confirmed, businessType)
   let missing              = computeMissingSlots(confirmed, slotDefs)
   let qualificationStage   = computeQualificationStage(confirmed, missing)
   let rentalSemantics: RentalSemanticInterpretation = EMPTY_RENTAL_SEMANTICS
+  let semanticTrace: RentalSemanticTraceMeta = {
+    semantic_source: 'deterministic',
+    fallback_used: false,
+    fallback_reason: null,
+    interpreter_latency_ms: null,
+    semantic_parse_success: false,
+    finish_reason: null,
+  }
+  let stateChangedFields: string[] = []
+  let toolExecutionLatencyMs: number | null = null
+  let responseTrace: RentalResponseTraceMeta = {
+    generator_source: 'deterministic_fallback',
+    response_latency_ms: null,
+    fallback_used: false,
+    provider_retry_used: false,
+    finish_reason: null,
+    output_length: 0,
+  }
+  const pendingAgentTraces: AgentTraceInsert[] = []
+  const emitRentalTrace = (eventType: string, payload: Record<string, unknown>) => {
+    emitAgentTrace(eventType, payload)
+    pendingAgentTraces.push(agentTraceRow({
+      businessId,
+      botId: agent.id,
+      conversationId: convId,
+      turnId,
+      requestId,
+      eventType,
+      payload,
+    }))
+  }
+  const flushRentalTraces = async () => {
+    await persistAgentTraceRows(sb, pendingAgentTraces.splice(0))
+  }
   if (normalizeBusinessType(businessType) === 'car_rental') {
+    const resumeDelta = unprocessedRentalMessages(latestConversationMetadata, historyRows)
+    const resumeRelevantCount = resumeDelta.messages.length
+    if (resumeDelta.handoverStartedAt || resumeDelta.handoverResumedAt || resumeRelevantCount > 0) {
+      emitRentalTrace('rental_resume_reconciliation_started', {
+        request_id: requestId,
+        turn_id: turnId,
+        conversation_id: convId,
+        business_id: businessId,
+        bot_id: agent.id,
+        handover_started_at_present: Boolean(resumeDelta.handoverStartedAt),
+        handover_resumed_at_present: Boolean(resumeDelta.handoverResumedAt),
+        last_semantically_processed_message_id_present: Boolean(resumeDelta.checkpointId),
+        messages_considered: resumeRelevantCount,
+        message_roles: resumeDelta.messages.map(message => ({
+          role: message.role,
+          sender_type: messageSenderType(message),
+        })),
+      })
+    }
     const interpreted = await interpretRentalSemanticsWithGemini({
       model: agent.model,
       agent,
@@ -3424,11 +3811,62 @@ export async function POST(req: NextRequest) {
       missing,
       correlationId: turnId,
     })
-    rentalSemantics = interpreted ?? deterministicSemanticFallback(messageText, confirmed)
+    semanticTrace = interpreted.trace
+    rentalSemantics = interpreted.interpretation ?? deterministicSemanticFallback(messageText, confirmed)
+    if (!interpreted.interpretation) {
+      semanticTrace = {
+        ...semanticTrace,
+        semantic_source: 'legacy_fallback',
+        fallback_used: true,
+        fallback_reason: semanticTrace.fallback_reason ?? 'semantic_interpreter_unavailable',
+      }
+    }
+    emitRentalTrace('rental_semantic_interpretation', {
+      request_id: requestId,
+      turn_id: turnId,
+      conversation_id: convId,
+      business_id: businessId,
+      bot_id: agent.id,
+      semantic_source: semanticTrace.semantic_source,
+      model: agent.model,
+      intent: rentalSemantics.intent,
+      relations: relationTrace(rentalSemantics.relations),
+      references: referenceTrace(rentalSemantics.references),
+      correction_fields: rentalSemantics.corrections.map(correction => correction.field),
+      confirmation: rentalSemantics.confirmation,
+      confidence: rentalSemantics.confidence,
+      fallback_used: semanticTrace.fallback_used,
+      fallback_reason: semanticTrace.fallback_reason,
+      interpreter_latency_ms: semanticTrace.interpreter_latency_ms,
+      semantic_parse_success: semanticTrace.semantic_parse_success,
+      finish_reason: semanticTrace.finish_reason ?? null,
+    })
+    const beforeReduction = confirmed
     const reduced = reduceRentalState(confirmed, rentalSemantics, history.map(r => ({ role: r.role === 'assistant' ? 'assistant' : 'user', content: r.content })))
     confirmed = await hydrateSelectedRentalVehicle(sb, businessId, reduced, businessType)
+    stateChangedFields = slotChangedFields(beforeReduction, confirmed)
     missing = computeMissingSlots(confirmed, slotDefs)
     qualificationStage = computeQualificationStage(confirmed, missing)
+    emitRentalTrace('rental_state_reduction', {
+      turn_id: turnId,
+      intent: rentalSemantics.intent,
+      changed_fields: stateChangedFields,
+      applied_relation_types: rentalSemantics.relations.map(relation => relation.type),
+      correction_fields: rentalSemantics.corrections.map(correction => correction.field),
+      preserved_field_count: countPreservedFields(beforeReduction, confirmed),
+      state_version: 1,
+    })
+    if (resumeDelta.handoverStartedAt || resumeDelta.handoverResumedAt || resumeRelevantCount > 0) {
+      emitRentalTrace('rental_resume_reconciliation_completed', {
+        request_id: requestId,
+        turn_id: turnId,
+        conversation_id: convId,
+        messages_reconciled: resumeRelevantCount,
+        changed_fields: stateChangedFields,
+        checkpoint_will_advance: true,
+        next_action: pendingActionFromMissing(missing),
+      })
+    }
   }
   const rentalUserIntent: RentalUserIntent | 'NON_RENTAL' = normalizeBusinessType(businessType) === 'car_rental'
     ? rentalSemanticIntentToUserIntent(rentalSemantics.intent)
@@ -3444,7 +3882,7 @@ export async function POST(req: NextRequest) {
     } catch { /* table may not exist yet — safe to ignore */ }
   }
 
-  console.log('[SLOTS] confirmedSlots:', JSON.stringify(confirmed))
+  console.log('[SLOTS] confirmedSlots:', JSON.stringify(redactedSlotPresence(confirmed)))
   console.log('[SLOTS] missingSlots:',  missing.map(d => d.key).join(', ') || 'none')
   console.log('[SLOTS] qualificationStage:', qualificationStage)
 
@@ -3469,26 +3907,74 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  const toolsStartedAt = Date.now()
   const operationalToolResults = await runOperationalTools(sb, {
     businessId,
     businessType,
     conversationId: convId,
     message: messageText,
     semanticIntent: rentalSemantics.intent,
+    needsLocationResolution: semanticNeedsLocationTool(rentalSemantics) ||
+      Boolean((confirmed.pickup_location && !confirmed.pickup_location_id) || (confirmed.dropoff_location && !confirmed.dropoff_location_id)),
     slots: confirmed,
   })
+  toolExecutionLatencyMs = Date.now() - toolsStartedAt
+  if (normalizeBusinessType(businessType) === 'car_rental' && !confirmed.selected_vehicle) {
+    const beforeToolReferenceReduction = confirmed
+    const toolReduced = reduceRentalState(
+      confirmed,
+      rentalSemantics,
+      history.map(r => ({ role: r.role === 'assistant' ? 'assistant' : 'user', content: r.content })),
+      operationalToolResults,
+    )
+    if (toolReduced.selected_vehicle) {
+      confirmed = await hydrateSelectedRentalVehicle(sb, businessId, toolReduced, businessType)
+      stateChangedFields = Array.from(new Set([...stateChangedFields, ...slotChangedFields(beforeToolReferenceReduction, confirmed)]))
+      missing = computeMissingSlots(confirmed, slotDefs)
+      qualificationStage = computeQualificationStage(confirmed, missing)
+    }
+  }
   if (normalizeBusinessType(businessType) === 'car_rental' && operationalToolResults.some(result => result.tool === 'getLocations' && result.ok)) {
-    const mergedLocations = applyConfiguredLocationAcceptance(confirmed, messageText, operationalToolResults, rentalSemantics)
+    const mergedLocations = applyConfiguredLocationAcceptance(
+      confirmed,
+      messageText,
+      operationalToolResults,
+      rentalSemantics,
+      agentReferencesFromState(latestConversationMetadata),
+    )
     if (
       mergedLocations.pickup_location !== confirmed.pickup_location ||
       mergedLocations.dropoff_location !== confirmed.dropoff_location ||
       mergedLocations.pickup_location_id !== confirmed.pickup_location_id ||
       mergedLocations.dropoff_location_id !== confirmed.dropoff_location_id
     ) {
+      const beforeLocationMerge = confirmed
       confirmed = mergedLocations
+      stateChangedFields = Array.from(new Set([...stateChangedFields, ...slotChangedFields(beforeLocationMerge, mergedLocations)]))
       missing = computeMissingSlots(confirmed, slotDefs)
       qualificationStage = computeQualificationStage(confirmed, missing)
     }
+  }
+  if (normalizeBusinessType(businessType) === 'car_rental') {
+    const bookingResult = operationalToolResults.find(result => result.tool === 'createBooking')
+    emitRentalTrace('rental_tool_execution', {
+      turn_id: turnId,
+      tools: operationalToolResults.map(result => result.tool),
+      tool_count: operationalToolResults.length,
+      statuses: operationalToolResults.map(result => ({ tool: result.tool, ok: result.ok })),
+      authoritative_result_category: bookingResult
+        ? 'booking'
+        : operationalToolResults.some(result => result.tool === 'checkAvailability') ? 'availability'
+          : operationalToolResults.some(result => result.tool === 'searchFleet') ? 'fleet'
+            : operationalToolResults.some(result => result.tool === 'getLocations') ? 'locations'
+              : operationalToolResults.length ? 'other' : 'none',
+      latency_ms: toolExecutionLatencyMs,
+      booking_creation: bookingResult ? {
+        success: bookingResult.ok,
+        status: bookingResult.ok ? strOrNull(safeRecord(bookingResult.data).status) : null,
+        idempotent_existing_returned: Boolean(safeRecord(bookingResult.data).idempotent_existing_returned),
+      } : null,
+    })
   }
   if (operationalToolResults.length > 0 || normalizeBusinessType(businessType) === 'car_rental') {
     await persistConversationAgentState(convId, confirmed, missing, qualificationStage, rentalUserIntent, operationalToolResults)
@@ -3514,6 +4000,16 @@ export async function POST(req: NextRequest) {
     if (assistantMsgErr) console.error('[POST /api/chat] handover assistant message insert failed:', JSON.stringify(assistantMsgErr))
     await incrementUnread(convId)
     await markConversationStatus(sb, convId, businessId, 'handover_requested')
+    const handoverStartedMetadata = nextConversationMetadata({
+      ...latestConversationMetadata,
+      agent_state: {
+        ...safeRecord(latestConversationMetadata.agent_state),
+        handover_started_at: new Date().toISOString(),
+      },
+    })
+    latestConversationMetadata = handoverStartedMetadata
+    if (conversationContext) conversationContext.metadata = handoverStartedMetadata
+    await sb.from('conversations').update({ metadata: handoverStartedMetadata }).eq('id', convId).eq('business_id', businessId)
     await insertStatusEvent(sb, convId, businessId, 'Customer requested a human handover.', 'handover_requested')
     const handoverPersist = await persistLead(
       sb,
@@ -3616,6 +4112,7 @@ export async function POST(req: NextRequest) {
   })
   if (userInsert.error) console.error('[POST /api/chat] user message insert failed:', userInsert.error)
   await incrementUnread(convId)
+  await persistSemanticCheckpoint(convId, userInsert.message)
 
   const deterministicRentalReply =
     deterministicRentalNextActionReply(confirmed, missing, operationalToolResults, businessType, messageText) ??
@@ -3623,7 +4120,7 @@ export async function POST(req: NextRequest) {
     rentalClarificationReply(confirmed, missing, businessType, messageText)
 
   if (deterministicRentalReply) {
-    const naturalReply = await generateRentalNaturalReply({
+    const generatedReply = await generateRentalNaturalReply({
       agent,
       draftReply: deterministicRentalReply,
       userMessage: messageText,
@@ -3634,7 +4131,11 @@ export async function POST(req: NextRequest) {
       history: history.map(r => ({ role: r.role === 'assistant' ? 'assistant' as const : 'user' as const, content: r.content })),
       correlationId: turnId,
     })
-    const { reply: finalReply, blocked } = guardReply(naturalReply ?? deterministicRentalReply, confirmed, missing)
+    responseTrace = generatedReply.trace
+    const guardedCandidate = normalizeBusinessType(businessType) === 'car_rental'
+      ? enforceRentalOperationalReplyContract(generatedReply.reply ?? deterministicRentalReply, operationalToolResults)
+      : generatedReply.reply ?? deterministicRentalReply
+    const { reply: finalReply, blocked } = guardReply(guardedCandidate, confirmed, missing)
     const assistantInsert = await insertMessageOnce({
       conversationId: convId,
       businessId,
@@ -3644,6 +4145,33 @@ export async function POST(req: NextRequest) {
       idempotency: { key: 'turn_id', value: turnId, role: 'assistant' },
     })
     if (assistantInsert.error) console.error('[POST /api/chat] deterministic rental ai-msg insert failed:', assistantInsert.error)
+    emitRentalTrace('rental_response_generation', {
+      turn_id: turnId,
+      generator_source: responseTrace.generator_source,
+      model: agent.model,
+      response_latency_ms: responseTrace.response_latency_ms,
+      fallback_used: responseTrace.fallback_used,
+      provider_retry_used: responseTrace.provider_retry_used,
+      finish_reason: responseTrace.finish_reason,
+      output_length: finalReply.length,
+      ISO_leak_validator_passed: isoLeakValidatorPassed(finalReply),
+      persisted_once: Boolean(assistantInsert.message?.id),
+    })
+    const bookingResult = operationalToolResults.find(result => result.tool === 'createBooking')
+    emitRentalTrace('rental_agent_turn_complete', {
+      request_id: requestId,
+      turn_id: turnId,
+      semantic_source: semanticTrace.semantic_source,
+      semantic_intent: rentalSemantics.intent,
+      fallback_used: semanticTrace.fallback_used || responseTrace.fallback_used,
+      changed_fields: stateChangedFields,
+      tools_called: operationalToolResults.map(result => result.tool),
+      response_generator_source: responseTrace.generator_source,
+      total_latency_ms: Date.now() - turnStartedAt,
+      assistant_message_id_present: Boolean(assistantInsert.message?.id),
+      booking_action_attempted: Boolean(bookingResult),
+      booking_action_succeeded: Boolean(bookingResult?.ok),
+    })
 
     const isQualified = !!(confirmed.name && confirmed.phone && confirmed.email)
     const intent      = detectDealType(messageText) ? 'inquiry' : 'greeting'
@@ -3681,6 +4209,7 @@ export async function POST(req: NextRequest) {
         bot: botDebug,
       }
     }
+    await flushRentalTraces()
     return NextResponse.json(response)
   }
 
@@ -3716,8 +4245,17 @@ export async function POST(req: NextRequest) {
   }))
 
   let rawReply: string
+  const providerStartedAt = Date.now()
   try {
     rawReply = await callAIProvider(openai, agent.model, agent.temperature, systemPrompt, historyForLLM, messageText, turnId)
+    responseTrace = {
+      generator_source: 'llm',
+      response_latency_ms: Date.now() - providerStartedAt,
+      fallback_used: false,
+      provider_retry_used: false,
+      finish_reason: 'STOP',
+      output_length: rawReply.length,
+    }
   } catch (err) {
     if (err instanceof GeminiIncompleteResponseError) {
       rawReply =
@@ -3725,6 +4263,14 @@ export async function POST(req: NextRequest) {
         rentalToolReplyOverride(operationalToolResults, confirmed, missing, businessType, messageText) ??
         rentalClarificationReply(confirmed, missing, businessType, messageText) ??
         (missing[0]?.question ? `Thanks. ${missing[0].question}` : 'Thanks. I have the details saved and can continue from here.')
+      responseTrace = {
+        generator_source: 'deterministic_fallback',
+        response_latency_ms: Date.now() - providerStartedAt,
+        fallback_used: true,
+        provider_retry_used: true,
+        finish_reason: err.code,
+        output_length: rawReply.length,
+      }
       console.warn('[AI_DIAG] using deterministic provider recovery reply', {
         business_id: businessId,
         conversation_id: convId,
@@ -3739,7 +4285,10 @@ export async function POST(req: NextRequest) {
 
   /* 11. Guard reply — block stale/holding answers and repeated questions ─── */
   const operationalReply = rentalToolReplyOverride(operationalToolResults, confirmed, missing, businessType, messageText)
-  const { reply: finalReply, blocked } = guardReply(operationalReply ?? rawReply, confirmed, missing)
+  const guardedCandidate = normalizeBusinessType(businessType) === 'car_rental'
+    ? enforceRentalOperationalReplyContract(operationalReply ?? rawReply, operationalToolResults)
+    : operationalReply ?? rawReply
+  const { reply: finalReply, blocked } = guardReply(guardedCandidate, confirmed, missing)
   console.log('[GUARD] blockedRepeatedQuestion:', blocked)
 
   if (!testAiMode && aiCannotAnswer(finalReply, liveChatSettings, agent.fallback_msg) && liveChatSettings.live_chat_enabled) {
@@ -3775,6 +4324,35 @@ export async function POST(req: NextRequest) {
     idempotency: { key: 'turn_id', value: turnId, role: 'assistant' },
   })
   if (assistantInsert.error) console.error('[POST /api/chat] ai message insert failed:', assistantInsert.error)
+  if (normalizeBusinessType(businessType) === 'car_rental') {
+    emitRentalTrace('rental_response_generation', {
+      turn_id: turnId,
+      generator_source: responseTrace.generator_source,
+      model: agent.model,
+      response_latency_ms: responseTrace.response_latency_ms,
+      fallback_used: responseTrace.fallback_used,
+      provider_retry_used: responseTrace.provider_retry_used,
+      finish_reason: responseTrace.finish_reason,
+      output_length: finalReply.length,
+      ISO_leak_validator_passed: isoLeakValidatorPassed(finalReply),
+      persisted_once: Boolean(assistantInsert.message?.id),
+    })
+    const bookingResult = operationalToolResults.find(result => result.tool === 'createBooking')
+    emitRentalTrace('rental_agent_turn_complete', {
+      request_id: requestId,
+      turn_id: turnId,
+      semantic_source: semanticTrace.semantic_source,
+      semantic_intent: rentalSemantics.intent,
+      fallback_used: semanticTrace.fallback_used || responseTrace.fallback_used,
+      changed_fields: stateChangedFields,
+      tools_called: operationalToolResults.map(result => result.tool),
+      response_generator_source: responseTrace.generator_source,
+      total_latency_ms: Date.now() - turnStartedAt,
+      assistant_message_id_present: Boolean(assistantInsert.message?.id),
+      booking_action_attempted: Boolean(bookingResult),
+      booking_action_succeeded: Boolean(bookingResult?.ok),
+    })
+  }
 
   /* 13. Update / create lead ─────────────────────────────────────────────── */
   console.log('PERSIST IDS', {
@@ -3854,6 +4432,7 @@ export async function POST(req: NextRequest) {
       finalSystemPrompt: systemPrompt,
     }
   }
+  await flushRentalTraces()
   return NextResponse.json(response)
 }
 

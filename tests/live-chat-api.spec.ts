@@ -5,6 +5,8 @@ import { POST as postChat } from '../app/api/chat/route'
 import { GET as getWidgetConfig } from '../app/api/live-chat/widget/config/route'
 import { GET as getConversationDebug } from '../app/api/debug/conversation-resolution/route'
 import { resolveBotContext } from '../app/lib/bot-context'
+import { MEMBER_COOKIE_NAME, signMemberToken } from '../app/lib/auth'
+import { compactTraceData } from '../app/lib/agent-traces'
 
 const BUSINESS_ID = '59bd9987-46b9-48a3-ad14-cfe1ab733453'
 const MISSING_OPENAI_KEY_MESSAGE = 'OPENAI_API_KEY is missing. Add it in Vercel Environment Variables and redeploy.'
@@ -291,6 +293,85 @@ async function postChatRouteWithMockedGemini(body: Record<string, unknown>, resp
     global.fetch = originalFetch
     if (previousKey === undefined) delete process.env.GEMINI_API_KEY
     else process.env.GEMINI_API_KEY = previousKey
+  }
+}
+
+function geminiTextResponse(text: string, finishReason = 'STOP') {
+  return { candidates: [{ finishReason, content: { parts: [{ text }] } }] }
+}
+
+function geminiSemanticResponse(payload: Record<string, unknown>, finishReason = 'STOP') {
+  return geminiTextResponse(JSON.stringify(payload), finishReason)
+}
+
+async function createRentalConversationWithAgentState(
+  sb: ReturnType<typeof adminClient>,
+  businessId: string,
+  slots: Record<string, unknown>,
+  assistantHistory: string[] = [],
+) {
+  const { data: agent, error: agentError } = await sb
+    .from('agents')
+    .select('id')
+    .eq('business_id', businessId)
+    .eq('active', true)
+    .single()
+  expect(agentError).toBeNull()
+  expect(agent?.id).toBeTruthy()
+
+  const conversationId = crypto.randomUUID()
+  const metadata = {
+    bot_id: agent?.id,
+    agent_id: agent?.id,
+    business_type: 'car_rental',
+    agent_state: {
+      version: 1,
+      state: slots,
+      slots,
+      missing: [],
+      updated_at: new Date().toISOString(),
+    },
+  }
+  const { error: conversationError } = await sb.from('conversations').insert({
+    id: conversationId,
+    business_id: businessId,
+    channel: 'website',
+    status: 'ai_active',
+    unread_count: 0,
+    last_message_at: new Date().toISOString(),
+    metadata,
+  })
+  expect(conversationError).toBeNull()
+  if (assistantHistory.length) {
+    const { error: historyError } = await sb.from('messages').insert(assistantHistory.map(content => ({
+      conversation_id: conversationId,
+      business_id: businessId,
+      role: 'assistant',
+      content,
+      metadata: { sender_type: 'ai', delivery_status: 'delivered' },
+    })))
+    expect(historyError).toBeNull()
+  }
+  return conversationId
+}
+
+async function captureAgentTrace<T>(fn: () => Promise<T>) {
+  const previousTrace = process.env.AGENT_TRACE_LOGS
+  const originalInfo = console.info
+  const lines: string[] = []
+  process.env.AGENT_TRACE_LOGS = 'true'
+  console.info = ((...args: unknown[]) => {
+    const line = args.map(String).join(' ')
+    if (line.includes('"event":"rental_')) lines.push(line)
+  }) as typeof console.info
+  try {
+    const result = await fn()
+    const traces = lines.map(line => JSON.parse(line) as Record<string, unknown>)
+    return { result, traces }
+  } finally {
+    console.info = originalInfo
+    if (previousTrace === undefined) delete process.env.AGENT_TRACE_LOGS
+    else process.env.AGENT_TRACE_LOGS = previousTrace
   }
 }
 
@@ -862,17 +943,17 @@ test.describe('Live Chat API production boundaries', () => {
         customer_email: 'blocked@example.com',
         pickup_location_id: locationId,
         dropoff_location_id: locationId,
-        pickup_at: '2026-07-09T20:00:00+02:00',
-        dropoff_at: '2026-07-12T21:00:00+02:00',
+        pickup_at: '2026-07-10T20:00:00+02:00',
+        dropoff_at: '2026-07-13T21:00:00+02:00',
         status: 'confirmed',
         total_price: 480,
         updated_at: new Date().toISOString(),
       })
 
-      await send('yes, i want to rent a car today until 12/07', 'dates')
+      await send('yes, i want to rent a car tomorrow until 13/07', 'dates')
       const combined = await send('pick at 20:00 return at 21:00, yes i will use that location for both pickup and drop-off', 'times-location')
-      expect(combined.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-09T20:00:00+02:00')
-      expect(combined.debug?.confirmedSlots?.return_datetime).toBe('2026-07-12T21:00:00+02:00')
+      expect(combined.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-10T20:00:00+02:00')
+      expect(combined.debug?.confirmedSlots?.return_datetime).toBe('2026-07-13T21:00:00+02:00')
       expect(combined.debug?.confirmedSlots?.pickup_location_id).toBe(locationId)
       expect(combined.debug?.confirmedSlots?.dropoff_location_id).toBe(locationId)
       expect(combined.reply).not.toMatch(/still need the drop-off|drop-off location before/i)
@@ -912,6 +993,352 @@ test.describe('Live Chat API production boundaries', () => {
       expect(booking.reply).toContain('Skoda Superb is requested')
     } finally {
       await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('AI resume reconciles handover state, contextual confirmations, budget preference, and pending booking contract', async () => {
+    const { sb, businessId, locationId } = await createGeminiCarRentalBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
+    let conversationId: string | undefined
+    async function send(message: string, suffix: string, responses: Array<Record<string, unknown>> = [
+      { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Runtime fallback should not dominate this rental workflow.' }] } }] },
+    ]) {
+      const { response } = await postChatRouteWithMockedGemini({
+        business_id: businessId,
+        conversation_id: conversationId,
+        message,
+        debug: true,
+        test_ai: false,
+        turn_id: `handover-resume-${suffix}`,
+        client_message_id: `handover-resume-client-${suffix}`,
+      }, responses)
+      const body = await response.json() as {
+        reply?: string
+        conversation_id?: string
+        debug?: { confirmedSlots?: Record<string, unknown>; operationalTools?: Array<{ tool: string; ok: boolean }> }
+      }
+      expect(response.status).toBe(200)
+      conversationId = body.conversation_id
+      expect(body.reply ?? '').not.toMatch(/pickup date and time should I use|return date and time should I use/i)
+      expect(body.reply ?? '').not.toMatch(/Our team will contact you shortly|Please hold on|Let me check the availability/i)
+      return body
+    }
+    try {
+      await send('id like to rent a car tomorrow until 17/07', 'dates')
+      const times = await send('21:00 and return at 22:00', 'times')
+      expect(times.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-10T21:00:00+02:00')
+      expect(times.debug?.confirmedSlots?.return_datetime).toBe('2026-07-17T22:00:00+02:00')
+
+      const locations = await send('what locations do you have', 'locations')
+      expect(locations.reply).toContain('Bocheńska 2a')
+
+      const acceptLocation = await send('yes please', 'accept-location', [
+        geminiSemanticResponse({
+          intent: 'UPDATE_RENTAL_DETAILS',
+          state_patch: {},
+          relations: [{ type: 'SAME_LOCATION', fields: ['pickup_location', 'dropoff_location'] }],
+          references: [{ expression: 'yes please', resolved_to: 'last_offered_location' }],
+          corrections: [],
+          question: null,
+          confirmation: 'yes',
+          confidence: 0.97,
+        }),
+        geminiTextResponse('Perfect, I will use the configured location for pickup and return.'),
+      ])
+      expect(acceptLocation.debug?.confirmedSlots?.pickup_location_id).toBe(locationId)
+      expect(acceptLocation.debug?.confirmedSlots?.dropoff_location_id).toBe(locationId)
+
+      const { data: conversationBeforeHandover } = await sb.from('conversations').select('metadata').eq('id', conversationId).single()
+      const metadataBeforeHandover = conversationBeforeHandover?.metadata as Record<string, unknown>
+      const agentStateBeforeHandover = metadataBeforeHandover.agent_state as Record<string, unknown>
+      await sb.from('conversations').update({
+        status: 'live_chat',
+        metadata: {
+          ...metadataBeforeHandover,
+          agent_state: {
+            ...agentStateBeforeHandover,
+            handover_started_at: new Date().toISOString(),
+          },
+        },
+      }).eq('id', conversationId).eq('business_id', businessId)
+      await sb.from('messages').insert([
+        {
+          conversation_id: conversationId,
+          business_id: businessId,
+          role: 'assistant',
+          content: 'Staff greeting with no operational change.',
+          metadata: { sender_type: 'human', delivery_status: 'delivered' },
+        },
+        {
+          conversation_id: conversationId,
+          business_id: businessId,
+          role: 'user',
+          content: 'hi',
+          metadata: { sender_type: 'customer', delivery_status: 'delivered' },
+        },
+      ])
+      const { data: conversationDuringHandover } = await sb.from('conversations').select('metadata').eq('id', conversationId).single()
+      const metadataDuringHandover = conversationDuringHandover?.metadata as Record<string, unknown>
+      const agentStateDuringHandover = metadataDuringHandover.agent_state as Record<string, unknown>
+      await sb.from('conversations').update({
+        status: 'ai_active',
+        metadata: {
+          ...metadataDuringHandover,
+          agent_state: {
+            ...agentStateDuringHandover,
+            handover_resumed_at: new Date().toISOString(),
+          },
+        },
+      }).eq('id', conversationId).eq('business_id', businessId)
+
+      const budgetTrace = await captureAgentTrace(async () => {
+        return await send('i want a car without breaking the bank', 'budget', [
+          geminiSemanticResponse({
+            intent: 'ASK_AVAILABLE_VEHICLES_BY_CLASS',
+            state_patch: { car_class: 'economy' },
+            relations: [],
+            references: [{ expression: 'without breaking the bank', resolved_to: 'lowest_price_candidate', field: 'selected_vehicle' }],
+            corrections: [],
+            question: null,
+            confirmation: null,
+            confidence: 0.94,
+          }),
+          geminiTextResponse('These verified economy options are available for your saved rental period.'),
+        ])
+      })
+      const budget = budgetTrace.result as Awaited<ReturnType<typeof send>>
+      expect(budget.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-10T21:00:00+02:00')
+      expect(budget.debug?.confirmedSlots?.return_datetime).toBe('2026-07-17T22:00:00+02:00')
+      expect(budget.debug?.confirmedSlots?.pickup_location_id).toBe(locationId)
+      expect(budget.debug?.confirmedSlots?.dropoff_location_id).toBe(locationId)
+      expect(budget.reply).toMatch(/Toyota Corolla|Skoda Superb|available/i)
+      expect(budget.reply).not.toMatch(/what pickup date|what return date/i)
+      expect(budgetTrace.traces.some(trace => trace.event === 'rental_resume_reconciliation_started')).toBe(true)
+      expect(budgetTrace.traces.some(trace => trace.event === 'rental_resume_reconciliation_completed')).toBe(true)
+
+      const select = await send("i'll take the cheaper one", 'cheaper-one', [
+        geminiSemanticResponse({
+          intent: 'SELECT_VEHICLE',
+          state_patch: {},
+          relations: [],
+          references: [{ expression: 'the cheaper one', resolved_to: 'lowest_price_candidate', field: 'selected_vehicle' }],
+          corrections: [{ field: 'selected_vehicle', operation: 'REPLACE' }],
+          question: null,
+          confirmation: null,
+          confidence: 0.95,
+        }),
+        geminiTextResponse('The lowest-priced verified option is selected.'),
+      ])
+      expect(select.debug?.confirmedSlots?.selected_vehicle).toBe('Toyota Corolla')
+
+      await send('Whitney', 'name')
+      await send('554 222 000', 'phone')
+      const email = await send('whitney@apple.com', 'email')
+      expect(email.reply).toMatch(/Would you like me to create the booking request/i)
+
+      const booking = await send('yes please', 'confirm')
+      expect(booking.reply).toMatch(/Your booking request has been created successfully\. Reference: RB-/)
+      expect(booking.reply).not.toMatch(/Your booking is confirmed|team will contact you/i)
+      expect(booking.debug?.operationalTools?.filter(tool => tool.tool === 'createBooking' && tool.ok)).toHaveLength(1)
+      const { data: rows } = await sb
+        .from('rental_bookings')
+        .select('id,status')
+        .eq('business_id', businessId)
+        .eq('customer_email', 'whitney@apple.com')
+      expect(rows).toHaveLength(1)
+      expect(rows?.[0]?.status).toBe('pending')
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('rental semantic traces record LLM SAME_AS relations without raw customer text', async () => {
+    const { sb, businessId, locationId } = await createGeminiCarRentalBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
+    try {
+      const conversationId = await createRentalConversationWithAgentState(sb, businessId, {
+        pickup_location: 'Kraków Bocheńska 2a',
+        pickup_location_id: locationId,
+        pickup_datetime: '2026-07-09T20:00:00+02:00',
+        return_datetime: '2026-07-12T21:00:00+02:00',
+      }, ['Would you like to use Bocheńska 2a for both pickup and drop-off?'])
+
+      const { traces } = await captureAgentTrace(async () => {
+        const { response } = await postChatRouteWithMockedGemini({
+          business_id: businessId,
+          conversation_id: conversationId,
+          message: "wherever i collect the car from is where you'll get it back",
+          debug: true,
+          turn_id: 'trace-same-as-turn',
+          client_message_id: 'trace-same-as-client',
+        }, [
+          geminiSemanticResponse({
+            intent: 'UPDATE_RENTAL_DETAILS',
+            state_patch: {},
+            relations: [{ type: 'SAME_AS', source: 'pickup_location', target: 'dropoff_location' }],
+            references: [{ expression: 'wherever i collect the car from', resolved_to: 'pickup_location', field: 'dropoff_location' }],
+            corrections: [],
+            question: null,
+            confirmation: null,
+            confidence: 0.98,
+          }),
+          geminiTextResponse('Perfect, pickup and return will use the configured location. What type of car would you like?'),
+        ])
+        expect(response.status).toBe(200)
+      })
+
+      const semantic = traces.find(trace => trace.event === 'rental_semantic_interpretation')
+      expect(semantic?.semantic_source).toBe('llm')
+      expect(semantic?.fallback_used).toBe(false)
+      expect(semantic?.semantic_parse_success).toBe(true)
+      expect(semantic?.relations).toContainEqual({ type: 'SAME_AS', source: 'pickup_location', target: 'dropoff_location' })
+      expect(JSON.stringify(semantic)).not.toContain('wherever i collect')
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('rental semantic traces record lowest-price references structurally', async () => {
+    const { sb, businessId } = await createGeminiCarRentalBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
+    try {
+      const conversationId = await createRentalConversationWithAgentState(sb, businessId, {
+        pickup_datetime: '2026-07-09T20:00:00+02:00',
+        return_datetime: '2026-07-12T21:00:00+02:00',
+      }, ['Available cars: Skoda Superb, Toyota Corolla, Toyota Camry.'])
+
+      const { traces } = await captureAgentTrace(async () => {
+        const { response } = await postChatRouteWithMockedGemini({
+          business_id: businessId,
+          conversation_id: conversationId,
+          message: 'give me whichever hurts the wallet less',
+          debug: true,
+          turn_id: 'trace-lowest-price-turn',
+          client_message_id: 'trace-lowest-price-client',
+        }, [
+          geminiSemanticResponse({
+            intent: 'SELECT_VEHICLE',
+            state_patch: {},
+            relations: [],
+            references: [{ expression: 'whichever hurts the wallet less', resolved_to: 'lowest_price_candidate', field: 'selected_vehicle' }],
+            corrections: [{ field: 'selected_vehicle', operation: 'REPLACE' }],
+            question: null,
+            confirmation: null,
+            confidence: 0.93,
+          }),
+          geminiTextResponse('I will use the lowest-priced available option from the verified list.'),
+        ])
+        expect(response.status).toBe(200)
+      })
+
+      const semantic = traces.find(trace => trace.event === 'rental_semantic_interpretation')
+      expect(semantic?.semantic_source).toBe('llm')
+      expect(semantic?.fallback_used).toBe(false)
+      expect(semantic?.references).toContainEqual({ resolved_to: 'lowest_price_candidate', field: 'selected_vehicle' })
+      expect(semantic?.correction_fields).toContain('selected_vehicle')
+      expect(JSON.stringify(semantic)).not.toContain('wallet')
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('rental semantic traces distinguish provider fallback and JSON parse fallback', async () => {
+    const { sb, businessId } = await createGeminiCarRentalBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
+    try {
+      const firstConversationId = await createRentalConversationWithAgentState(sb, businessId, {
+        pickup_datetime: '2026-07-09T20:00:00+02:00',
+      })
+      const first = await captureAgentTrace(async () => {
+        const { response } = await postChatRouteWithMockedGemini({
+          business_id: businessId,
+          conversation_id: firstConversationId,
+          message: 'same again',
+          debug: true,
+          turn_id: 'trace-provider-fallback-turn',
+          client_message_id: 'trace-provider-fallback-client',
+        }, [
+          geminiTextResponse('{"intent":', 'MAX_TOKENS'),
+        ])
+        expect(response.status).toBe(200)
+      })
+      const providerFallback = first.traces.find(trace => trace.event === 'rental_semantic_interpretation')
+      expect(providerFallback?.semantic_source).toBe('legacy_fallback')
+      expect(providerFallback?.fallback_used).toBe(true)
+      expect(String(providerFallback?.fallback_reason)).toContain('finish_reason:MAX_TOKENS')
+      expect(providerFallback?.semantic_parse_success).toBe(false)
+
+      const secondConversationId = await createRentalConversationWithAgentState(sb, businessId, {
+        pickup_datetime: '2026-07-09T20:00:00+02:00',
+      })
+      const second = await captureAgentTrace(async () => {
+        const { response } = await postChatRouteWithMockedGemini({
+          business_id: businessId,
+          conversation_id: secondConversationId,
+          message: 'make it clear',
+          debug: true,
+          turn_id: 'trace-json-fallback-turn',
+          client_message_id: 'trace-json-fallback-client',
+        }, [
+          geminiTextResponse('not json'),
+        ])
+        const body = await response.json() as { reply?: string }
+        expect(response.status).toBe(200)
+        expect(body.reply ?? '').not.toMatch(/json|parse|provider|failed|error/i)
+      })
+      const jsonFallback = second.traces.find(trace => trace.event === 'rental_semantic_interpretation')
+      expect(jsonFallback?.semantic_source).toBe('legacy_fallback')
+      expect(jsonFallback?.fallback_used).toBe(true)
+      expect(jsonFallback?.fallback_reason).toBe('semantic_json_parse_error')
+      expect(jsonFallback?.semantic_parse_success).toBe(false)
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('agent trace data redaction removes raw message and prompt payload fields', () => {
+    const compacted = compactTraceData({
+      message: 'Customer raw message',
+      prompt: 'Full provider prompt',
+      content: 'Assistant raw content',
+      intent: 'UPDATE_RENTAL_DETAILS',
+      changed_fields: ['name', 'phone', 'email'],
+      relations: [{ type: 'SAME_AS', source: 'pickup_location', target: 'dropoff_location' }],
+    })
+    expect(compacted).toEqual({
+      intent: 'UPDATE_RENTAL_DETAILS',
+      changed_fields: ['name', 'phone', 'email'],
+      relations: [{ type: 'SAME_AS', source: 'pickup_location', target: 'dropoff_location' }],
+    })
+  })
+
+  test('agent traces API scopes bot filters to the authenticated business', async ({ request }) => {
+    const businessA = await createGeminiCarRentalBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
+    const businessB = await createGeminiCarRentalBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
+    const memberId = crypto.randomUUID()
+    try {
+      await businessA.sb.from('team_members').insert({
+        id: memberId,
+        client_id: businessA.businessId,
+        name: 'Trace Inspector',
+        email: `trace-${memberId}@example.com`,
+        role: 'owner',
+        status: 'active',
+      })
+      const token = await signMemberToken({ id: memberId, name: 'Trace Inspector', role: 'owner' })
+      const headers = { cookie: `${MEMBER_COOKIE_NAME}=${token}` }
+      const { data: ownBot } = await businessA.sb.from('agents').select('id').eq('business_id', businessA.businessId).single()
+      const { data: foreignBot } = await businessB.sb.from('agents').select('id').eq('business_id', businessB.businessId).single()
+
+      const own = await request.get(`/api/agent-traces?bot_id=${ownBot?.id}`, { headers })
+      expect(own.status()).toBe(200)
+      const ownBody = await own.json() as { bots?: Array<{ id: string }>; traces?: Array<{ business_id: string; bot_id: string }>; migration_required?: boolean }
+      expect(ownBody.bots?.map(bot => bot.id)).toContain(ownBot?.id)
+      expect(ownBody.bots?.map(bot => bot.id)).not.toContain(foreignBot?.id)
+      expect((ownBody.traces ?? []).every(trace => trace.business_id === businessA.businessId && trace.bot_id === ownBot?.id)).toBe(true)
+
+      const foreign = await request.get(`/api/agent-traces?bot_id=${foreignBot?.id}`, { headers })
+      expect(foreign.status()).toBe(404)
+    } finally {
+      await businessA.sb.from('team_members').delete().eq('id', memberId)
+      await cleanupTestAiBusiness(businessA.sb, businessA.businessId)
+      await cleanupTestAiBusiness(businessB.sb, businessB.businessId)
     }
   })
 

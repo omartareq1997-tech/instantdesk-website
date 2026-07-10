@@ -82,6 +82,27 @@ function parseLabeledTime(text: string, label: 'pickup' | 'return') {
   }
 }
 
+function parseClockTimes(text: string) {
+  return Array.from(text.matchAll(/\b(\d{1,2}):(\d{2})\b|\b(\d{1,2})\s*(am|pm)\b/gi))
+    .filter(match => {
+      const start = match.index ?? 0
+      const before = text.slice(Math.max(0, start - 12), start).toLowerCase()
+      return !/\b(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s*$/.test(before)
+    })
+    .map(match => {
+      let hour = Number(match[1] ?? match[3])
+      const minute = Number(match[2] ?? 0)
+      const suffix = match[4]?.toLowerCase()
+      if (suffix === 'pm' && hour < 12) hour += 12
+      if (suffix === 'am' && hour === 12) hour = 0
+      return {
+        hour: Math.max(0, Math.min(23, hour)),
+        minute: Math.max(0, Math.min(59, minute)),
+      }
+    })
+    .filter(time => Number.isFinite(time.hour) && Number.isFinite(time.minute))
+}
+
 function nextWeekday(base: Date, weekday: number) {
   const next = new Date(base)
   const diff = (weekday - next.getDay() + 7) % 7 || 7
@@ -264,8 +285,14 @@ export function parseRentalDateWindow(
   const existingReturnDate = slots.return_date ?? datePartFromIso(slots.return_datetime, timeZone)
   const pickupDate = parseDateOnlyPhrase(pickupText, now, timeZone) ?? parseDateOnlyPhrase(pickupDateText, now, timeZone) ?? existingPickupDate
   const returnDate = parseDateOnlyPhrase(returnText, now, timeZone) ?? parseDateOnlyPhrase(returnDateText, now, timeZone) ?? existingReturnDate
-  const pickupTime = parseLabeledTime(message, 'pickup')
-  const returnTime = parseLabeledTime(message, 'return')
+  const clockTimes = parseClockTimes(message)
+  let pickupTime = parseLabeledTime(message, 'pickup')
+  let returnTime = parseLabeledTime(message, 'return')
+  if (!pickupTime && returnTime && clockTimes.length >= 2) pickupTime = clockTimes[0]
+  if (!pickupTime && !returnTime && clockTimes.length >= 2) {
+    pickupTime = clockTimes[0]
+    returnTime = clockTimes[1]
+  }
   return {
     pickupAt: parseDatePhrase(pickupText, now, timeZone) ?? isoFromDateOnly(pickupDate, pickupTime, timeZone),
     dropoffAt: parseDatePhrase(returnText, now, timeZone) ?? isoFromDateOnly(returnDate, returnTime, timeZone),

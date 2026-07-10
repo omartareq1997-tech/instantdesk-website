@@ -29,6 +29,7 @@ export type AgentToolContext = {
   conversationId: string
   message: string
   semanticIntent?: string | null
+  needsLocationResolution?: boolean
   slots: {
     name?: string | null
     phone?: string | null
@@ -167,7 +168,7 @@ export function planOperationalTools(context: AgentToolContext): AgentToolName[]
   if (semanticIntent === 'ASK_POLICY' || semanticIntent === 'ASK_DEPOSIT' || includesAny(text, ['policy', 'deposit', 'documents', 'license', 'insurance', 'mileage', 'late fee', 'cancel', 'cancellation', 'age requirement'])) {
     tools.push('getBusinessPolicies')
   }
-  if (semanticIntent === 'ASK_LOCATION' || includesAny(text, ['where can i pick', 'where is your location', "what's your location", 'what is your location', 'pickup location', 'pick up location', 'drop off', 'airport', 'deliver', 'delivery area', 'locations'])) {
+  if (context.needsLocationResolution || semanticIntent === 'ASK_LOCATION' || includesAny(text, ['where can i pick', 'where is your location', "what's your location", 'what is your location', 'pickup location', 'pick up location', 'drop off', 'airport', 'deliver', 'delivery area', 'locations'])) {
     tools.push('getLocations')
   }
   if (

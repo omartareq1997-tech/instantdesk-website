@@ -759,6 +759,77 @@ test.describe('agent operational tool planner', () => {
     expect(second.return_datetime).toBe('2026-07-12T21:00:00+02:00')
   })
 
+  test('rental date reducer rejects stale LLM absolute dates and anchors relative dates to business today', () => {
+    let trace: any = null
+    const first = __testRentalChatHelpers.reduceRentalState(
+      {} as any,
+      __testRentalChatHelpers.normalizeSemanticInterpretation({
+        intent: 'UPDATE_RENTAL_DETAILS',
+        state_patch: { pickup_date: '2023-10-10', return_date: '2023-10-16' },
+        relations: [],
+        references: [],
+        corrections: [],
+        confidence: 0.92,
+      }, 'llm'),
+      [],
+      [],
+      {
+        latestUserMessage: 'sup bro i need wheels from tonight until the 16th',
+        now: new Date('2026-07-12T17:00:00+02:00'),
+        timeZone: 'Europe/Warsaw',
+        onDateResolution: value => { trace = value },
+      },
+    )
+    expect(first.pickup_date).toBe('2026-07-12')
+    expect(first.return_date).toBe('2026-07-16')
+    expect(trace?.now_date).toBe('2026-07-12')
+    expect(trace?.source_expression_types).toEqual(expect.arrayContaining(['tonight', 'bare_ordinal_day']))
+    expect(trace?.resolved_fields).toEqual(expect.arrayContaining(['pickup_date', 'return_date']))
+    expect(trace?.rejected_llm_absolute_date).toBe(true)
+    expect(trace?.rejected_llm_date_reasons).toEqual(expect.arrayContaining(['pickup_date:past_without_explicit_year']))
+
+    const second = __testRentalChatHelpers.reduceRentalState(
+      first,
+      __testRentalChatHelpers.normalizeSemanticInterpretation({
+        intent: 'UPDATE_RENTAL_DETAILS',
+        state_patch: { pickup_datetime: '2023-10-10T20:00:00+02:00', pickup_time: '20:00' },
+        relations: [],
+        references: [],
+        corrections: [],
+        confidence: 0.9,
+      }, 'llm'),
+      [],
+      [],
+      {
+        latestUserMessage: 'pick up at 20:00, what location do you have in krakow',
+        now: new Date('2026-07-12T17:00:00+02:00'),
+        timeZone: 'Europe/Warsaw',
+      },
+    )
+    expect(second.pickup_datetime).toBe('2026-07-12T20:00:00+02:00')
+    expect(second.return_date).toBe('2026-07-16')
+
+    const third = __testRentalChatHelpers.reduceRentalState(
+      second,
+      __testRentalChatHelpers.normalizeSemanticInterpretation({
+        intent: 'UPDATE_RENTAL_DETAILS',
+        state_patch: { return_time: '20:00' },
+        relations: [],
+        references: [],
+        corrections: [],
+        confidence: 0.91,
+      }, 'llm'),
+      [],
+      [],
+      {
+        latestUserMessage: '20:00',
+        now: new Date('2026-07-12T17:00:00+02:00'),
+        timeZone: 'Europe/Warsaw',
+      },
+    )
+    expect(third.return_datetime).toBe('2026-07-16T20:00:00+02:00')
+  })
+
   test('semantic references resolve offered vehicle order and price through backend data', () => {
     const first = __testRentalChatHelpers.reduceRentalState(
       {} as any,

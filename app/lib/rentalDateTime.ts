@@ -170,7 +170,7 @@ function parseDateOnlyPhrase(text: string, now = new Date(), timeZone = DEFAULT_
     base.setDate(base.getDate() + 1)
     return dateOnly(base.getFullYear(), base.getMonth(), base.getDate())
   }
-  if (/\btoday\b/.test(lower)) {
+  if (/\b(?:today|tonight)\b/.test(lower)) {
     return dateOnly(now.getFullYear(), now.getMonth(), now.getDate())
   }
   const monthMatch = lower.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{4}))?\b/i)
@@ -192,6 +192,24 @@ function parseDateOnlyPhrase(text: string, now = new Date(), timeZone = DEFAULT_
     if (!rawYear && candidate.getTime() < now.getTime() - 24 * 60 * 60 * 1000) year += 1
     if (day >= 1 && day <= 31 && month >= 0 && month <= 11) return dateOnly(year, month, day)
   }
+  const bareDayMatch = lower.match(/\b(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)\b/)
+  if (bareDayMatch) {
+    const day = Number(bareDayMatch[1])
+    if (day >= 1 && day <= 31) {
+      let year = now.getFullYear()
+      let month = now.getMonth()
+      let candidate = new Date(year, month, day, 12, 0)
+      if (candidate.getTime() < now.getTime() - 24 * 60 * 60 * 1000) {
+        month += 1
+        if (month > 11) {
+          month = 0
+          year += 1
+        }
+        candidate = new Date(year, month, day, 12, 0)
+      }
+      if (candidate.getMonth() === month && candidate.getDate() === day) return dateOnly(year, month, day)
+    }
+  }
   const weekday = Object.keys(WEEKDAY_INDEX).find(day => new RegExp(`\\b${day}\\b`, 'i').test(lower))
   if (weekday) {
     const base = nextWeekday(now, WEEKDAY_INDEX[weekday])
@@ -210,7 +228,7 @@ function parseDatePhrase(text: string, now = new Date(), timeZone = DEFAULT_RENT
   if (/\btomorrow\b/.test(lower)) {
     base = new Date(now)
     base.setDate(base.getDate() + 1)
-  } else if (/\btoday\b/.test(lower)) {
+  } else if (/\b(?:today|tonight)\b/.test(lower)) {
     base = new Date(now)
   } else {
     const monthMatch = lower.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{4}))?\b/i)

@@ -1346,14 +1346,159 @@ function mergeSemanticTimePatch(next: Slots, field: 'pickup_time' | 'return_time
   else next.return_datetime = iso
 }
 
+type RentalDateResolutionTrace = {
+  timezone: string
+  now_date: string
+  source_expression_types: string[]
+  date_anchor_source: string[]
+  resolved_fields: string[]
+  rejected_llm_absolute_date: boolean
+  rejected_llm_date_reasons: string[]
+}
+
+function datePart(value: string | null | undefined) {
+  return value?.match(/^(\d{4}-\d{2}-\d{2})(?:T|$)/)?.[1] ?? null
+}
+
+function todayInTimeZone(now: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now)
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(item => item.type === type)?.value ?? ''
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+
+function hasExplicitRentalYear(text: string) {
+  return /\b20\d{2}\b/.test(text)
+}
+
+function rentalDateExpressionTypes(text: string) {
+  const lower = text.toLowerCase()
+  const types: string[] = []
+  if (/\btonight\b/.test(lower)) types.push('tonight')
+  if (/\btoday\b/.test(lower)) types.push('today')
+  if (/\btomorrow\b/.test(lower)) types.push('tomorrow')
+  if (/\b(?:the\s+)?\d{1,2}(?:st|nd|rd|th)\b/.test(lower)) types.push('bare_ordinal_day')
+  if (/\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b/.test(lower)) types.push('numeric_date')
+  if (/\b\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(lower)) types.push('month_name_date')
+  return Array.from(new Set(types))
+}
+
+function hasRelativeOrDateOnlyRentalExpression(types: string[]) {
+  return types.some(type => ['tonight', 'today', 'tomorrow', 'bare_ordinal_day', 'numeric_date'].includes(type))
+}
+
+function hasRentalClockExpression(text: string) {
+  return /\b\d{1,2}:\d{2}\b|\b\d{1,2}\s*(?:am|pm)\b|\bat\s+\d{1,2}\b/i.test(text)
+}
+
+function isPastRentalDate(value: string | null | undefined, today: string) {
+  const date = datePart(value)
+  return Boolean(date && date < today)
+}
+
+function resolveRentalTemporalPatch(input: {
+  patch: RentalSemanticInterpretation['state_patch']
+  previous: Slots
+  latestUserMessage?: string
+  now?: Date
+  timeZone?: string
+}) {
+  const timeZone = input.timeZone ?? 'Europe/Warsaw'
+  const now = input.now ?? new Date()
+  const latestUserMessage = input.latestUserMessage ?? ''
+  const types = rentalDateExpressionTypes(latestUserMessage)
+  const today = todayInTimeZone(now, timeZone)
+  const authoritative = latestUserMessage
+    ? parseRentalDateWindow(latestUserMessage, input.previous, now, timeZone)
+    : { pickupAt: null, dropoffAt: null, pickupDate: null, returnDate: null }
+  const nextPatch: RentalSemanticInterpretation['state_patch'] = { ...input.patch }
+  const resolvedFields: string[] = []
+  const rejectedReasons: string[] = []
+  const anchorSources = new Set<string>()
+  const explicitYear = hasExplicitRentalYear(latestUserMessage)
+  const shouldPreferBackendDate = hasRelativeOrDateOnlyRentalExpression(types)
+  const shouldPreferBackendTimeMerge = hasRentalClockExpression(latestUserMessage)
+
+  const applyDate = (field: 'pickup_date' | 'return_date', value: string | null | undefined, source: string) => {
+    if (!value) return
+    if (nextPatch[field] !== value) resolvedFields.push(field)
+    nextPatch[field] = value
+    anchorSources.add(source)
+  }
+  const applyDateTime = (field: 'pickup_datetime' | 'return_datetime', value: string | null | undefined, source: string) => {
+    if (!value) return
+    if (nextPatch[field] !== value) resolvedFields.push(field)
+    nextPatch[field] = value
+    anchorSources.add(source)
+  }
+
+  if (shouldPreferBackendDate) {
+    for (const field of ['pickup_date', 'return_date', 'pickup_datetime', 'return_datetime'] as const) {
+      const value = input.patch[field]
+      if (value && !explicitYear && isPastRentalDate(value, today)) {
+        rejectedReasons.push(`${field}:past_without_explicit_year`)
+      }
+    }
+    applyDate('pickup_date', authoritative.pickupDate, 'business_timezone_now')
+    applyDate('return_date', authoritative.returnDate, authoritative.pickupDate ? 'pickup_date_context' : 'business_timezone_now')
+  }
+  if (shouldPreferBackendDate || shouldPreferBackendTimeMerge) {
+    applyDateTime('pickup_datetime', authoritative.pickupAt, 'business_timezone_now')
+    applyDateTime('return_datetime', authoritative.dropoffAt, authoritative.pickupDate ? 'pickup_date_context' : 'business_timezone_now')
+  }
+
+  for (const field of ['pickup_date', 'return_date', 'pickup_datetime', 'return_datetime'] as const) {
+    const value = nextPatch[field]
+    if (!value) continue
+    if (!explicitYear && isPastRentalDate(value, today)) {
+      rejectedReasons.push(`${field}:past_without_explicit_year`)
+      delete nextPatch[field]
+    }
+  }
+
+  if (nextPatch.pickup_datetime && !nextPatch.pickup_date) nextPatch.pickup_date = datePart(nextPatch.pickup_datetime) ?? undefined
+  if (nextPatch.return_datetime && !nextPatch.return_date) nextPatch.return_date = datePart(nextPatch.return_datetime) ?? undefined
+
+  return {
+    patch: nextPatch,
+    trace: {
+      timezone: timeZone,
+      now_date: today,
+      source_expression_types: types,
+      date_anchor_source: Array.from(anchorSources),
+      resolved_fields: Array.from(new Set(resolvedFields)),
+      rejected_llm_absolute_date: rejectedReasons.length > 0,
+      rejected_llm_date_reasons: rejectedReasons,
+    } satisfies RentalDateResolutionTrace,
+  }
+}
+
 function reduceRentalState(
   previous: Slots,
   semantics: RentalSemanticInterpretation,
   history: { role: string; content: string }[] = [],
   toolResults: AgentToolResult[] = [],
+  options: {
+    latestUserMessage?: string
+    now?: Date
+    timeZone?: string
+    onDateResolution?: (trace: RentalDateResolutionTrace) => void
+  } = {},
 ) {
   const next: Slots = { ...previous }
-  const patch = semantics.state_patch
+  const temporal = resolveRentalTemporalPatch({
+    patch: semantics.state_patch,
+    previous,
+    latestUserMessage: options.latestUserMessage,
+    now: options.now,
+    timeZone: options.timeZone,
+  })
+  options.onDateResolution?.(temporal.trace)
+  const patch = temporal.patch
   const patchMap: Partial<Record<keyof Slots, string | null | undefined>> = {
     name: patch.name,
     phone: patch.phone,
@@ -2650,6 +2795,7 @@ export const __testRentalChatHelpers = {
   rentalSemanticIntentToUserIntent,
   slotsFromConversationAgentState,
   normalizeRentalLocationText,
+  resolveRentalTemporalPatch,
   replaceRentalIsoDateTimes,
   rentalOperationalClaimContract,
   rentalOperationalClaimViolations,
@@ -4177,6 +4323,7 @@ export async function POST(req: NextRequest) {
     finish_reason: null,
   }
   let stateChangedFields: string[] = []
+  const dateResolutionTraces: RentalDateResolutionTrace[] = []
   let toolExecutionLatencyMs: number | null = null
   let responseTrace: RentalResponseTraceMeta = {
     generator_source: 'deterministic_fallback',
@@ -4268,11 +4415,35 @@ export async function POST(req: NextRequest) {
       known_state_fields: Object.entries(redactedSlotPresence(confirmed)).filter(([, present]) => present).map(([field]) => field),
     })
     const beforeReduction = confirmed
-    const reduced = reduceRentalState(confirmed, rentalSemantics, history.map(r => ({ role: r.role === 'assistant' ? 'assistant' : 'user', content: r.content })))
+    const reduced = reduceRentalState(
+      confirmed,
+      rentalSemantics,
+      history.map(r => ({ role: r.role === 'assistant' ? 'assistant' : 'user', content: r.content })),
+      [],
+      {
+        latestUserMessage: messageText,
+        timeZone: 'Europe/Warsaw',
+        onDateResolution: trace => { dateResolutionTraces.push(trace) },
+      },
+    )
     confirmed = await hydrateSelectedRentalVehicle(sb, businessId, reduced, businessType)
     stateChangedFields = slotChangedFields(beforeReduction, confirmed)
     missing = computeMissingSlots(confirmed, slotDefs)
     qualificationStage = computeQualificationStage(confirmed, missing)
+    const emittedDateResolutionTrace = dateResolutionTraces.at(-1) ?? null
+    if (emittedDateResolutionTrace) {
+      emitRentalTrace('rental_date_resolution', {
+        turn_id: turnId,
+        timezone: emittedDateResolutionTrace.timezone,
+        now_date: emittedDateResolutionTrace.now_date,
+        source_expression_types: emittedDateResolutionTrace.source_expression_types,
+        date_anchor_source: emittedDateResolutionTrace.date_anchor_source,
+        resolved_fields: emittedDateResolutionTrace.resolved_fields,
+        rejected_llm_absolute_date: emittedDateResolutionTrace.rejected_llm_absolute_date,
+        rejected_llm_date_reasons: emittedDateResolutionTrace.rejected_llm_date_reasons,
+        known_state_fields: Object.entries(redactedSlotPresence(confirmed)).filter(([, present]) => present).map(([field]) => field),
+      })
+    }
     emitRentalTrace('rental_state_reduction', {
       turn_id: turnId,
       intent: rentalSemantics.intent,
@@ -4353,6 +4524,7 @@ export async function POST(req: NextRequest) {
       rentalSemantics,
       history.map(r => ({ role: r.role === 'assistant' ? 'assistant' : 'user', content: r.content })),
       operationalToolResults,
+      { latestUserMessage: messageText, timeZone: 'Europe/Warsaw' },
     )
     if (toolReduced.selected_vehicle) {
       confirmed = await hydrateSelectedRentalVehicle(sb, businessId, toolReduced, businessType)

@@ -1376,7 +1376,7 @@ test.describe('Live Chat API production boundaries', () => {
         }, [
           openAiSemanticResponse({
             intent: 'UPDATE_RENTAL_DETAILS',
-            state_patch: { pickup_date: '2026-07-10', return_date: '2026-07-16' },
+            state_patch: { pickup_date: '2023-10-10', return_date: '2023-10-16' },
             relations: [],
             references: [],
             corrections: [],
@@ -1389,11 +1389,16 @@ test.describe('Live Chat API production boundaries', () => {
         const body = await response.json() as { conversation_id?: string; debug?: { confirmedSlots?: Record<string, unknown> } }
         expect(response.status).toBe(200)
         conversationId = body.conversation_id
-        expect(body.debug?.confirmedSlots?.pickup_date).toBe('2026-07-10')
+        expect(body.debug?.confirmedSlots?.pickup_date).toBe('2026-07-12')
         expect(body.debug?.confirmedSlots?.return_date).toBe('2026-07-16')
       })
       expect(first.traces.find(trace => trace.event === 'rental_semantic_interpretation')?.semantic_source).toBe('llm')
       expect(first.traces.find(trace => trace.event === 'rental_semantic_interpretation')?.fallback_used).toBe(false)
+      const firstDateTrace = first.traces.find(trace => trace.event === 'rental_date_resolution')
+      expect(firstDateTrace?.now_date).toBe('2026-07-12')
+      expect(firstDateTrace?.source_expression_types).toEqual(expect.arrayContaining(['tonight', 'bare_ordinal_day']))
+      expect(firstDateTrace?.resolved_fields).toEqual(expect.arrayContaining(['pickup_date', 'return_date']))
+      expect(firstDateTrace?.rejected_llm_absolute_date).toBe(true)
 
       const second = await captureAgentTrace(async () => {
         const { response } = await postChatRouteWithMockedOpenAI({
@@ -1418,7 +1423,7 @@ test.describe('Live Chat API production boundaries', () => {
         ])
         const body = await response.json() as { debug?: { confirmedSlots?: Record<string, unknown> } }
         expect(response.status).toBe(200)
-        expect(body.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-10T20:00:00+02:00')
+        expect(body.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-12T20:00:00+02:00')
       })
       expect(second.traces.find(trace => trace.event === 'rental_semantic_interpretation')?.intent).toBe('ASK_LOCATION')
 
@@ -1447,7 +1452,7 @@ test.describe('Live Chat API production boundaries', () => {
         expect(response.status).toBe(200)
         expect(body.debug?.confirmedSlots?.pickup_location_id).toBe(locationId)
         expect(body.debug?.confirmedSlots?.dropoff_location_id).toBe(locationId)
-        expect(body.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-10T20:00:00+02:00')
+        expect(body.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-12T20:00:00+02:00')
         expect(body.debug?.confirmedSlots?.return_date).toBe('2026-07-16')
       })
       const confirmSemantic = third.traces.find(trace => trace.event === 'rental_semantic_interpretation')
@@ -1479,10 +1484,11 @@ test.describe('Live Chat API production boundaries', () => {
         ])
         const body = await response.json() as { reply?: string; debug?: { confirmedSlots?: Record<string, unknown> } }
         expect(response.status).toBe(200)
-        expect(body.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-10T20:00:00+02:00')
+        expect(body.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-12T20:00:00+02:00')
         expect(body.debug?.confirmedSlots?.return_date).toBe('2026-07-16')
         expect(body.reply ?? '').not.toMatch(/pickup date|pickup.*time.*return.*time/i)
         expect(body.reply ?? '').toMatch(/what time.*return.*16 July 2026/i)
+        expect(body.reply ?? '').not.toMatch(/October|2023|2023-\d{2}-\d{2}T/i)
         expect(body.reply ?? '').not.toMatch(/available|estimated rental price|960 PLN/i)
       })
       const budgetSemantic = fourth.traces.find(trace => trace.event === 'rental_semantic_interpretation')
@@ -1491,6 +1497,36 @@ test.describe('Live Chat API production boundaries', () => {
       expect(budgetSemantic?.references).toContainEqual({ resolved_to: 'lowest_price_candidate', field: 'selected_vehicle' })
       const budgetResponse = fourth.traces.find(trace => trace.event === 'rental_response_generation')
       expect(budgetResponse?.operational_claim_violations).toEqual(expect.arrayContaining(['VEHICLE_AVAILABLE', 'PRICE_QUOTED']))
+
+      const fifth = await captureAgentTrace(async () => {
+        const { response } = await postChatRouteWithMockedOpenAI({
+          business_id: businessId,
+          conversation_id: conversationId,
+          message: '20:00',
+          debug: true,
+          turn_id: 'gpt-semantic-return-time-turn',
+          client_message_id: 'gpt-semantic-return-time-client',
+        }, [
+          openAiSemanticResponse({
+            intent: 'UPDATE_RENTAL_DETAILS',
+            state_patch: { return_time: '20:00' },
+            relations: [],
+            references: [],
+            corrections: [],
+            question: null,
+            confirmation: null,
+            confidence: 0.91,
+          }),
+          openAiTextResponse('Thanks — I have the return time. I will now check the available economical cars.'),
+        ])
+        const body = await response.json() as { reply?: string; debug?: { confirmedSlots?: Record<string, unknown> } }
+        expect(response.status).toBe(200)
+        expect(body.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-12T20:00:00+02:00')
+        expect(body.debug?.confirmedSlots?.return_datetime).toBe('2026-07-16T20:00:00+02:00')
+        expect(body.reply ?? '').not.toMatch(/October|2023|2023-\d{2}-\d{2}T/i)
+      })
+      const returnTimeDateTrace = fifth.traces.find(trace => trace.event === 'rental_date_resolution')
+      expect(returnTimeDateTrace?.known_state_fields).toEqual(expect.arrayContaining(['pickup_datetime', 'return_datetime']))
     } finally {
       await cleanupTestAiBusiness(sb, businessId)
     }

@@ -977,6 +977,13 @@ type RentalResponseTraceMeta = {
   output_length: number
 }
 
+type RentalOperationalClaim =
+  | 'BOOKING_CREATED'
+  | 'BOOKING_CONFIRMED'
+  | 'VEHICLE_AVAILABLE'
+  | 'PRICE_QUOTED'
+  | 'HUMAN_CONFIRMATION_REQUIRED'
+
 type RentalSemanticFallbackReason =
   | 'PROVIDER_REQUEST_FAILED'
   | 'PROVIDER_TIMEOUT'
@@ -1684,6 +1691,19 @@ function deterministicRentalNextActionReply(
 
   if (intent === 'ASK_LOCATIONS') return locationOptionsReply(toolResults)
 
+  const missingWindow = missingRentalWindowReply(confirmed, missing)
+  if (
+    missingWindow &&
+    (
+      confirmed.selected_vehicle ||
+      confirmed.car_class ||
+      toolResults.some(result => result.tool === 'searchFleet' || result.tool === 'checkAvailability' || result.tool === 'calculatePrice') ||
+      intent === 'CONFIRM_BOOKING'
+    )
+  ) {
+    return missingWindow
+  }
+
   if (intent === 'CONFIRM_BOOKING' && (missingKeys.has('pickup_location') || missingKeys.has('dropoff_location'))) {
     const prefix = confirmed.name ? `Thanks, ${confirmed.name}. ` : ''
     return `${prefix}I just need the pickup and return locations before I can create the booking. ${locationOptionsReply(toolResults)}`
@@ -2176,12 +2196,29 @@ function selectedVehicleNextStepReply(confirmed: Slots, missing: SlotDef[], tool
   const intro = selectedVehicleIntro(confirmed, car)
   if (missingKeys.has('pickup_location')) return `${intro} What pickup location should I use?`
   if (missingKeys.has('dropoff_location')) return `${intro} What drop-off location should I use?`
+  const missingWindow = missingRentalWindowReply(confirmed, missing)
+  if (missingWindow) return `${intro} ${missingWindow}`
   if (missingKeys.has('pickup_datetime') || missingKeys.has('return_datetime')) {
     return `${intro} What pickup date and time should I use, and what return date and time should I use?`
   }
   if (missingKeys.has('name')) return `${intro} Could you please provide your name?`
   if (missingKeys.has('phone')) return 'What is your phone number?'
   if (missingKeys.has('email')) return 'What is your email address?'
+  return null
+}
+
+function missingRentalWindowReply(confirmed: Slots, missing: SlotDef[]) {
+  const missingKeys = new Set(missing.map(field => field.key))
+  if (missingKeys.has('return_datetime') && confirmed.return_date && !confirmed.return_datetime) {
+    const date = formatCustomerDateTime(`${confirmed.return_date}T12:00:00+02:00`)?.replace(/\s+at\s+12:00$/, '') ?? confirmed.return_date
+    return `What time would you like to return it on ${date}?`
+  }
+  if (missingKeys.has('pickup_datetime') && confirmed.pickup_date && !confirmed.pickup_datetime) {
+    const date = formatCustomerDateTime(`${confirmed.pickup_date}T12:00:00+02:00`)?.replace(/\s+at\s+12:00$/, '') ?? confirmed.pickup_date
+    return `What time would you like to pick it up on ${date}?`
+  }
+  if (missingKeys.has('pickup_datetime') && !missingKeys.has('return_datetime')) return 'What pickup date and time should I use?'
+  if (missingKeys.has('return_datetime') && !missingKeys.has('pickup_datetime')) return 'What return date and time should I use?'
   return null
 }
 
@@ -2248,6 +2285,99 @@ function enforceRentalOperationalReplyContract(reply: string, toolResults: Agent
       .replace(/\bYour booking is confirmed\b/gi, 'Your booking request has been created successfully')
   }
   return next.replace(/\s{2,}/g, ' ').trim()
+}
+
+function rentalOperationalClaimContract(toolResults: AgentToolResult[], confirmed: Slots) {
+  const create = toolResults.find(result => result.tool === 'createBooking' && result.ok)
+  const createData = safeRecord(create?.data)
+  const availability = toolResults.find(result => result.tool === 'checkAvailability' && result.ok)
+  const availabilityData = safeRecord(availability?.data)
+  const availabilityFilteredFleet = toolResults.find(result => {
+    if (result.tool !== 'searchFleet' || !result.ok) return false
+    return safeRecord(result.data).availabilityFiltered === true
+  })
+  const price = toolResults.find(result => result.tool === 'calculatePrice' && result.ok)
+  const exactWindow = Boolean(confirmed.pickup_datetime && confirmed.return_datetime)
+  const bookingStatus = strOrNull(createData.status)?.toLowerCase() ?? null
+  const bookingReference = strOrNull(createData.bookingNumber)
+  const allowed = new Set<RentalOperationalClaim>()
+  if (create && strOrNull(createData.bookingId) && bookingReference && bookingStatus) allowed.add('BOOKING_CREATED')
+  if (bookingStatus === 'confirmed') allowed.add('BOOKING_CONFIRMED')
+  if (exactWindow && (availabilityFilteredFleet || availability && availabilityData.available === true)) allowed.add('VEHICLE_AVAILABLE')
+  if (price && exactWindow) allowed.add('PRICE_QUOTED')
+  return {
+    allowed_claims: Array.from(allowed),
+    forbidden_claims: (['BOOKING_CREATED', 'BOOKING_CONFIRMED', 'VEHICLE_AVAILABLE', 'PRICE_QUOTED', 'HUMAN_CONFIRMATION_REQUIRED'] as RentalOperationalClaim[])
+      .filter(claim => !allowed.has(claim)),
+    evidence: {
+      exact_interval_complete: exactWindow,
+      searchFleet_availability_filtered: Boolean(availabilityFilteredFleet),
+      checkAvailability_success: Boolean(availability),
+      calculatePrice_success: Boolean(price),
+      createBooking_success: Boolean(create),
+      booking_reference_present: Boolean(bookingReference),
+      booking_status: bookingStatus,
+    },
+  }
+}
+
+function rentalOperationalClaimViolations(reply: string, contract: ReturnType<typeof rentalOperationalClaimContract>) {
+  const text = reply.replace(/\s+/g, ' ').trim()
+  const violations: RentalOperationalClaim[] = []
+  const asksToCreate = /\b(?:would you like|shall i|should i|do you want me)\b[^.?!]{0,120}\b(?:create|confirm|book|reserve)\b/i.test(text)
+  const saysBookingCreated = !asksToCreate && (
+    /\b(?:booking|reservation)(?:\s+request)?\b[^.?!]{0,120}\b(?:has been|was|is|'s)?\s*(?:created|recorded|completed|confirmed|reserved)\b/i.test(text) ||
+    /\bReference:\s*RB-[A-Z0-9]+/i.test(text)
+  )
+  if (saysBookingCreated && !contract.allowed_claims.includes('BOOKING_CREATED')) violations.push('BOOKING_CREATED')
+  const saysConfirmed = !asksToCreate && /\b(?:booking|reservation|car|vehicle)\b[^.?!]{0,120}\b(?:confirmed|reserved)\b/i.test(text)
+  if (saysConfirmed && !contract.allowed_claims.includes('BOOKING_CONFIRMED')) violations.push('BOOKING_CONFIRMED')
+  const saysAvailable = /\b(?:is|are|cars?|vehicles?|options?)\b[^.?!]{0,80}\bavailable\b|\bavailable\b[^.?!]{0,80}\b(?:for your|for those|rental period|selected dates|dates)\b/i.test(text)
+  if (saysAvailable && !contract.allowed_claims.includes('VEHICLE_AVAILABLE')) violations.push('VEHICLE_AVAILABLE')
+  const saysPriceQuoted = /\b(?:estimated rental price|estimated total|total price|total is|rental price is)\b/i.test(text)
+  if (saysPriceQuoted && !contract.allowed_claims.includes('PRICE_QUOTED')) violations.push('PRICE_QUOTED')
+  const saysHumanFollowup = /\b(?:team|staff|agent|human)\b[^.?!]{0,100}\b(?:contact|call|confirm|review)\b|\bcontact you shortly\b|\bconfirm the final details\b/i.test(text)
+  if (saysHumanFollowup && !contract.allowed_claims.includes('HUMAN_CONFIRMATION_REQUIRED')) violations.push('HUMAN_CONFIRMATION_REQUIRED')
+  return Array.from(new Set(violations))
+}
+
+function rentalClaimSafeFallback(
+  confirmed: Slots,
+  missing: SlotDef[],
+  toolResults: AgentToolResult[],
+  businessType?: string | null,
+  userMessage = '',
+) {
+  return deterministicRentalNextActionReply(confirmed, missing, toolResults, businessType, userMessage) ??
+    rentalToolReplyOverride(toolResults, confirmed, missing, businessType, userMessage) ??
+    rentalClarificationReply(confirmed, missing, businessType, userMessage) ??
+    missing[0]?.question ??
+    'I need to verify one more rental detail before I can continue safely.'
+}
+
+function enforceRentalReplyAuthority(
+  reply: string,
+  confirmed: Slots,
+  missing: SlotDef[],
+  toolResults: AgentToolResult[],
+  businessType?: string | null,
+  userMessage = '',
+) {
+  const sanitized = enforceRentalOperationalReplyContract(reply, toolResults)
+  const contract = rentalOperationalClaimContract(toolResults, confirmed)
+  const violations = rentalOperationalClaimViolations(sanitized, contract)
+  if (!violations.length) return { reply: sanitized, contract, violations, usedFallback: false }
+  const fallback = enforceRentalOperationalReplyContract(
+    rentalClaimSafeFallback(confirmed, missing, toolResults, businessType, userMessage),
+    toolResults,
+  )
+  const fallbackViolations = rentalOperationalClaimViolations(fallback, contract)
+  return {
+    reply: fallbackViolations.length ? 'I need to verify one more rental detail before I can continue safely.' : fallback,
+    contract,
+    violations,
+    usedFallback: true,
+  }
 }
 
 function formatPln(value: unknown) {
@@ -2479,6 +2609,8 @@ function rentalClarificationReply(
   if (hasOnlyDateIntent) {
     return 'Sure — what time would you like to pick it up, and when would you like to return it?'
   }
+  const missingWindow = missingRentalWindowReply(confirmed, missing)
+  if (missingWindow) return `Sure — ${missingWindow}`
   if (missingKeys.has('pickup_datetime') || missingKeys.has('return_datetime')) {
     return 'Sure — what pickup date and time should I use, and what return date and time should I use?'
   }
@@ -2519,6 +2651,10 @@ export const __testRentalChatHelpers = {
   slotsFromConversationAgentState,
   normalizeRentalLocationText,
   replaceRentalIsoDateTimes,
+  rentalOperationalClaimContract,
+  rentalOperationalClaimViolations,
+  enforceRentalReplyAuthority,
+  missingRentalWindowReply,
   plainNameAnswer,
   looksMidSentence,
 }
@@ -4423,9 +4559,19 @@ export async function POST(req: NextRequest) {
       correlationId: turnId,
     })
     responseTrace = generatedReply.trace
-    const guardedCandidate = normalizeBusinessType(businessType) === 'car_rental'
-      ? enforceRentalOperationalReplyContract(generatedReply.reply ?? deterministicRentalReply, operationalToolResults)
-      : generatedReply.reply ?? deterministicRentalReply
+    const authority = normalizeBusinessType(businessType) === 'car_rental'
+      ? enforceRentalReplyAuthority(generatedReply.reply ?? deterministicRentalReply, confirmed, missing, operationalToolResults, businessType, messageText)
+      : null
+    const guardedCandidate = authority?.reply ?? generatedReply.reply ?? deterministicRentalReply
+    if (authority?.usedFallback) {
+      responseTrace = {
+        ...responseTrace,
+        generator_source: 'deterministic_fallback',
+        fallback_used: true,
+        fallback_reason: `operational_claim_violation:${authority.violations.join(',')}`,
+        output_length: guardedCandidate.length,
+      }
+    }
     const { reply: finalReply, blocked } = guardReply(guardedCandidate, confirmed, missing)
     const assistantInsert = await insertMessageOnce({
       conversationId: convId,
@@ -4448,6 +4594,10 @@ export async function POST(req: NextRequest) {
       output_length: finalReply.length,
       ISO_leak_validator_passed: isoLeakValidatorPassed(finalReply),
       persisted_once: Boolean(assistantInsert.message?.id),
+      operational_claims_allowed: authority?.contract.allowed_claims ?? [],
+      operational_claims_forbidden: authority?.contract.forbidden_claims ?? [],
+      operational_claim_violations: authority?.violations ?? [],
+      operational_evidence: authority?.contract.evidence ?? {},
     })
     const bookingResult = operationalToolResults.find(result => result.tool === 'createBooking')
     emitRentalTrace('rental_agent_turn_complete', {
@@ -4463,6 +4613,8 @@ export async function POST(req: NextRequest) {
       assistant_message_id_present: Boolean(assistantInsert.message?.id),
       booking_action_attempted: Boolean(bookingResult),
       booking_action_succeeded: Boolean(bookingResult?.ok),
+      operational_claims_allowed: authority?.contract.allowed_claims ?? [],
+      operational_claim_violations: authority?.violations ?? [],
     })
 
     const isQualified = !!(confirmed.name && confirmed.phone && confirmed.email)
@@ -4577,9 +4729,19 @@ export async function POST(req: NextRequest) {
 
   /* 11. Guard reply — block stale/holding answers and repeated questions ─── */
   const operationalReply = rentalToolReplyOverride(operationalToolResults, confirmed, missing, businessType, messageText)
-  const guardedCandidate = normalizeBusinessType(businessType) === 'car_rental'
-    ? enforceRentalOperationalReplyContract(operationalReply ?? rawReply, operationalToolResults)
-    : operationalReply ?? rawReply
+  const authority = normalizeBusinessType(businessType) === 'car_rental'
+    ? enforceRentalReplyAuthority(operationalReply ?? rawReply, confirmed, missing, operationalToolResults, businessType, messageText)
+    : null
+  const guardedCandidate = authority?.reply ?? operationalReply ?? rawReply
+  if (authority?.usedFallback) {
+    responseTrace = {
+      ...responseTrace,
+      generator_source: 'deterministic_fallback',
+      fallback_used: true,
+      fallback_reason: `operational_claim_violation:${authority.violations.join(',')}`,
+      output_length: guardedCandidate.length,
+    }
+  }
   const { reply: finalReply, blocked } = guardReply(guardedCandidate, confirmed, missing)
   console.log('[GUARD] blockedRepeatedQuestion:', blocked)
 
@@ -4629,6 +4791,10 @@ export async function POST(req: NextRequest) {
       output_length: finalReply.length,
       ISO_leak_validator_passed: isoLeakValidatorPassed(finalReply),
       persisted_once: Boolean(assistantInsert.message?.id),
+      operational_claims_allowed: authority?.contract.allowed_claims ?? [],
+      operational_claims_forbidden: authority?.contract.forbidden_claims ?? [],
+      operational_claim_violations: authority?.violations ?? [],
+      operational_evidence: authority?.contract.evidence ?? {},
     })
     const bookingResult = operationalToolResults.find(result => result.tool === 'createBooking')
     emitRentalTrace('rental_agent_turn_complete', {
@@ -4644,6 +4810,8 @@ export async function POST(req: NextRequest) {
       assistant_message_id_present: Boolean(assistantInsert.message?.id),
       booking_action_attempted: Boolean(bookingResult),
       booking_action_succeeded: Boolean(bookingResult?.ok),
+      operational_claims_allowed: authority?.contract.allowed_claims ?? [],
+      operational_claim_violations: authority?.violations ?? [],
     })
   }
 

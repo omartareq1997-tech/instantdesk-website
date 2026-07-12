@@ -1475,18 +1475,63 @@ test.describe('Live Chat API production boundaries', () => {
             confirmation: null,
             confidence: 0.93,
           }),
-          openAiTextResponse('I have the budget preference. What return time should I use for the 16th?'),
+          openAiTextResponse('We have a few economical options available: Toyota Corolla, Skoda Superb, Toyota Camry. The estimated rental price is 960 PLN.'),
         ])
         const body = await response.json() as { reply?: string; debug?: { confirmedSlots?: Record<string, unknown> } }
         expect(response.status).toBe(200)
         expect(body.debug?.confirmedSlots?.pickup_datetime).toBe('2026-07-10T20:00:00+02:00')
         expect(body.debug?.confirmedSlots?.return_date).toBe('2026-07-16')
         expect(body.reply ?? '').not.toMatch(/pickup date|pickup.*time.*return.*time/i)
+        expect(body.reply ?? '').toMatch(/what time.*return.*16 July 2026/i)
+        expect(body.reply ?? '').not.toMatch(/available|estimated rental price|960 PLN/i)
       })
       const budgetSemantic = fourth.traces.find(trace => trace.event === 'rental_semantic_interpretation')
       expect(budgetSemantic?.semantic_source).toBe('llm')
       expect(budgetSemantic?.fallback_used).toBe(false)
       expect(budgetSemantic?.references).toContainEqual({ resolved_to: 'lowest_price_candidate', field: 'selected_vehicle' })
+      const budgetResponse = fourth.traces.find(trace => trace.event === 'rental_response_generation')
+      expect(budgetResponse?.operational_claim_violations).toEqual(expect.arrayContaining(['VEHICLE_AVAILABLE', 'PRICE_QUOTED']))
+    } finally {
+      await cleanupTestAiBusiness(sb, businessId)
+    }
+  })
+
+  test('booking creation claim is impossible without createBooking tool evidence', async () => {
+    const { sb, businessId } = await createGeminiCarRentalBusiness({ aiAutoRepliesEnabled: true, liveChatEnabled: true })
+    try {
+      await sb.from('agents').update({ model: 'gpt-4o' }).eq('business_id', businessId)
+      const trace = await captureAgentTrace(async () => {
+        const { response } = await postChatRouteWithMockedOpenAI({
+          business_id: businessId,
+          message: 'yup',
+          debug: true,
+          turn_id: 'gpt-booking-claim-without-tool-turn',
+          client_message_id: 'gpt-booking-claim-without-tool-client',
+        }, [
+          openAiSemanticResponse({
+            intent: 'CONFIRM_BOOKING',
+            state_patch: {},
+            relations: [],
+            references: [],
+            corrections: [],
+            question: null,
+            confirmation: 'yes',
+            confidence: 0.96,
+          }),
+          openAiTextResponse('Your booking request for the Toyota Camry has been created. Our team will contact you shortly to confirm the final details.'),
+        ])
+        const body = await response.json() as { reply?: string; debug?: { operationalTools?: Array<{ tool: string; ok: boolean }> } }
+        expect(response.status).toBe(200)
+        expect(body.debug?.operationalTools?.some(tool => tool.tool === 'createBooking')).toBe(false)
+        expect(body.reply ?? '').not.toMatch(/booking request .*created|team will contact|confirm the final details/i)
+      })
+      const toolTrace = trace.traces.find(item => item.event === 'rental_tool_execution')
+      expect(toolTrace?.tools ?? []).not.toContain('createBooking')
+      const responseTrace = trace.traces.find(item => item.event === 'rental_response_generation')
+      expect(responseTrace?.operational_claim_violations).toEqual(expect.arrayContaining(['BOOKING_CREATED', 'HUMAN_CONFIRMATION_REQUIRED']))
+      const completeTrace = trace.traces.find(item => item.event === 'rental_agent_turn_complete')
+      expect(completeTrace?.booking_action_attempted).toBe(false)
+      expect(completeTrace?.operational_claim_violations).toEqual(expect.arrayContaining(['BOOKING_CREATED', 'HUMAN_CONFIRMATION_REQUIRED']))
     } finally {
       await cleanupTestAiBusiness(sb, businessId)
     }

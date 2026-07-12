@@ -949,6 +949,74 @@ test.describe('agent operational tool planner', () => {
     expect(reply).not.toMatch(/\d{4}-\d{2}-\d{2}T/)
   })
 
+  test('operational claim gate blocks booking success without createBooking evidence', () => {
+    const slots = {
+      selected_vehicle: 'Toyota Camry',
+      pickup_datetime: '2026-07-10T20:00:00+02:00',
+      return_datetime: '2026-07-16T22:00:00+02:00',
+      pickup_location: 'Kraków Bocheńska 2a',
+      dropoff_location: 'Kraków Bocheńska 2a',
+      name: 'Sami',
+      phone: '444333123',
+      email: 'sami@example.com',
+    } as any
+    const authority = __testRentalChatHelpers.enforceRentalReplyAuthority(
+      'Your booking request for the Toyota Camry has been created. Our team will contact you shortly to confirm the final details.',
+      slots,
+      [],
+      [],
+      'car_rental',
+      'yup',
+    )
+    expect(authority.violations).toContain('BOOKING_CREATED')
+    expect(authority.violations).toContain('HUMAN_CONFIRMATION_REQUIRED')
+    expect(authority.reply).not.toMatch(/booking request .*created|team will contact|confirm the final details/i)
+  })
+
+  test('operational claim gate allows booking creation only with persisted reference and status', () => {
+    const slots = {
+      selected_vehicle: 'Toyota Camry',
+      pickup_datetime: '2026-07-10T20:00:00+02:00',
+      return_datetime: '2026-07-16T22:00:00+02:00',
+      pickup_location: 'Kraków Bocheńska 2a',
+      dropoff_location: 'Kraków Bocheńska 2a',
+    } as any
+    const contract = __testRentalChatHelpers.rentalOperationalClaimContract([
+      { tool: 'checkAvailability', ok: true, summary: 'available', data: { available: true, requestedCar: { id: 'car-1' } } },
+      { tool: 'calculatePrice', ok: true, summary: 'price', data: { rentalSubtotal: 960 } },
+      { tool: 'createBooking', ok: true, summary: 'Created pending booking RB-12345678.', data: { bookingId: '12345678-aaaa-bbbb-cccc-123456789abc', bookingNumber: 'RB-12345678', status: 'pending' } },
+    ], slots)
+    expect(contract.allowed_claims).toContain('BOOKING_CREATED')
+    expect(contract.allowed_claims).not.toContain('BOOKING_CONFIRMED')
+    expect(contract.allowed_claims).toContain('VEHICLE_AVAILABLE')
+    expect(contract.allowed_claims).toContain('PRICE_QUOTED')
+    expect(__testRentalChatHelpers.rentalOperationalClaimViolations('Your booking request has been created successfully. Reference: RB-12345678.', contract)).toEqual([])
+    expect(__testRentalChatHelpers.rentalOperationalClaimViolations('Your booking is confirmed. Reference: RB-12345678.', contract)).toContain('BOOKING_CONFIRMED')
+  })
+
+  test('incomplete rental window forbids availability and price claims and asks only for missing return time', () => {
+    const slots = {
+      pickup_date: '2026-07-10',
+      pickup_datetime: '2026-07-10T20:00:00+02:00',
+      return_date: '2026-07-16',
+      pickup_location: 'Kraków Bocheńska 2a',
+      dropoff_location: 'Kraków Bocheńska 2a',
+      car_class: 'Economy',
+    } as any
+    const missing = [{ key: 'return_datetime', label: 'Return date/time', question: 'What return date and time should I use?', required: true }] as any
+    const authority = __testRentalChatHelpers.enforceRentalReplyAuthority(
+      'These cars are available for your rental period: Toyota Camry. The estimated rental price is 960 PLN.',
+      slots,
+      missing,
+      [{ tool: 'searchFleet', ok: true, summary: 'Found 3 matching active fleet vehicle(s).', data: { cars: [{ name: 'Toyota Camry' }], availabilityFiltered: false } }],
+      'car_rental',
+      'i want cheap car',
+    )
+    expect(authority.violations).toEqual(expect.arrayContaining(['VEHICLE_AVAILABLE', 'PRICE_QUOTED']))
+    expect(authority.reply).toMatch(/what time would you like to return it on 16 July 2026/i)
+    expect(authority.reply).not.toMatch(/available|estimated rental price/i)
+  })
+
   test('selected unavailable car does not collect contact details and offers alternatives', () => {
     const slots = {
       selected_vehicle: 'Mercedes GLC',
